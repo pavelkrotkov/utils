@@ -26,12 +26,13 @@ def main():
     )
     parser.add_argument("pdf_path", help="Path to the input PDF file")
     parser.add_argument(
-        "-o", "--output",
-        help="Output Markdown file path (default: same name as PDF, with .md)"
+        "-o", "--output", help="Output Markdown file path (default: same name as PDF, with .md)"
     )
     parser.add_argument(
-        "--timeout", type=int, default=300,
-        help="Seconds to wait for Mathpix processing (default: 300)"
+        "--timeout",
+        type=int,
+        default=300,
+        help="Seconds to wait for Mathpix processing (default: 300)",
     )
     args = parser.parse_args()
 
@@ -74,4 +75,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
