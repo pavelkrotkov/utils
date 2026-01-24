@@ -24,7 +24,7 @@ System dependencies (manual):
 
 Run scripts (examples):
 - `pipx run ./pdf_convert_mathpix_sdk.py input.pdf -o output.md`
-- `./pdf_convert_mathpix_api.py input.pdf -o output.md`
+- `pipx run ./pdf_convert_mathpix_api.py input.pdf -o output.md`
 - `pipx run ./pdf_convert_marker.py input.pdf -o output.md`
 - `./audio_transcribe_openai.sh recording.m4a output.txt`
 - `./audio_transcribe_whisper.py interview.m4a --num-speakers 2`
