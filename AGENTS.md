@@ -16,6 +16,10 @@ Build / Lint / Test Commands
 
 There is no formal build step. Scripts are executed directly.
 
+Linting (optional):
+- `ruff check .`
+- `ruff format --check .`
+
 Python environment setup (manual):
 - `pip install mpxpy marker-pdf requests torch pyannote.audio`
 
