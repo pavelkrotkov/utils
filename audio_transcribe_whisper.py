@@ -44,6 +44,7 @@ except ImportError as e:
 # Environment setup
 # ───────────────────────────────────────────────────────────────────────────────
 
+
 def maybe_set_metal_env() -> None:
     """
     On macOS with Homebrew whisper-cpp, auto-set GGML_METAL_PATH_RESOURCES if unset.
@@ -54,9 +55,7 @@ def maybe_set_metal_env() -> None:
         return
     try:
         brew_prefix = subprocess.check_output(
-            ["brew", "--prefix", "whisper-cpp"],
-            stderr=subprocess.DEVNULL,
-            text=True
+            ["brew", "--prefix", "whisper-cpp"], stderr=subprocess.DEVNULL, text=True
         ).strip()
         metal_path = Path(brew_prefix) / "share" / "whisper-cpp"
         if metal_path.exists():
@@ -68,6 +67,7 @@ def maybe_set_metal_env() -> None:
 # ───────────────────────────────────────────────────────────────────────────────
 # JSON robustness: whisper-cpp output parsing
 # ───────────────────────────────────────────────────────────────────────────────
+
 
 def _has_time(seg: Any) -> bool:
     """Check if segment (dict or string) has any timing keys."""
@@ -151,7 +151,9 @@ def _normalize_segments(raw: Any) -> List[Dict[str, Any]]:
         keys = list(raw.keys())
         try:
             keys_sorted = sorted(keys, key=int)
-            return [raw[k] if isinstance(raw[k], dict) else {"text": str(raw[k])} for k in keys_sorted]
+            return [
+                raw[k] if isinstance(raw[k], dict) else {"text": str(raw[k])} for k in keys_sorted
+            ]
         except ValueError:
             # Not numeric keys; just use values
             return [v if isinstance(v, dict) else {"text": str(v)} for v in raw.values()]
@@ -164,7 +166,9 @@ def _normalize_segments(raw: Any) -> List[Dict[str, Any]]:
     return []
 
 
-def load_whisper_segments(json_path: Path, verbose: bool = False) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+def load_whisper_segments(
+    json_path: Path, verbose: bool = False
+) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     """
     Load and normalize whisper-cpp JSON output.
     Returns: (segments_list, fallback_text)
@@ -189,22 +193,32 @@ def load_whisper_segments(json_path: Path, verbose: bool = False) -> Tuple[List[
     if raw_segments is None:
         if fallback_text:
             if verbose:
-                print("INFO: No 'segments'/'transcription' field, using top-level 'text'", file=sys.stderr)
+                print(
+                    "INFO: No 'segments'/'transcription' field, using top-level 'text'",
+                    file=sys.stderr,
+                )
             return [], fallback_text
-        print(f"ERROR: Whisper JSON has no 'segments'/'transcription' and no 'text': {json_path}", file=sys.stderr)
+        print(
+            f"ERROR: Whisper JSON has no 'segments'/'transcription' and no 'text': {json_path}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     segments = _normalize_segments(raw_segments)
     if not segments and not fallback_text:
-        print(f"ERROR: Whisper JSON 'segments' is empty and no 'text': {json_path}", file=sys.stderr)
+        print(
+            f"ERROR: Whisper JSON 'segments' is empty and no 'text': {json_path}", file=sys.stderr
+        )
         sys.exit(1)
 
     # Sort by time if any segment has timestamps
     if any(_has_time(s) for s in segments):
+
         def sort_key(s: Dict[str, Any]) -> Tuple[float, float]:
             start = _seg_start(s)
             end = _seg_end(s)
             return (start if start is not None else 0.0, end if end is not None else 0.0)
+
         segments.sort(key=sort_key)
 
     return segments, fallback_text
@@ -213,6 +227,7 @@ def load_whisper_segments(json_path: Path, verbose: bool = False) -> Tuple[List[
 # ───────────────────────────────────────────────────────────────────────────────
 # Pyannote diarization
 # ───────────────────────────────────────────────────────────────────────────────
+
 
 def load_pyannote(model_name: str, hf_token: Optional[str], verbose: bool = False) -> Pipeline:
     """
@@ -242,12 +257,20 @@ def load_pyannote(model_name: str, hf_token: Optional[str], verbose: bool = Fals
                     print(f"INFO: Successfully loaded {fallback}", file=sys.stderr)
                 return pipeline
             except Exception as e2:
-                print(f"ERROR: Failed to load both {model_name} and {fallback}: {e2}", file=sys.stderr)
-                print("Ensure you have accepted model terms on HuggingFace and provided valid HF_TOKEN.", file=sys.stderr)
+                print(
+                    f"ERROR: Failed to load both {model_name} and {fallback}: {e2}", file=sys.stderr
+                )
+                print(
+                    "Ensure you have accepted model terms on HuggingFace and provided valid HF_TOKEN.",
+                    file=sys.stderr,
+                )
                 sys.exit(1)
 
         print(f"ERROR: Failed to load pyannote model {model_name}: {e}", file=sys.stderr)
-        print("Ensure you have accepted model terms on HuggingFace and provided valid HF_TOKEN.", file=sys.stderr)
+        print(
+            "Ensure you have accepted model terms on HuggingFace and provided valid HF_TOKEN.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
 
@@ -257,7 +280,7 @@ def run_diarization(
     num_speakers: Optional[int],
     min_speakers: Optional[int],
     max_speakers: Optional[int],
-    verbose: bool = False
+    verbose: bool = False,
 ) -> Annotation:
     """Run pyannote diarization on audio file. Returns Annotation."""
     kwargs: Dict[str, int] = {}
@@ -279,6 +302,7 @@ def run_diarization(
 # Merge ASR + Diarization
 # ───────────────────────────────────────────────────────────────────────────────
 
+
 def overlap(a0: float, a1: float, b0: float, b1: float) -> float:
     """Compute positive overlap duration between [a0,a1] and [b0,b1]."""
     return max(0.0, min(a1, b1) - max(a0, b0))
@@ -289,7 +313,7 @@ def merge_asr_with_diar(
     diarization: Annotation,
     style: str,
     speaker_names: Optional[List[str]],
-    verbose: bool = False
+    verbose: bool = False,
 ) -> List[str]:
     """
     Merge ASR segments with diarization by assigning each ASR segment to best-matching speaker,
@@ -306,11 +330,16 @@ def merge_asr_with_diar(
 
     if not timed_segs:
         if verbose:
-            print("WARNING: No ASR segments have timestamps; cannot merge with diarization.", file=sys.stderr)
+            print(
+                "WARNING: No ASR segments have timestamps; cannot merge with diarization.",
+                file=sys.stderr,
+            )
         return []
 
     if verbose:
-        print(f"INFO: Merging {len(timed_segs)} timed ASR segments with diarization", file=sys.stderr)
+        print(
+            f"INFO: Merging {len(timed_segs)} timed ASR segments with diarization", file=sys.stderr
+        )
 
     # Assign each ASR segment to the speaker with maximum overlap
     seg_speakers = []
@@ -340,7 +369,10 @@ def merge_asr_with_diar(
     seg_speakers = [(speaker_map.get(spk, spk), txt) for spk, txt in seg_speakers]
 
     if verbose:
-        print(f"INFO: Normalized {len(unique_speakers)} unique speakers: {list(speaker_map.values())}", file=sys.stderr)
+        print(
+            f"INFO: Normalized {len(unique_speakers)} unique speakers: {list(speaker_map.values())}",
+            file=sys.stderr,
+        )
 
     # Group consecutive segments with same speaker
     lines = []
@@ -405,6 +437,7 @@ def merge_asr_with_diar(
 # Fallback: plain ASR transcript (no diarization)
 # ───────────────────────────────────────────────────────────────────────────────
 
+
 def plain_transcript(segments: List[Dict[str, Any]], fallback_text: Optional[str]) -> str:
     """Produce plain transcript from ASR segments or fallback text."""
     if fallback_text:
@@ -417,17 +450,21 @@ def plain_transcript(segments: List[Dict[str, Any]], fallback_text: Optional[str
 # Main pipeline
 # ───────────────────────────────────────────────────────────────────────────────
 
-def run_ffmpeg_convert(
-    input_path: Path,
-    output_path: Path,
-    ffmpeg_bin: str,
-    verbose: bool
-) -> None:
+
+def run_ffmpeg_convert(input_path: Path, output_path: Path, ffmpeg_bin: str, verbose: bool) -> None:
     """Convert input media to mono 16 kHz WAV using ffmpeg."""
     cmd = [
-        ffmpeg_bin, "-y", "-i", str(input_path),
-        "-ar", "16000", "-ac", "1", "-f", "wav",
-        str(output_path)
+        ffmpeg_bin,
+        "-y",
+        "-i",
+        str(input_path),
+        "-ar",
+        "16000",
+        "-ac",
+        "1",
+        "-f",
+        "wav",
+        str(output_path),
     ]
     if verbose:
         print(f"INFO: Running ffmpeg: {' '.join(cmd)}", file=sys.stderr)
@@ -436,7 +473,7 @@ def run_ffmpeg_convert(
             cmd,
             check=True,
             stdout=None if verbose else subprocess.DEVNULL,
-            stderr=None if verbose else subprocess.DEVNULL
+            stderr=None if verbose else subprocess.DEVNULL,
         )
     except FileNotFoundError:
         print(f"ERROR: ffmpeg binary not found: {ffmpeg_bin}", file=sys.stderr)
@@ -453,16 +490,20 @@ def run_whisper(
     model_path: Path,
     threads: int,
     language: str,
-    verbose: bool
+    verbose: bool,
 ) -> None:
     """Run whisper-cpp to produce JSON output."""
     cmd = [
         whisper_bin,
-        "-m", str(model_path),
-        "-f", str(audio_path),
-        "-t", str(threads),
+        "-m",
+        str(model_path),
+        "-f",
+        str(audio_path),
+        "-t",
+        str(threads),
         "-oj",  # JSON output
-        "-of", str(json_path.with_suffix(""))  # whisper-cpp adds .json
+        "-of",
+        str(json_path.with_suffix("")),  # whisper-cpp adds .json
     ]
     if language != "auto":
         cmd.extend(["-l", language])
@@ -475,7 +516,7 @@ def run_whisper(
             cmd,
             check=True,
             stdout=None if verbose else subprocess.DEVNULL,
-            stderr=None if verbose else subprocess.DEVNULL
+            stderr=None if verbose else subprocess.DEVNULL,
         )
     except FileNotFoundError:
         print(f"ERROR: whisper-cpp binary not found: {whisper_bin}", file=sys.stderr)
@@ -489,26 +530,43 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Robust whisper-cpp + pyannote diarization pipeline",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__
+        epilog=__doc__,
     )
     parser.add_argument("input", type=Path, help="Input media file")
-    parser.add_argument("-o", "--output", type=Path, help="Output transcript path (default: <input>.spk.txt)")
+    parser.add_argument(
+        "-o", "--output", type=Path, help="Output transcript path (default: <input>.spk.txt)"
+    )
     parser.add_argument("--ffmpeg-bin", default="ffmpeg", help="Path to ffmpeg binary")
     parser.add_argument("--whisper-bin", default="whisper-cpp", help="Path to whisper-cpp binary")
-    parser.add_argument("--large-model", type=Path, default=Path.home() / "models" / "ggml-large-v3-turbo-q8_0.bin",
-                        help="Path to whisper large model")
-    parser.add_argument("--threads", type=int, default=os.cpu_count(), help="Number of threads for whisper-cpp")
+    parser.add_argument(
+        "--large-model",
+        type=Path,
+        default=Path.home() / "models" / "ggml-large-v3-turbo-q8_0.bin",
+        help="Path to whisper large model",
+    )
+    parser.add_argument(
+        "--threads", type=int, default=os.cpu_count(), help="Number of threads for whisper-cpp"
+    )
     parser.add_argument("--language", default="auto", help="Language code (default: auto)")
     parser.add_argument("--no-ffmpeg", action="store_true", help="Skip ffmpeg pre-conversion")
     parser.add_argument("--hf-token", help="HuggingFace token (or set HF_TOKEN env)")
-    parser.add_argument("--pyannote-model", default="pyannote/speaker-diarization-3.1",
-                        help="Pyannote diarization model")
+    parser.add_argument(
+        "--pyannote-model",
+        default="pyannote/speaker-diarization-3.1",
+        help="Pyannote diarization model",
+    )
     parser.add_argument("--num-speakers", type=int, help="Number of speakers (exact)")
     parser.add_argument("--min-speakers", type=int, help="Minimum number of speakers")
     parser.add_argument("--max-speakers", type=int, help="Maximum number of speakers")
-    parser.add_argument("--style", choices=["labels", "breaks"], default="labels",
-                        help="Transcript style: labels (SPEAKER_XX:) or breaks (--- speaker change ---)")
-    parser.add_argument("--speakers", help="Comma-separated speaker names (maps to SPEAKER_00, SPEAKER_01, ...)")
+    parser.add_argument(
+        "--style",
+        choices=["labels", "breaks"],
+        default="labels",
+        help="Transcript style: labels (SPEAKER_XX:) or breaks (--- speaker change ---)",
+    )
+    parser.add_argument(
+        "--speakers", help="Comma-separated speaker names (maps to SPEAKER_00, SPEAKER_01, ...)"
+    )
     parser.add_argument("--keep-temp", action="store_true", help="Keep temporary files")
     parser.add_argument("--verbose", action="store_true", help="Verbose logging")
 
@@ -540,7 +598,10 @@ def main() -> None:
         if args.no_ffmpeg:
             audio_for_processing = args.input
             if args.verbose:
-                print(f"INFO: Skipping ffmpeg conversion; using original file: {args.input}", file=sys.stderr)
+                print(
+                    f"INFO: Skipping ffmpeg conversion; using original file: {args.input}",
+                    file=sys.stderr,
+                )
         else:
             run_ffmpeg_convert(args.input, wav_path, args.ffmpeg_bin, args.verbose)
             audio_for_processing = wav_path
@@ -553,7 +614,7 @@ def main() -> None:
             args.large_model,
             args.threads,
             args.language,
-            args.verbose
+            args.verbose,
         )
 
         # Step 3: Load ASR results
@@ -573,15 +634,20 @@ def main() -> None:
             args.num_speakers,
             args.min_speakers,
             args.max_speakers,
-            args.verbose
+            args.verbose,
         )
 
         # Step 5: Merge
         if has_timestamps:
-            merged_lines = merge_asr_with_diar(segments, diarization, args.style, speaker_names, args.verbose)
+            merged_lines = merge_asr_with_diar(
+                segments, diarization, args.style, speaker_names, args.verbose
+            )
         else:
             if args.verbose:
-                print("WARNING: No timestamps in ASR segments; skipping diarization merge.", file=sys.stderr)
+                print(
+                    "WARNING: No timestamps in ASR segments; skipping diarization merge.",
+                    file=sys.stderr,
+                )
             merged_lines = []
 
         # Step 6: Write output
@@ -589,7 +655,10 @@ def main() -> None:
             final_text = "\n".join(merged_lines)
         else:
             if args.verbose:
-                print("WARNING: No merged output; falling back to plain ASR transcript.", file=sys.stderr)
+                print(
+                    "WARNING: No merged output; falling back to plain ASR transcript.",
+                    file=sys.stderr,
+                )
             final_text = plain_transcript(segments, fallback_text)
 
         with open(output_path, "w", encoding="utf-8") as f:
@@ -601,6 +670,7 @@ def main() -> None:
     finally:
         if not args.keep_temp:
             import shutil
+
             shutil.rmtree(temp_dir, ignore_errors=True)
         elif args.verbose:
             print(f"INFO: Temporary files kept in: {temp_dir}", file=sys.stderr)
