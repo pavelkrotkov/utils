@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(chmod:*)",
+      "Bash(/Users/pavel/bin/whisper_diarize_claude.py input_test.m4a --verbose)",
+      "Bash(cat:*)",
+      "Bash(/Users/pavel/bin/whisper_diarize_claude.py input_test.m4a -o test_output.txt --verbose)",
+      "Bash(whisper-cpp:*)",
+      "Read(//tmp/**)",
+      "Bash(ffmpeg:*)",
+      "Bash(python3:*)",
+      "Bash(/Users/pavel/bin/whisper_diarize_claude.py input_test.m4a -o test_output2.txt --verbose)",
+      "Bash(/Users/pavel/bin/whisper_diarize_claude.py input_test.m4a -o test_breaks.txt --style breaks)",
+      "Bash(/Users/pavel/bin/whisper_diarize_claude.py input_test.m4a -o test_names.txt --speakers \"Interviewer,Candidate\" --num-speakers 2)",
+      "Bash(/Users/pavel/bin/whisper_diarize_claude.py input_test.m4a -o test_fixed.txt --verbose)",
+      "Bash(/Users/pavel/bin/whisper_diarize_claude.py:*)",
+      "Bash(./whisper_spk.py:*)",
+      "Read(//Users/pavel/**)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
