@@ -64,3 +64,10 @@ Local whisper-cpp + pyannote (with diarization):
 - Scripts are standalone and run directly; no central build or test harness.
 - Prefer small sample files for quick validation.
 - Outputs default next to the input file unless overridden.
+
+## Linting
+
+```bash
+ruff check .
+ruff format --check .
+```

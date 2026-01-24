@@ -29,10 +29,9 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
-    import torch
     from pyannote.audio import Pipeline
     from pyannote.core import Annotation
 except ImportError as e:
