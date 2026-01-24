@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
+# /// script
+# dependencies = ["requests"]
+# ///
 """
 Mathpix PDF to Markdown Converter
-Converts PDF files to markdown using the Mathpix API
+Converts PDF files to markdown using the Mathpix API.
+
+Usage:
+    # Run with pipx (recommended):
+    pipx run ./pdf_convert_mathpix_api.py input.pdf
+
+    # Standard execution:
+    ./pdf_convert_mathpix_api.py input.pdf -o output.md
 """
 
 import os

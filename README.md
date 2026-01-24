@@ -36,7 +36,7 @@ Mathpix (best for math-heavy PDFs):
 
 ```bash
 pipx run ./pdf_convert_mathpix_sdk.py input.pdf -o output.md
-./pdf_convert_mathpix_api.py input.pdf -o output.md
+pipx run ./pdf_convert_mathpix_api.py input.pdf -o output.md
 ```
 
 Marker (best for simpler PDFs, local):
