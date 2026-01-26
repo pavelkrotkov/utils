@@ -18,16 +18,15 @@ import re
 import secrets
 import stat
 import sys
-import threading
 import time
 import unicodedata
 import urllib.parse
 import webbrowser
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict, Any
+from typing import List, Optional, Tuple, Dict
 
 import requests
 from bs4 import BeautifulSoup
@@ -42,7 +41,9 @@ TIDAL_API_BASE = "https://openapi.tidal.com/v2"
 TIDAL_CLIENT_ID = os.environ.get("TIDAL_CLIENT_ID")
 TIDAL_CLIENT_SECRET = os.environ.get("TIDAL_CLIENT_SECRET")
 TIDAL_REDIRECT_URI = os.environ.get("TIDAL_REDIRECT_URI", "http://127.0.0.1:8765/callback")
-TIDAL_SCOPES = os.environ.get("TIDAL_SCOPES", "playlists.read playlists.write collection.read collection.write search.read")
+TIDAL_SCOPES = os.environ.get(
+    "TIDAL_SCOPES", "playlists.read playlists.write collection.read collection.write search.read"
+)
 TIDAL_COUNTRY_CODE = os.environ.get("TIDAL_COUNTRY_CODE", "US")
 
 TOKEN_FILE_DIR = Path.home() / ".config" / "tidal-utils"
@@ -53,6 +54,7 @@ logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, datefmt="%H:%M:%S")
 logger = logging.getLogger("tidal_importer")
 
 # --- Data Structures ---
+
 
 @dataclass
 class Candidate:
@@ -69,8 +71,9 @@ class Candidate:
         return (
             normalize(self.work_title_hint),
             normalize(self.performer_hint),
-            normalize(self.label_hint)
+            normalize(self.label_hint),
         )
+
 
 @dataclass
 class AlbumHit:
@@ -84,35 +87,39 @@ class AlbumHit:
     score: float = 0.0
     match_reasons: List[str] = field(default_factory=list)
 
+
 # --- Normalization ---
+
 
 def normalize(text: str) -> str:
     if not text:
         return ""
     # Replace dots with spaces (Adès. Elgar -> Adès Elgar)
-    text = text.replace('.', ' ')
+    text = text.replace(".", " ")
     # NFKD decomposition to separate diacritics
-    text = unicodedata.normalize('NFKD', text).encode('ASCII', 'ignore').decode('ASCII')
+    text = unicodedata.normalize("NFKD", text).encode("ASCII", "ignore").decode("ASCII")
     text = text.lower()
     # Replace separators with spaces
-    text = re.sub(r'[/\-&—–]', ' ', text)
+    text = re.sub(r"[/\-&—–]", " ", text)
     # Remove punctuation except alphanumeric and spaces
-    text = re.sub(r'[^a-z0-9\s]', '', text)
+    text = re.sub(r"[^a-z0-9\s]", "", text)
     # Common classical abbreviations
-    text = re.sub(r'\b(opus|op)\b\.?', 'op', text)
-    text = re.sub(r'\b(number|no)\b\.?', 'no', text)
+    text = re.sub(r"\b(opus|op)\b\.?", "op", text)
+    text = re.sub(r"\b(number|no)\b\.?", "no", text)
     # Remove noise words (edition info)
-    noise = r'\b(deluxe|remastered|expanded|anniversary|live|edition|disc|vol|volume)\b.*'
-    text = re.sub(noise, '', text)
+    noise = r"\b(deluxe|remastered|expanded|anniversary|live|edition|disc|vol|volume)\b.*"
+    text = re.sub(noise, "", text)
     # Collapse whitespace
-    text = re.sub(r'\s+', ' ', text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
     return text
+
 
 # --- Parsing Logic ---
 
+
 def parse_mhtml(file_path: Path) -> Tuple[str, List[Candidate], str]:
     """Parses MHTML file to extract title and candidates."""
-    with open(file_path, 'rb') as f:
+    with open(file_path, "rb") as f:
         msg = email.message_from_binary_file(f)
 
     html_content = ""
@@ -120,32 +127,32 @@ def parse_mhtml(file_path: Path) -> Tuple[str, List[Candidate], str]:
         for part in msg.walk():
             if part.get_content_type() == "text/html":
                 payload = part.get_payload(decode=True)
-                charset = part.get_content_charset() or 'utf-8'
+                charset = part.get_content_charset() or "utf-8"
                 try:
-                    html_content = payload.decode(charset, errors='replace')
+                    html_content = payload.decode(charset, errors="replace")
                 except Exception:
-                    html_content = payload.decode('utf-8', errors='replace')
+                    html_content = payload.decode("utf-8", errors="replace")
                 break
     else:
         payload = msg.get_payload(decode=True)
         if payload:
-            charset = msg.get_content_charset() or 'utf-8'
+            charset = msg.get_content_charset() or "utf-8"
             try:
-                html_content = payload.decode(charset, errors='replace')
-            except:
-                html_content = payload.decode('utf-8', errors='replace')
+                html_content = payload.decode(charset, errors="replace")
+            except Exception:
+                html_content = payload.decode("utf-8", errors="replace")
         else:
-             with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-                 html_content = f.read()
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                html_content = f.read()
 
-    soup = BeautifulSoup(html_content, 'lxml')
+    soup = BeautifulSoup(html_content, "lxml")
 
     # Extract Page Title
     page_title = file_path.stem
     if soup.title:
         page_title = soup.title.string.strip()
-    elif soup.find('h1'):
-        page_title = soup.find('h1').get_text(strip=True)
+    elif soup.find("h1"):
+        page_title = soup.find("h1").get_text(strip=True)
 
     candidates = []
     seen_fingerprints = set()
@@ -153,74 +160,80 @@ def parse_mhtml(file_path: Path) -> Tuple[str, List[Candidate], str]:
     def add_candidate(cand):
         # Filter out common noise
         work = cand.work_title_hint.strip()
-        if not work or len(work) < 5: return
-        if re.match(r'^\d{4}$', work): return # Year
-        if "Related Articles" in work: return
-        
+        if not work or len(work) < 5:
+            return
+        if re.match(r"^\d{4}$", work):
+            return  # Year
+        if "Related Articles" in work:
+            return
+
         fp = cand.fingerprint()
         if fp not in seen_fingerprints:
             seen_fingerprints.add(fp)
             candidates.append(cand)
 
     # 1. Look for H2/H3 headers which often denote list items
-    for header in soup.find_all(['h2', 'h3']):
+    for header in soup.find_all(["h2", "h3"]):
         text = header.get_text(" ", strip=True)
-        
+
         # Stop at related articles
         if "Related Articles" in text:
             break
-            
+
         work_title = text
         next_elem = header.find_next_sibling()
         performer_hint = ""
         label_hint = ""
         review_slug = ""
-        
+
         dist = 0
         while next_elem and dist < 5:
-            if next_elem.name in ['h2', 'h3', 'hr']:
+            if next_elem.name in ["h2", "h3", "hr"]:
                 break
-            
+
             p_text = next_elem.get_text(" ", strip=True)
             if not p_text:
                 next_elem = next_elem.find_next_sibling()
                 continue
 
             # Label check: (LabelName)
-            label_match = re.search(r'\(([^)]+)\)$', p_text)
+            label_match = re.search(r"\(([^)]+)\)$", p_text)
             if label_match:
                 label_hint = label_match.group(1)
-                performer_hint = p_text[:label_match.start()].strip()
-            
+                performer_hint = p_text[: label_match.start()].strip()
+
             # Review Link check
-            link = next_elem.find('a', href=True)
+            link = next_elem.find("a", href=True)
             if link:
-                href = link['href']
-                if 'review' in href or 'product' in href:
-                     parts = href.rstrip('/').split('/')
-                     if parts:
-                         review_slug = parts[-1].replace('-', ' ')
+                href = link["href"]
+                if "review" in href or "product" in href:
+                    parts = href.rstrip("/").split("/")
+                    if parts:
+                        review_slug = parts[-1].replace("-", " ")
 
             if label_hint and review_slug:
                 break
-                
+
             next_elem = next_elem.find_next_sibling()
             dist += 1
 
-        add_candidate(Candidate(
-            work_title_hint=work_title,
-            performer_hint=performer_hint,
-            label_hint=label_hint,
-            review_slug_hint=review_slug,
-            raw_text=text[:100],
-            source_file=file_path.name
-        ))
+        add_candidate(
+            Candidate(
+                work_title_hint=work_title,
+                performer_hint=performer_hint,
+                label_hint=label_hint,
+                review_slug_hint=review_slug,
+                raw_text=text[:100],
+                source_file=file_path.name,
+            )
+        )
 
     return page_title, candidates, ""
 
+
 def parse_markdown(file_path: Path) -> Tuple[str, List[Candidate], str]:
     """Parses Markdown file to extract title and candidates."""
-    with open(file_path, 'r', encoding='utf-8') as f:
+    with open(file_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
     page_title = file_path.stem
@@ -228,7 +241,7 @@ def parse_markdown(file_path: Path) -> Tuple[str, List[Candidate], str]:
     seen_fingerprints = set()
 
     for line in lines:
-        if line.strip().startswith('# '):
+        if line.strip().startswith("# "):
             page_title = line.strip()[2:].strip()
             break
 
@@ -236,122 +249,127 @@ def parse_markdown(file_path: Path) -> Tuple[str, List[Candidate], str]:
     while i < len(lines):
         line = lines[i].strip()
         i += 1
-        if not line: continue
-            
-        # Skip images and common noise
-        if '![Image' in line or line.startswith('**Source:**') or line.startswith('**!['):
+        if not line:
             continue
-            
+
+        # Skip images and common noise
+        if "![Image" in line or line.startswith("**Source:**") or line.startswith("**!["):
+            continue
+
         # Gramophone MD style: **Composer** Title followed by separator
         # or sometimes just the title.
-        if line.startswith('**'):
+        if line.startswith("**"):
             raw_text = line
-            
+
             # Look ahead for separator
             has_separator = False
-            if i < len(lines) and re.match(r'^[-=]{3,}$', lines[i].strip()):
-                 has_separator = True
-            
+            if i < len(lines) and re.match(r"^[-=]{3,}$", lines[i].strip()):
+                has_separator = True
+
             # Clean title
-            work_title = line.replace('**', ' ').strip()
-            work_title = re.sub(r'\s+', ' ', work_title)
-            
-            if len(work_title) < 5 or re.match(r'^\d{4}$', work_title):
+            work_title = line.replace("**", " ").strip()
+            work_title = re.sub(r"\s+", " ", work_title)
+
+            if len(work_title) < 5 or re.match(r"^\d{4}$", work_title):
                 continue
-            
+
             # If not a title by separator, check if it's just a performer line
             if not has_separator:
                 # If current line has (Label) at the end, it's likely a performer line
-                if re.search(r'\([^)]+\)$', line):
+                if re.search(r"\([^)]+\)$", line):
                     continue
                 # Check if next non-empty line has (Label)
                 is_likely_performer = False
-                for j in range(i, min(i+3, len(lines))):
+                for j in range(i, min(i + 3, len(lines))):
                     nl = lines[j].strip()
-                    if not nl: continue
-                    if re.search(r'\(([^)]+)\)$', nl):
+                    if not nl:
+                        continue
+                    if re.search(r"\(([^)]+)\)$", nl):
                         is_likely_performer = True
                         break
                 if is_likely_performer:
                     continue
 
             if has_separator:
-                i += 1 # skip separator
-            
+                i += 1  # skip separator
+
             performer_hint = ""
             label_hint = ""
             review_slug = ""
-            
+
             # Context search for performers and labels
             # We consumed lines up to 'i'. We need to look ahead.
             # 'lines' index 'i' is the next line to read.
-            
+
             look_ahead_limit = 6
-            captured_lines = 0
-            
+
             for offset in range(look_ahead_limit):
                 idx = i + offset
-                if idx >= len(lines): break
-                
-                next_l = lines[idx].strip()
-                if not next_l: continue
-                
-                # Stop if we hit a new section or year header
-                if next_l.startswith('---') or next_l.startswith('**20'): 
+                if idx >= len(lines):
                     break
-                
+
+                next_l = lines[idx].strip()
+                if not next_l:
+                    continue
+
+                # Stop if we hit a new section or year header
+                if next_l.startswith("---") or next_l.startswith("**20"):
+                    break
+
                 # Check if this line is a new candidate title (Header style)
                 # i.e. it has a separator after it.
                 is_next_header = False
-                if idx + 1 < len(lines) and re.match(r'^[-=]{3,}$', lines[idx+1].strip()):
+                if idx + 1 < len(lines) and re.match(r"^[-=]{3,}$", lines[idx + 1].strip()):
                     is_next_header = True
-                
+
                 if is_next_header:
                     break
-                    
+
                 # If it's just a bold line, it's likely the performer
-                if next_l.startswith('**'):
+                if next_l.startswith("**"):
                     # Treat as performer line
-                    clean_perf = next_l.replace('**', '').replace('__', '')
+                    clean_perf = next_l.replace("**", "").replace("__", "")
                     # Check for label inside parens
-                    label_match = re.search(r'\(([^)]+)\)$', clean_perf)
+                    label_match = re.search(r"\(([^)]+)\)$", clean_perf)
                     if label_match:
-                        if not label_hint: label_hint = label_match.group(1)
-                        clean_perf = clean_perf[:label_match.start()]
-                    
+                        if not label_hint:
+                            label_hint = label_match.group(1)
+                        clean_perf = clean_perf[: label_match.start()]
+
                     if not performer_hint:
                         performer_hint = clean_perf.strip()
                     else:
                         performer_hint += " " + clean_perf.strip()
                 else:
                     # Normal text line, check for label or links
-                    label_match = re.search(r'\(([^)]+)\)$', next_l)
+                    label_match = re.search(r"\(([^)]+)\)$", next_l)
                     if label_match:
-                        if not label_hint: label_hint = label_match.group(1)
+                        if not label_hint:
+                            label_hint = label_match.group(1)
                         # Text before might be performer part
-                        pre_label = next_l[:label_match.start()].strip()
+                        pre_label = next_l[: label_match.start()].strip()
                         if pre_label and not performer_hint:
-                             performer_hint = pre_label
-                    
-                    link_match = re.search(r'\[.*\]\((.*)\)', next_l)
+                            performer_hint = pre_label
+
+                    link_match = re.search(r"\[.*\]\((.*)\)", next_l)
                     if link_match:
                         href = link_match.group(1)
-                        if 'review' in href or 'product' in href:
-                             review_slug = href.rstrip('/').split('/')[-1].replace('-', ' ')
+                        if "review" in href or "product" in href:
+                            review_slug = href.rstrip("/").split("/")[-1].replace("-", " ")
 
             # Cleanup
-            performer_hint = re.sub(r'[*_]', '', performer_hint).strip()
-            
+            performer_hint = re.sub(r"[*_]", "", performer_hint).strip()
+
             cand = Candidate(
                 work_title_hint=work_title,
                 performer_hint=performer_hint,
                 label_hint=label_hint,
                 review_slug_hint=review_slug,
                 raw_text=raw_text[:100],
-                line_number=i-1,
-                source_file=file_path.name
+                line_number=i - 1,
+                source_file=file_path.name,
             )
-            
+
             fp = cand.fingerprint()
             if fp not in seen_fingerprints:
                 seen_fingerprints.add(fp)
@@ -362,9 +380,9 @@ def parse_markdown(file_path: Path) -> Tuple[str, List[Candidate], str]:
 
 def extract_candidates(file_path: Path) -> Tuple[str, List[Candidate], str]:
     ext = file_path.suffix.lower()
-    if ext in ['.mhtml', '.mht']:
+    if ext in [".mhtml", ".mht"]:
         return parse_mhtml(file_path)
-    elif ext in ['.md', '.markdown']:
+    elif ext in [".md", ".markdown"]:
         return parse_markdown(file_path)
     else:
         raise ValueError(f"Unsupported file extension: {ext}")
@@ -372,22 +390,23 @@ def extract_candidates(file_path: Path) -> Tuple[str, List[Candidate], str]:
 
 # --- Auth Logic ---
 
+
 class OAuthHandler:
     def __init__(self):
         self.code_verifier = self._generate_code_verifier()
         self.code_challenge = self._generate_code_challenge(self.code_verifier)
         self.auth_code = None
         self.state = secrets.token_urlsafe(16)
-        
+
     def _generate_code_verifier(self) -> str:
         token = secrets.token_urlsafe(32)
-        return token.rstrip('=') 
+        return token.rstrip("=")
 
     def _generate_code_challenge(self, verifier: str) -> str:
         m = hashlib.sha256()
-        m.update(verifier.encode('ascii'))
+        m.update(verifier.encode("ascii"))
         digest = m.digest()
-        return base64.urlsafe_b64encode(digest).decode('ascii').rstrip('=')
+        return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
 
     def get_auth_url(self) -> str:
         params = {
@@ -398,42 +417,44 @@ class OAuthHandler:
             "state": self.state,
             "code_challenge": self.code_challenge,
             "code_challenge_method": "S256",
-            "lang": "en"
+            "lang": "en",
         }
         return f"{TIDAL_AUTH_URL}?{urllib.parse.urlencode(params)}"
 
     def wait_for_callback(self):
         parsed = urllib.parse.urlparse(TIDAL_REDIRECT_URI)
         port = parsed.port or 80
-        
+
         handler_ref = self
 
         class CallbackHandler(BaseHTTPRequestHandler):
             def log_message(self, format, *args):
-                pass 
+                pass
 
             def do_GET(self):
                 query = urllib.parse.urlparse(self.path).query
                 params = urllib.parse.parse_qs(query)
-                
-                if 'code' in params:
-                    if params.get('state', [''])[0] == handler_ref.state:
-                        handler_ref.auth_code = params['code'][0]
+
+                if "code" in params:
+                    if params.get("state", [""])[0] == handler_ref.state:
+                        handler_ref.auth_code = params["code"][0]
                         self.send_response(200)
-                        self.send_header('Content-type', 'text/html')
+                        self.send_header("Content-type", "text/html")
                         self.end_headers()
-                        self.wfile.write(b"<html><body><h1>Authentication Successful</h1><p>You can close this tab.</p></body></html>")
+                        self.wfile.write(
+                            b"<html><body><h1>Authentication Successful</h1><p>You can close this tab.</p></body></html>"
+                        )
                     else:
                         self.send_response(400)
                         self.wfile.write(b"Invalid state.")
                 else:
                     self.send_response(400)
                     self.wfile.write(b"No code returned.")
-                
-        server = HTTPServer(('127.0.0.1', port), CallbackHandler)
+
+        server = HTTPServer(("127.0.0.1", port), CallbackHandler)
         server.handle_request()
         server.server_close()
-        
+
         if not self.auth_code:
             raise RuntimeError("Failed to capture authorization code.")
         return self.auth_code
@@ -444,10 +465,10 @@ class OAuthHandler:
             "client_id": TIDAL_CLIENT_ID,
             "code": code,
             "redirect_uri": TIDAL_REDIRECT_URI,
-            "code_verifier": self.code_verifier
+            "code_verifier": self.code_verifier,
         }
         if TIDAL_CLIENT_SECRET:
-            data['client_secret'] = TIDAL_CLIENT_SECRET
+            data["client_secret"] = TIDAL_CLIENT_SECRET
 
         resp = requests.post(TIDAL_TOKEN_URL, data=data)
         if resp.status_code != 200:
@@ -458,105 +479,114 @@ class OAuthHandler:
         data = {
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
-            "client_id": TIDAL_CLIENT_ID
+            "client_id": TIDAL_CLIENT_ID,
         }
         if TIDAL_CLIENT_SECRET:
-            data['client_secret'] = TIDAL_CLIENT_SECRET
+            data["client_secret"] = TIDAL_CLIENT_SECRET
 
         resp = requests.post(TIDAL_TOKEN_URL, data=data)
         if resp.status_code != 200:
-             raise Exception(f"Token refresh failed: {resp.text}")
+            raise Exception(f"Token refresh failed: {resp.text}")
         return resp.json()
+
 
 def save_tokens(tokens: Dict, file_path: Path):
     file_path.parent.mkdir(parents=True, exist_ok=True)
-    if 'expires_in' in tokens:
-        tokens['expires_at'] = int(time.time()) + tokens['expires_in']
-    
-    with open(file_path, 'w') as f:
+    if "expires_in" in tokens:
+        tokens["expires_at"] = int(time.time()) + tokens["expires_in"]
+
+    with open(file_path, "w") as f:
         json.dump(tokens, f)
     os.chmod(file_path, stat.S_IRUSR | stat.S_IWUSR)
+
 
 def load_tokens(file_path: Path) -> Optional[Dict]:
     if not file_path.exists():
         return None
     try:
-        with open(file_path, 'r') as f:
+        with open(file_path, "r") as f:
             return json.load(f)
-    except:
+    except Exception:
         return None
+
 
 def get_valid_token(token_file: Path) -> str:
     tokens = load_tokens(token_file)
     handler = OAuthHandler()
-    
+
     if tokens:
-        expires_at = tokens.get('expires_at', 0)
+        expires_at = tokens.get("expires_at", 0)
         if time.time() < expires_at - 60:
-            return tokens['access_token']
-        
+            return tokens["access_token"]
+
         logger.info("Access token expired, refreshing...")
         try:
-            new_tokens = handler.refresh_tokens(tokens['refresh_token'])
+            new_tokens = handler.refresh_tokens(tokens["refresh_token"])
             tokens.update(new_tokens)
             save_tokens(tokens, token_file)
-            return tokens['access_token']
+            return tokens["access_token"]
         except Exception as e:
             logger.warning(f"Refresh failed: {e}. Re-authenticating.")
-    
+
     if not TIDAL_CLIENT_ID:
-         print("Error: TIDAL_CLIENT_ID environment variable is not set.")
-         sys.exit(3)
-         
-    print(f"Please log in to Tidal.")
+        print("Error: TIDAL_CLIENT_ID environment variable is not set.")
+        sys.exit(3)
+
+    print("Please log in to Tidal.")
     auth_url = handler.get_auth_url()
     print(f"Opening browser: {auth_url}")
     webbrowser.open(auth_url)
-    
+
     print("Waiting for callback on localhost...")
     code = handler.wait_for_callback()
-    
+
     tokens = handler.exchange_code(code)
     save_tokens(tokens, token_file)
     print("Authentication successful.")
-    return tokens['access_token']
+    return tokens["access_token"]
+
 
 # --- API Interaction ---
+
 
 class TidalClient:
     def __init__(self, token: str, country_code: str):
         self.token = token
         self.country_code = country_code
         self.session = requests.Session()
-        self.session.headers.update({
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.api+json",
-            "Content-Type": "application/vnd.api+json"
-        })
+        self.session.headers.update(
+            {
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.api+json",
+                "Content-Type": "application/vnd.api+json",
+            }
+        )
 
-    def _req(self, method: str, path: str, params: Dict = None, json_data: Dict = None, retry=2) -> Dict:
+    def _req(
+        self, method: str, path: str, params: Dict = None, json_data: Dict = None, retry=2
+    ) -> Dict:
         url = f"{TIDAL_API_BASE}{path}"
         p = params or {}
-        p['countryCode'] = self.country_code
-        
+        p["countryCode"] = self.country_code
+
         for attempt in range(retry + 1):
             resp = self.session.request(method, url, params=p, json=json_data)
-            
+
             if resp.status_code == 429:
                 sleep_time = int(resp.headers.get("Retry-After", 1)) * (attempt + 1)
                 time.sleep(sleep_time)
                 continue
-                
+
             if 500 <= resp.status_code < 600:
                 time.sleep(1 * (attempt + 1))
                 continue
-                
+
             if resp.status_code >= 400:
                 # Log but allow caller to handle if needed
                 if resp.status_code == 404:
                     return {}
                 resp.raise_for_status()
-                
+
             return resp.json()
         return {}
 
@@ -565,112 +595,117 @@ class TidalClient:
         params = {
             "page[limit]": limit,
             # Ensure we get the actual resources
-            "include": "albums.artists"
+            "include": "albums.artists",
         }
         try:
             data = self._req("GET", f"/searchResults/{encoded_query}", params=params)
         except Exception as e:
             logger.error(f"Search failed for '{query}': {e}")
             return []
-            
+
         hits = []
-        search_node = data.get('data', {})
-        if not search_node or search_node.get('type') != 'searchResults':
-             # Fallback if it WAS a list (just in case)
-             if isinstance(search_node, list):
-                 # Previous logic (unlikely based on debug)
-                 return []
-             return []
+        search_node = data.get("data", {})
+        if not search_node or search_node.get("type") != "searchResults":
+            # Fallback if it WAS a list (just in case)
+            if isinstance(search_node, list):
+                # Previous logic (unlikely based on debug)
+                return []
+            return []
 
         # Get Album IDs from relationships
-        album_rels = search_node.get('relationships', {}).get('albums', {}).get('data', [])
-        
+        album_rels = search_node.get("relationships", {}).get("albums", {}).get("data", [])
+
         # Build lookup from included
-        included = data.get('included', [])
-        albums_lookup = { (x['type'], x['id']): x for x in included if x.get('type') == 'albums' }
-        artists_lookup = { (x['type'], x['id']): x for x in included if x.get('type') == 'artists' }
-        
+        included = data.get("included", [])
+        albums_lookup = {(x["type"], x["id"]): x for x in included if x.get("type") == "albums"}
+        artists_lookup = {(x["type"], x["id"]): x for x in included if x.get("type") == "artists"}
+
         for rel in album_rels:
-            if rel.get('type') != 'albums': continue
-            
+            if rel.get("type") != "albums":
+                continue
+
             # Find full object
-            album_obj = albums_lookup.get(('albums', rel['id']))
-            if not album_obj: continue
-            
-            attr = album_obj.get('attributes', {})
-            
-            cright = attr.get('copyright', '')
+            album_obj = albums_lookup.get(("albums", rel["id"]))
+            if not album_obj:
+                continue
+
+            attr = album_obj.get("attributes", {})
+
+            cright = attr.get("copyright", "")
             if isinstance(cright, dict):
-                cright = str(cright) # Fallback
-                
+                cright = str(cright)  # Fallback
+
             hit = AlbumHit(
-                id=album_obj['id'],
-                title=attr.get('title', ''),
-                release_date=attr.get('releaseDate', ''),
-                artists=[], 
-                track_count=attr.get('numberOfTracks', 0),
-                copyright=str(cright)
+                id=album_obj["id"],
+                title=attr.get("title", ""),
+                release_date=attr.get("releaseDate", ""),
+                artists=[],
+                track_count=attr.get("numberOfTracks", 0),
+                copyright=str(cright),
             )
-            
+
             # Resolve artists
             # Album object -> relationships -> artists
-            alb_art_rels = album_obj.get('relationships', {}).get('artists', {}).get('data', [])
+            alb_art_rels = album_obj.get("relationships", {}).get("artists", {}).get("data", [])
             for art_rel in alb_art_rels:
-                art_obj = artists_lookup.get(('artists', art_rel['id']))
+                art_obj = artists_lookup.get(("artists", art_rel["id"]))
                 if art_obj:
-                    hit.artists.append(art_obj.get('attributes', {}).get('name', ''))
-            
+                    hit.artists.append(art_obj.get("attributes", {}).get("name", ""))
+
             hits.append(hit)
-            
+
         return hits
 
     def get_album_tracks(self, album_id: str) -> List[str]:
         tracks = []
         next_link = f"/albums/{album_id}/relationships/tracks?page[limit]=100"
-        
+
         while next_link:
             path = next_link.replace(TIDAL_API_BASE, "")
             data = self._req("GET", path)
-            
-            items = data.get('data', [])
+
+            items = data.get("data", [])
             for item in items:
-                if item['type'] == 'tracks':
-                    tracks.append(item['id'])
-            
-            links = data.get('links', {})
-            next_link = links.get('next')
-            
+                if item["type"] == "tracks":
+                    tracks.append(item["id"])
+
+            links = data.get("links", {})
+            next_link = links.get("next")
+
         return tracks
 
     def get_album_details(self, album_id: str) -> Optional[AlbumHit]:
         try:
             params = {"include": "artists"}
             data = self._req("GET", f"/albums/{album_id}", params=params)
-            item = data.get('data')
-            if not item or item.get('type') != 'albums': return None
-            
-            attr = item.get('attributes', {})
-            cright = str(attr.get('copyright', ''))
-            
+            item = data.get("data")
+            if not item or item.get("type") != "albums":
+                return None
+
+            attr = item.get("attributes", {})
+            cright = str(attr.get("copyright", ""))
+
             hit = AlbumHit(
-                id=item['id'],
-                title=attr.get('title', ''),
-                release_date=attr.get('releaseDate', ''),
+                id=item["id"],
+                title=attr.get("title", ""),
+                release_date=attr.get("releaseDate", ""),
                 artists=[],
-                track_count=attr.get('numberOfTracks', 0),
-                copyright=cright
+                track_count=attr.get("numberOfTracks", 0),
+                copyright=cright,
             )
-            
+
             # Resolve artists
-            included = data.get('included', [])
-            artists_lookup = { (x['type'], x['id']): x for x in included if x.get('type') == 'artists' }
-            
-            rel_artists = item.get('relationships', {}).get('artists', {}).get('data', [])
+            included = data.get("included", [])
+            artists_lookup = {
+                (x["type"], x["id"]): x for x in included if x.get("type") == "artists"
+            }
+
+            rel_artists = item.get("relationships", {}).get("artists", {}).get("data", [])
             for art_rel in rel_artists:
-                art_obj = artists_lookup.get(('artists', art_rel['id']))
+                art_obj = artists_lookup.get(("artists", art_rel["id"]))
                 if art_obj:
-                    hit.artists.append(art_obj.get('attributes', {}).get('name', ''))
-                    
+                    hit.artists.append(art_obj.get("attributes", {}).get("name", ""))
+
             return hit
         except Exception as e:
             logger.warning(f"Failed to fetch album details for {album_id}: {e}")
@@ -681,109 +716,120 @@ class TidalClient:
         params = {"page[limit]": 5, "include": "tracks.album"}
         try:
             data = self._req("GET", f"/searchResults/{encoded_query}", params=params)
-            search_node = data.get('data', {})
-            
-            track_rels = search_node.get('relationships', {}).get('tracks', {}).get('data', [])
-            included = data.get('included', [])
-            tracks_lookup = { (x['type'], x['id']): x for x in included if x.get('type') == 'tracks' }
-            
+            search_node = data.get("data", {})
+
+            track_rels = search_node.get("relationships", {}).get("tracks", {}).get("data", [])
+            included = data.get("included", [])
+            tracks_lookup = {(x["type"], x["id"]): x for x in included if x.get("type") == "tracks"}
+
             for rel in track_rels:
-                track_obj = tracks_lookup.get(('tracks', rel['id']))
-                if not track_obj: continue
-                
+                track_obj = tracks_lookup.get(("tracks", rel["id"]))
+                if not track_obj:
+                    continue
+
                 # Check album relationship
-                alb_rel = track_obj.get('relationships', {}).get('album', {}).get('data', {})
-                if alb_rel and alb_rel.get('id'):
-                    return self.get_album_details(alb_rel.get('id'))
-        except:
+                alb_rel = track_obj.get("relationships", {}).get("album", {}).get("data", {})
+                if alb_rel and alb_rel.get("id"):
+                    return self.get_album_details(alb_rel.get("id"))
+        except Exception:
             pass
         return None
 
     def create_playlist(self, name: str, description: str, is_public: bool) -> str:
         body = {
-            "data": {
-                "type": "playlists",
-                "attributes": {
-                    "name": name,
-                    "description": description
-                }
-            }
+            "data": {"type": "playlists", "attributes": {"name": name, "description": description}}
         }
-        
+
         # Try /my/playlists first
         try:
-             resp = self._req("POST", "/my/playlists", json_data=body)
-             return resp['data']['id']
-        except:
-             pass
-        
+            resp = self._req("POST", "/my/playlists", json_data=body)
+            return resp["data"]["id"]
+        except Exception:
+            pass
+
         # Fallback
         resp = self._req("POST", "/playlists", json_data=body)
-        return resp['data']['id']
+        return resp["data"]["id"]
 
     def add_tracks_to_playlist(self, playlist_id: str, track_ids: List[str]):
         chunk_size = 50
         for i in range(0, len(track_ids), chunk_size):
-            chunk = track_ids[i:i+chunk_size]
-            body = {
-                "data": [
-                    {"type": "tracks", "id": tid} for tid in chunk
-                ]
-            }
+            chunk = track_ids[i : i + chunk_size]
+            body = {"data": [{"type": "tracks", "id": tid} for tid in chunk]}
             self._req("POST", f"/playlists/{playlist_id}/relationships/items", json_data=body)
 
 
 # --- Matching Logic ---
 
+
 def get_significant_tokens(text: str) -> List[str]:
     """Extracts significant tokens (longer than 2 chars, ignoring common stops)."""
     norm = normalize(text)
-    stops = {'the', 'and', 'for', 'with', 'from', 'vol', 'volume', 'edition', 'series', 'part', 'no', 'op', 'major', 'minor'}
+    stops = {
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "vol",
+        "volume",
+        "edition",
+        "series",
+        "part",
+        "no",
+        "op",
+        "major",
+        "minor",
+    }
     return [t for t in norm.split() if len(t) > 2 and t not in stops]
+
 
 def score_album(candidate: Candidate, hit: AlbumHit) -> float:
     score = 0.0
     cand_norm = normalize(candidate.work_title_hint)
     hit_norm = normalize(hit.title)
-    
+
     cand_tokens = set(cand_norm.split())
     hit_tokens = set(hit_norm.split())
-    
+
     if not cand_tokens:
         return 0.0
 
     overlap = cand_tokens.intersection(hit_tokens)
     overlap_ratio = len(overlap) / len(cand_tokens)
     score += overlap_ratio * 0.5
-    
-    matched_artist = False
+
     if candidate.performer_hint:
         perf_norm = normalize(candidate.performer_hint)
         # Extract surnames (longer tokens)
         perf_tokens = [t for t in perf_norm.split() if len(t) > 3]
-        
+
         hit_artists_norm = [normalize(a) for a in hit.artists]
         full_hit_artists_str = " ".join(hit_artists_norm)
-        
+
         # Check if ANY surname exists in hit artists
         found_any = False
         for tok in perf_tokens:
             if tok in full_hit_artists_str:
                 found_any = True
                 break
-        
+
         if found_any:
-            matched_artist = True
             score += 0.4
         else:
-            # HEAVY PENALTY: If we explicitly looked for a performer and didn't find them, 
+            # HEAVY PENALTY: If we explicitly looked for a performer and didn't find them,
             # this is likely the wrong recording (e.g. Gardiner instead of Pichon).
             score -= 0.6
-    
+
     if candidate.label_hint:
         label_norm = normalize(candidate.label_hint)
         hit_copy_norm = normalize(hit.copyright)
-        label_map = {"dg": "deutsche grammophon", "hm": "harmonia mundi", "sony": "sony classical", "decca": "decca"}
+        label_map = {
+            "dg": "deutsche grammophon",
+            "hm": "harmonia mundi",
+            "sony": "sony classical",
+            "decca": "decca",
+        }
         label_norm = label_map.get(label_norm, label_norm)
         if label_norm in hit_copy_norm:
             score += 0.2
@@ -798,12 +844,14 @@ def score_album(candidate: Candidate, hit: AlbumHit) -> float:
     return min(score, 1.0)
 
 
-def find_best_match(client: TidalClient, candidate: Candidate, force: bool = False) -> Tuple[Optional[AlbumHit], float, List[str]]:
+def find_best_match(
+    client: TidalClient, candidate: Candidate, force: bool = False
+) -> Tuple[Optional[AlbumHit], float, List[str]]:
     queries = []
     wt = candidate.work_title_hint
     ph = candidate.performer_hint
     lh = candidate.label_hint
-    
+
     # 1. Performer + Significant Title Tokens (Relaxed)
     # e.g. "Pichon Bach Mass B Minor"
     if ph:
@@ -815,24 +863,26 @@ def find_best_match(client: TidalClient, candidate: Candidate, force: bool = Fal
             # Try surname + first 3 significant title words
             short_title = " ".join(title_tokens[:4])
             queries.append(f"{surname} {short_title}")
-            
+
             # Try surname + composer (first word of title usually)
             if title_tokens:
-                queries.append(f"{surname} {title_tokens[0]} {title_tokens[1] if len(title_tokens)>1 else ''}")
+                queries.append(
+                    f"{surname} {title_tokens[0]} {title_tokens[1] if len(title_tokens) > 1 else ''}"
+                )
 
     # 2. Review Slug (cleaned)
     if candidate.review_slug_hint:
-        queries.append(candidate.review_slug_hint.replace('-', ' '))
-    
+        queries.append(candidate.review_slug_hint.replace("-", " "))
+
     # 3. Standard queries
     queries.append(f"{wt} {ph} {lh}")
     queries.append(f"{wt} {ph}")
-    
+
     # 4. Clean Title
     clean_wt = normalize(wt)
     if clean_wt != normalize(wt):
         queries.append(clean_wt)
-        
+
     # 5. Last resort: Title
     queries.append(wt)
 
@@ -843,56 +893,71 @@ def find_best_match(client: TidalClient, candidate: Candidate, force: bool = Fal
 
     for q in queries:
         q = q.strip()
-        if not q or len(q) < 3: continue
-        
+        if not q or len(q) < 3:
+            continue
+
         # Limit to 5 results per query to avoid noise
         hits = client.search_albums(q, limit=5)
         for hit in hits:
-            if hit.id in seen_ids: continue
+            if hit.id in seen_ids:
+                continue
             seen_ids.add(hit.id)
-            
+
             s = score_album(candidate, hit)
             hit.score = s
-            debug_log.append(f"Hit: {hit.title} ({hit.id}) Artists: {hit.artists} Score: {s:.2f} [Q: {q}]")
-            
+            debug_log.append(
+                f"Hit: {hit.title} ({hit.id}) Artists: {hit.artists} Score: {s:.2f} [Q: {q}]"
+            )
+
             if s > best_score:
                 best_score = s
                 best_hit = hit
-        
+
         if best_score > 0.85:
             break
 
     if best_hit:
         if best_score < 0.5 and not force:
-             fallback = client.search_track_fallback(f"{wt} {ph}")
-             if fallback:
-                 return fallback, 0.5, debug_log + ["Fallback Track Match"]
-             return None, 0.0, debug_log
-             
+            fallback = client.search_track_fallback(f"{wt} {ph}")
+            if fallback:
+                return fallback, 0.5, debug_log + ["Fallback Track Match"]
+            return None, 0.0, debug_log
+
         return best_hit, best_score, debug_log
 
     if not best_hit:
         fallback = client.search_track_fallback(f"{wt} {ph}")
         if fallback:
-             return fallback, 0.5, debug_log + ["Fallback Track Match"]
+            return fallback, 0.5, debug_log + ["Fallback Track Match"]
 
     return None, 0.0, debug_log
 
+
 # --- Main ---
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Import albums from webpage/markdown to Tidal Playlist.")
+    parser = argparse.ArgumentParser(
+        description="Import albums from webpage/markdown to Tidal Playlist."
+    )
     parser.add_argument("input_path", type=Path, help="Input .mhtml or .md file")
     parser.add_argument("--name", help="Override playlist name")
     parser.add_argument("--unlisted", action="store_true", help="Make playlist private")
-    parser.add_argument("--token-file", type=Path, default=TOKEN_FILE_DIR / TOKEN_FILE_NAME, help="Path to token file")
-    parser.add_argument("--dry-run", action="store_true", help="Do not create playlist, just show matches")
+    parser.add_argument(
+        "--token-file",
+        type=Path,
+        default=TOKEN_FILE_DIR / TOKEN_FILE_NAME,
+        help="Path to token file",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Do not create playlist, just show matches"
+    )
     parser.add_argument("--force", action="store_true", help="Accept low confidence matches")
     parser.add_argument("--country-code", default=TIDAL_COUNTRY_CODE, help="Tidal Country Code")
     parser.add_argument("--debug", action="store_true", help="Verbose logging")
 
     args = parser.parse_args()
-    
+
     if args.debug:
         logger.setLevel(logging.DEBUG)
 
@@ -913,13 +978,13 @@ def main():
 
     logger.info(f"Found {len(candidates)} candidates from '{title}'")
     for i, c in enumerate(candidates):
-        logger.info(f"  {i+1}. {c.work_title_hint} | {c.performer_hint} | {c.label_hint}")
+        logger.info(f"  {i + 1}. {c.work_title_hint} | {c.performer_hint} | {c.label_hint}")
 
     token = "DRY_RUN_TOKEN"
     # Authenticate if possible, even in dry run, to allow matching tests
     # If TIDAL_CLIENT_ID is missing, we can still try if we have a valid cached token
     has_tokens = args.token_file.exists() and load_tokens(args.token_file)
-    
+
     if TIDAL_CLIENT_ID or has_tokens:
         try:
             token = get_valid_token(args.token_file)
@@ -942,7 +1007,7 @@ def main():
         logger.info("Matching albums...")
         for cand in candidates:
             hit, score, logs = find_best_match(client, cand, force=args.force)
-            
+
             if hit:
                 logger.info(f"MATCH: '{cand.work_title_hint}'")
                 logger.info(f"       -> Title: {hit.title}")
@@ -954,9 +1019,10 @@ def main():
             else:
                 logger.warning(f"NO MATCH: '{cand.work_title_hint}'")
                 if args.debug:
-                    for l in logs: logger.debug(f"  {l}")
+                    for log_line in logs:
+                        logger.debug(f"  {log_line}")
                 skipped += 1
-                
+
             time.sleep(0.2)
     else:
         logger.info("Dry run without credentials/token. Skipping matching step.")
@@ -971,11 +1037,11 @@ def main():
 
     pl_name = args.name
     if not pl_name:
-        clean_title = title.split('|')[0].split('-')[0].strip()
+        clean_title = title.split("|")[0].split("-")[0].strip()
         pl_name = f"{clean_title[:70]} (Imported)"
-    
+
     desc = f"Imported from {args.input_path.name} on {datetime.now().date()}."
-    
+
     logger.info(f"Creating playlist: {pl_name}")
     try:
         pl_id = client.create_playlist(pl_name, desc, not args.unlisted)
@@ -1003,6 +1069,7 @@ def main():
             sys.exit(4)
     else:
         logger.warning("No tracks found to add.")
+
 
 if __name__ == "__main__":
     main()

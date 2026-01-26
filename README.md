@@ -14,7 +14,7 @@ For deeper context, see `GEMINI.md` and `AGENTS.md`.
 Python dependencies:
 
 ```bash
-pip install mpxpy marker-pdf requests torch pyannote.audio
+pip install mpxpy marker-pdf requests torch pyannote.audio beautifulsoup4 lxml
 ```
 
 System tools (macOS via Homebrew):
@@ -27,6 +27,11 @@ Environment variables:
 
 - `MATHPIX_APP_ID`, `MATHPIX_APP_KEY` for Mathpix tools.
 - `OPENAI_API_KEY` for OpenAI transcription.
+- `TIDAL_CLIENT_ID` for TIDAL import (Required).
+- `TIDAL_CLIENT_SECRET` for TIDAL import (Optional for some app types).
+- `TIDAL_REDIRECT_URI` (Optional, defaults to `http://127.0.0.1:8765/callback`).
+- `TIDAL_SCOPES` (Optional, defaults to playlist and search read/write).
+- `TIDAL_COUNTRY_CODE` (Optional, defaults to `US`).
 - `HF_TOKEN` for pyannote diarization.
 - `GGML_METAL_PATH_RESOURCES` optional for whisper-cpp Metal support.
 
@@ -43,6 +48,20 @@ Marker (best for simpler PDFs, local):
 
 ```bash
 pipx run ./pdf_convert_marker.py input.pdf -o output.md
+```
+
+## Audio & Music Tools
+
+### TIDAL Import
+
+Import classical album tracklists from Gramophone-style MHTML or Markdown files into TIDAL playlists. Uses OAuth 2.1 with PKCE for secure authentication.
+
+```bash
+# Preview matches (Dry Run)
+pipx run ./tidal_import_page_to_playlist.py test.md --dry-run
+
+# Import to TIDAL (Creates playlist)
+pipx run ./tidal_import_page_to_playlist.py test.mhtml
 ```
 
 ## Audio Transcription
