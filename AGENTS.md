@@ -30,6 +30,7 @@ Run scripts (examples):
 - `pipx run ./pdf_convert_mathpix_sdk.py input.pdf -o output.md`
 - `pipx run ./pdf_convert_mathpix_api.py input.pdf -o output.md`
 - `pipx run ./pdf_convert_marker.py input.pdf -o output.md`
+- `pipx run ./tidal_import_page_to_playlist.py test.md --dry-run`
 - `./audio_transcribe_openai.sh recording.m4a output.txt`
 - `./audio_transcribe_whisper.py interview.m4a --num-speakers 2`
 
@@ -46,6 +47,7 @@ Operational Notes (from existing docs)
 Environment variables:
 - `MATHPIX_APP_ID`, `MATHPIX_APP_KEY` for Mathpix tools.
 - `OPENAI_API_KEY` for OpenAI transcription.
+- `TIDAL_CLIENT_ID`, `TIDAL_CLIENT_SECRET` for TIDAL import.
 - `HF_TOKEN` for pyannote diarization.
 - `GGML_METAL_PATH_RESOURCES` is optional for whisper-cpp Metal support.
 
@@ -55,6 +57,7 @@ Repository scripts:
 - `pdf_convert_marker.py` uses `marker-pdf` for simpler PDFs (local conversion).
 - `audio_transcribe_openai.sh` uses OpenAI's `/v1/audio/transcriptions` API and can downsample large files.
 - `audio_transcribe_whisper.py` runs a local whisper-cpp + pyannote pipeline (mono 16kHz conversion + diarization merge).
+- `tidal_import_page_to_playlist.py` imports classical albums from MHTML/MD files to TIDAL playlists using API v2.
 
 Repository layout:
 - Each script is standalone and intended to be run directly.

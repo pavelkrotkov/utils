@@ -564,7 +564,7 @@ class TidalClient:
 
     def _req(
         self, method: str, path: str, params: Dict = None, json_data: Dict = None, retry=2
-    ) -> Dict:
+    ) -> requests.Response:
         url = f"{TIDAL_API_BASE}{path}"
         p = params or {}
         p["countryCode"] = self.country_code
@@ -584,11 +584,11 @@ class TidalClient:
             if resp.status_code >= 400:
                 # Log but allow caller to handle if needed
                 if resp.status_code == 404:
-                    return {}
+                    return resp
                 resp.raise_for_status()
 
-            return resp.json()
-        return {}
+            return resp
+        return resp
 
     def search_albums(self, query: str, limit: int = 10) -> List[AlbumHit]:
         encoded_query = urllib.parse.quote(query)
@@ -598,7 +598,10 @@ class TidalClient:
             "include": "albums.artists",
         }
         try:
-            data = self._req("GET", f"/searchResults/{encoded_query}", params=params)
+            resp = self._req("GET", f"/searchResults/{encoded_query}", params=params)
+            if resp.status_code != 200:
+                return []
+            data = resp.json()
         except Exception as e:
             logger.error(f"Search failed for '{query}': {e}")
             return []
@@ -640,7 +643,7 @@ class TidalClient:
                 title=attr.get("title", ""),
                 release_date=attr.get("releaseDate", ""),
                 artists=[],
-                track_count=attr.get("numberOfTracks", 0),
+                track_count=attr.get("numberOfItems", 0),
                 copyright=str(cright),
             )
 
@@ -658,11 +661,14 @@ class TidalClient:
 
     def get_album_tracks(self, album_id: str) -> List[str]:
         tracks = []
-        next_link = f"/albums/{album_id}/relationships/tracks?page[limit]=100"
+        next_link = f"/albums/{album_id}/relationships/items?page[limit]=100"
 
         while next_link:
             path = next_link.replace(TIDAL_API_BASE, "")
-            data = self._req("GET", path)
+            resp = self._req("GET", path)
+            if resp.status_code != 200:
+                break
+            data = resp.json()
 
             items = data.get("data", [])
             for item in items:
@@ -677,7 +683,10 @@ class TidalClient:
     def get_album_details(self, album_id: str) -> Optional[AlbumHit]:
         try:
             params = {"include": "artists"}
-            data = self._req("GET", f"/albums/{album_id}", params=params)
+            resp = self._req("GET", f"/albums/{album_id}", params=params)
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
             item = data.get("data")
             if not item or item.get("type") != "albums":
                 return None
@@ -690,7 +699,7 @@ class TidalClient:
                 title=attr.get("title", ""),
                 release_date=attr.get("releaseDate", ""),
                 artists=[],
-                track_count=attr.get("numberOfTracks", 0),
+                track_count=attr.get("numberOfItems", 0),
                 copyright=cright,
             )
 
@@ -715,7 +724,10 @@ class TidalClient:
         encoded_query = urllib.parse.quote(query)
         params = {"page[limit]": 5, "include": "tracks.album"}
         try:
-            data = self._req("GET", f"/searchResults/{encoded_query}", params=params)
+            resp = self._req("GET", f"/searchResults/{encoded_query}", params=params)
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
             search_node = data.get("data", {})
 
             track_rels = search_node.get("relationships", {}).get("tracks", {}).get("data", [])
@@ -741,18 +753,24 @@ class TidalClient:
         }
 
         # Try /my/playlists first
-        try:
-            resp = self._req("POST", "/my/playlists", json_data=body)
-            return resp["data"]["id"]
-        except Exception:
-            pass
+        for path in ["/my/playlists", "/playlists"]:
+            try:
+                resp = self._req("POST", path, json_data=body)
+                if resp.status_code == 201:
+                    # Extracts ID from Location header: /playlists/<id>
+                    loc = resp.headers.get("Location", "")
+                    if loc:
+                        return loc.split("/")[-1]
+                    # Fallback to body if present
+                    if resp.content:
+                        return resp.json()["data"]["id"]
+            except Exception:
+                continue
 
-        # Fallback
-        resp = self._req("POST", "/playlists", json_data=body)
-        return resp["data"]["id"]
+        raise RuntimeError("Failed to create playlist.")
 
     def add_tracks_to_playlist(self, playlist_id: str, track_ids: List[str]):
-        chunk_size = 50
+        chunk_size = 20
         for i in range(0, len(track_ids), chunk_size):
             chunk = track_ids[i : i + chunk_size]
             body = {"data": [{"type": "tracks", "id": tid} for tid in chunk]}
