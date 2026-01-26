@@ -91,6 +91,24 @@ class AlbumHit:
 # --- Normalization ---
 
 
+STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "from",
+    "vol",
+    "volume",
+    "edition",
+    "series",
+    "part",
+    "no",
+    "op",
+    "major",
+    "minor",
+}
+
+
 def normalize(text: str) -> str:
     if not text:
         return ""
@@ -112,6 +130,27 @@ def normalize(text: str) -> str:
     # Collapse whitespace
     text = re.sub(r"\s+", " ", text).strip()
     return text
+
+
+def should_skip_candidate(work_title: str) -> bool:
+    work = work_title.strip()
+    if not work or len(work) < 5:
+        return True
+    if re.match(r"^\d{4}$", work):
+        return True
+    if "Related Articles" in work:
+        return True
+    return False
+
+
+def add_candidate(cand: Candidate, candidates: List[Candidate], seen_fingerprints: set) -> None:
+    if should_skip_candidate(cand.work_title_hint):
+        return
+
+    fp = cand.fingerprint()
+    if fp not in seen_fingerprints:
+        seen_fingerprints.add(fp)
+        candidates.append(cand)
 
 
 # --- Parsing Logic ---
@@ -156,21 +195,6 @@ def parse_mhtml(file_path: Path) -> Tuple[str, List[Candidate], str]:
 
     candidates = []
     seen_fingerprints = set()
-
-    def add_candidate(cand):
-        # Filter out common noise
-        work = cand.work_title_hint.strip()
-        if not work or len(work) < 5:
-            return
-        if re.match(r"^\d{4}$", work):
-            return  # Year
-        if "Related Articles" in work:
-            return
-
-        fp = cand.fingerprint()
-        if fp not in seen_fingerprints:
-            seen_fingerprints.add(fp)
-            candidates.append(cand)
 
     # 1. Look for H2/H3 headers which often denote list items
     for header in soup.find_all(["h2", "h3"]):
@@ -225,7 +249,9 @@ def parse_mhtml(file_path: Path) -> Tuple[str, List[Candidate], str]:
                 review_slug_hint=review_slug,
                 raw_text=text[:100],
                 source_file=file_path.name,
-            )
+            ),
+            candidates,
+            seen_fingerprints,
         )
 
     return page_title, candidates, ""
@@ -370,10 +396,7 @@ def parse_markdown(file_path: Path) -> Tuple[str, List[Candidate], str]:
                 source_file=file_path.name,
             )
 
-            fp = cand.fingerprint()
-            if fp not in seen_fingerprints:
-                seen_fingerprints.add(fp)
-                candidates.append(cand)
+            add_candidate(cand, candidates, seen_fingerprints)
 
     return page_title, candidates, ""
 
@@ -783,23 +806,7 @@ class TidalClient:
 def get_significant_tokens(text: str) -> List[str]:
     """Extracts significant tokens (longer than 2 chars, ignoring common stops)."""
     norm = normalize(text)
-    stops = {
-        "the",
-        "and",
-        "for",
-        "with",
-        "from",
-        "vol",
-        "volume",
-        "edition",
-        "series",
-        "part",
-        "no",
-        "op",
-        "major",
-        "minor",
-    }
-    return [t for t in norm.split() if len(t) > 2 and t not in stops]
+    return [t for t in norm.split() if len(t) > 2 and t not in STOPWORDS]
 
 
 def score_album(candidate: Candidate, hit: AlbumHit) -> float:
@@ -865,10 +872,16 @@ def score_album(candidate: Candidate, hit: AlbumHit) -> float:
 def find_best_match(
     client: TidalClient, candidate: Candidate, force: bool = False
 ) -> Tuple[Optional[AlbumHit], float, List[str]]:
-    queries = []
     wt = candidate.work_title_hint
     ph = candidate.performer_hint
     lh = candidate.label_hint
+
+    def push_query(values: List[str], query: str) -> None:
+        cleaned = " ".join(query.split())
+        if cleaned and cleaned not in values:
+            values.append(cleaned)
+
+    queries: List[str] = []
 
     # 1. Performer + Significant Title Tokens (Relaxed)
     # e.g. "Pichon Bach Mass B Minor"
@@ -880,29 +893,23 @@ def find_best_match(
             surname = perf_tokens[-1]
             # Try surname + first 3 significant title words
             short_title = " ".join(title_tokens[:4])
-            queries.append(f"{surname} {short_title}")
+            push_query(queries, f"{surname} {short_title}")
 
             # Try surname + composer (first word of title usually)
             if title_tokens:
-                queries.append(
-                    f"{surname} {title_tokens[0]} {title_tokens[1] if len(title_tokens) > 1 else ''}"
-                )
+                second = title_tokens[1] if len(title_tokens) > 1 else ""
+                push_query(queries, f"{surname} {title_tokens[0]} {second}")
 
     # 2. Review Slug (cleaned)
     if candidate.review_slug_hint:
-        queries.append(candidate.review_slug_hint.replace("-", " "))
+        push_query(queries, candidate.review_slug_hint.replace("-", " "))
 
     # 3. Standard queries
-    queries.append(f"{wt} {ph} {lh}")
-    queries.append(f"{wt} {ph}")
+    push_query(queries, f"{wt} {ph} {lh}")
+    push_query(queries, f"{wt} {ph}")
 
-    # 4. Clean Title
-    clean_wt = normalize(wt)
-    if clean_wt != normalize(wt):
-        queries.append(clean_wt)
-
-    # 5. Last resort: Title
-    queries.append(wt)
+    # 4. Last resort: Title
+    push_query(queries, wt)
 
     seen_ids = set()
     best_hit = None
@@ -910,8 +917,7 @@ def find_best_match(
     debug_log = []
 
     for q in queries:
-        q = q.strip()
-        if not q or len(q) < 3:
+        if len(q) < 3:
             continue
 
         # Limit to 5 results per query to avoid noise
