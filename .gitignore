@@ -4,3 +4,9 @@ __pycache__/
 .venv/
 .env
 .claude/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+test.md
+test.mhtml
+test_2.md
