@@ -64,6 +64,39 @@ pipx run ./tidal_import_page_to_playlist.py test.md --dry-run
 pipx run ./tidal_import_page_to_playlist.py test.mhtml
 ```
 
+#### Matching Strategy
+
+The importer uses a multi-stage matching strategy optimized for classical music:
+
+1. **Performer extraction** - Parses complex performer strings (e.g., "Orchestra / Conductor (Label)") to extract conductor and soloist names, stripping instrument abbreviations (pf, vn, vc, hpd, etc.)
+
+2. **Query construction** - Generates multiple search queries combining:
+   - Extracted performer surnames with title tokens
+   - Cleaned performer names with composer
+   - Review slugs and label hints
+   - Fallback composer + work type queries
+
+3. **Scoring** - Matches are scored based on:
+   - Title token overlap (up to 0.5)
+   - Performer match in artists or title (+0.4 if found)
+   - Label match in copyright (+0.2)
+   - Reduced penalty when album likely not in catalog
+
+4. **Fallback** - Track-based search when album search fails
+
+#### Testing Matches
+
+Use the helper script to test and compare matching results:
+
+```bash
+# Quick test on a file
+pipx run ./test_matching.py input.md
+
+# Save baseline and compare after changes
+pipx run ./test_matching.py input.mhtml --save baseline.log
+pipx run ./test_matching.py input.mhtml --compare baseline.log
+```
+
 ## Audio Transcription
 
 OpenAI API (simple transcription):

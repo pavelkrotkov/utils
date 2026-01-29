@@ -108,6 +108,95 @@ STOPWORDS = {
     "minor",
 }
 
+# Classical music instrument abbreviations to strip from performer strings
+INSTRUMENT_ABBREVS = {
+    "pf",
+    "vn",
+    "va",
+    "vc",
+    "db",
+    "fl",
+    "ob",
+    "cl",
+    "bn",
+    "hn",
+    "tpt",
+    "trb",
+    "hp",
+    "org",
+    "hpd",
+    "pno",
+    "gtr",
+    "perc",
+    "sop",
+    "mez",
+    "ten",
+    "bar",
+    "bass",
+    "cond",
+    "dir",
+    "ens",
+    "orch",
+    "choir",
+    "sols",
+}
+
+
+def clean_performer_string(performer: str) -> str:
+    """Remove instrument abbreviations and clean performer string."""
+    if not performer:
+        return ""
+    # Remove parenthetical content (labels)
+    cleaned = re.sub(r"\([^)]*\)$", "", performer).strip()
+    # Split and filter out instrument abbreviations
+    words = cleaned.split()
+    filtered = [w for w in words if w.lower() not in INSTRUMENT_ABBREVS]
+    return " ".join(filtered)
+
+
+def extract_conductor_or_soloist(performer: str) -> List[str]:
+    """Extract conductor and soloist names from performer string.
+
+    Handles patterns like:
+    - "Orchestra / Conductor"
+    - "Soloist; Orchestra / Conductor"
+    - "Name1 vn Name2 pf"
+    """
+    if not performer:
+        return []
+
+    names = []
+    # Remove label in parentheses at end
+    performer = re.sub(r"\([^)]*\)$", "", performer).strip()
+
+    # Split by common separators
+    parts = re.split(r"[;/]", performer)
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+
+        # Remove orchestra/ensemble keywords to find conductor
+        if any(kw in part.lower() for kw in ["orchestra", "philharmonic", "symphony", "ensemble"]):
+            # Look for name after these keywords (usually conductor)
+            continue
+
+        # Remove instrument abbreviations and extract names
+        words = part.split()
+        name_words = []
+        for w in words:
+            if w.lower() in INSTRUMENT_ABBREVS:
+                # End of a name, save it
+                if name_words:
+                    names.append(" ".join(name_words))
+                    name_words = []
+            else:
+                name_words.append(w)
+        if name_words:
+            names.append(" ".join(name_words))
+
+    return names
+
 
 def normalize(text: str) -> str:
     if not text:
@@ -822,29 +911,43 @@ def score_album(candidate: Candidate, hit: AlbumHit) -> float:
 
     overlap = cand_tokens.intersection(hit_tokens)
     overlap_ratio = len(overlap) / len(cand_tokens)
-    score += overlap_ratio * 0.5
+    title_score = overlap_ratio * 0.5
+    score += title_score
 
     if candidate.performer_hint:
-        perf_norm = normalize(candidate.performer_hint)
-        # Extract surnames (longer tokens)
-        perf_tokens = [t for t in perf_norm.split() if len(t) > 3]
+        # Clean performer string and extract meaningful names
+        cleaned_perf = clean_performer_string(candidate.performer_hint)
+        extracted_names = extract_conductor_or_soloist(candidate.performer_hint)
+
+        # Combine cleaned performer and extracted names for matching
+        all_perf_tokens = set()
+        for name in [cleaned_perf] + extracted_names:
+            perf_norm = normalize(name)
+            # Extract tokens longer than 3 chars (likely surnames)
+            all_perf_tokens.update(t for t in perf_norm.split() if len(t) > 3)
 
         hit_artists_norm = [normalize(a) for a in hit.artists]
         full_hit_artists_str = " ".join(hit_artists_norm)
 
-        # Check if ANY surname exists in hit artists
+        # Also check hit title for performer names (some albums include artist in title)
+        combined_hit_str = full_hit_artists_str + " " + hit_norm
+
+        # Check if ANY performer token exists in hit artists or title
         found_any = False
-        for tok in perf_tokens:
-            if tok in full_hit_artists_str:
+        for tok in all_perf_tokens:
+            if tok in combined_hit_str:
                 found_any = True
                 break
 
         if found_any:
             score += 0.4
         else:
-            # HEAVY PENALTY: If we explicitly looked for a performer and didn't find them,
-            # this is likely the wrong recording (e.g. Gardiner instead of Pichon).
-            score -= 0.6
+            # Reduced penalty: If title overlap is low, don't penalize as much
+            # (likely the album just isn't in the catalog)
+            if title_score < 0.25:
+                score -= 0.3  # Reduced penalty for poor title match
+            else:
+                score -= 0.5  # Still penalize when title matches but performer doesn't
 
     if candidate.label_hint:
         label_norm = normalize(candidate.label_hint)
@@ -878,38 +981,63 @@ def find_best_match(
 
     def push_query(values: List[str], query: str) -> None:
         cleaned = " ".join(query.split())
-        if cleaned and cleaned not in values:
+        if cleaned and len(cleaned) > 2 and cleaned not in values:
             values.append(cleaned)
 
     queries: List[str] = []
 
-    # 1. Performer + Significant Title Tokens (Relaxed)
-    # e.g. "Pichon Bach Mass B Minor"
-    if ph:
-        perf_tokens = get_significant_tokens(ph)
-        title_tokens = get_significant_tokens(wt)
-        # Use last performer token (likely surname) and first few title tokens
+    # Clean performer string (remove instrument abbreviations)
+    cleaned_perf = clean_performer_string(ph) if ph else ""
+    extracted_names = extract_conductor_or_soloist(ph) if ph else []
+    title_tokens = get_significant_tokens(wt)
+
+    # 1. Try extracted performer names with title
+    for name in extracted_names:
+        name_tokens = get_significant_tokens(name)
+        if name_tokens:
+            # Try last name (surname) + title tokens
+            surname = name_tokens[-1] if name_tokens else ""
+            if surname and len(surname) > 3:
+                short_title = " ".join(title_tokens[:4])
+                push_query(queries, f"{surname} {short_title}")
+                # Try surname + composer (usually first word)
+                if title_tokens:
+                    push_query(queries, f"{surname} {title_tokens[0]}")
+
+    # 2. Try full cleaned performer name + title
+    if cleaned_perf:
+        # Performer with short title
+        push_query(queries, f"{cleaned_perf} {' '.join(title_tokens[:3])}")
+
+    # 3. Performer + Significant Title Tokens (original logic with cleaned perf)
+    if cleaned_perf:
+        perf_tokens = get_significant_tokens(cleaned_perf)
         if perf_tokens:
             surname = perf_tokens[-1]
-            # Try surname + first 3 significant title words
             short_title = " ".join(title_tokens[:4])
             push_query(queries, f"{surname} {short_title}")
-
-            # Try surname + composer (first word of title usually)
             if title_tokens:
                 second = title_tokens[1] if len(title_tokens) > 1 else ""
                 push_query(queries, f"{surname} {title_tokens[0]} {second}")
 
-    # 2. Review Slug (cleaned)
+    # 4. Review Slug (cleaned)
     if candidate.review_slug_hint:
         push_query(queries, candidate.review_slug_hint.replace("-", " "))
 
-    # 3. Standard queries
-    push_query(queries, f"{wt} {ph} {lh}")
-    push_query(queries, f"{wt} {ph}")
+    # 5. Standard queries with cleaned performer
+    push_query(queries, f"{wt} {cleaned_perf} {lh}")
+    push_query(queries, f"{wt} {cleaned_perf}")
 
-    # 4. Last resort: Title
+    # 6. Title only (last resort)
     push_query(queries, wt)
+
+    # 7. Try just composer + work type (for generic titles)
+    if title_tokens:
+        # e.g., "Scarlatti Sonatas", "Bach Mass", "Schumann Sonatas"
+        composer = title_tokens[0] if title_tokens else ""
+        if len(title_tokens) > 1:
+            work_type = title_tokens[-1]  # Often "sonatas", "concerto", etc.
+            push_query(queries, f"{composer} {work_type}")
 
     seen_ids = set()
     best_hit = None
