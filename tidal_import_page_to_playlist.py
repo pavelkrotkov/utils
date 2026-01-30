@@ -1085,6 +1085,177 @@ def find_best_match(
     return None, 0.0, debug_log
 
 
+# --- Test Report ---
+
+
+def candidate_key(candidate: Candidate) -> str:
+    return " | ".join(
+        [candidate.work_title_hint, candidate.performer_hint, candidate.label_hint]
+    ).strip()
+
+
+def build_test_report(
+    candidates: List[Candidate],
+    match_results: List[Tuple[Candidate, AlbumHit, float]],
+    no_match_candidates: List[Candidate],
+    match_attempted: bool,
+) -> Dict:
+    by_score: Dict[str, List[str]] = {}
+    matches = []
+    for cand, hit, score in match_results:
+        bucket = f"{score:.1f}"
+        by_score.setdefault(bucket, []).append(cand.work_title_hint)
+        matches.append(
+            {
+                "key": candidate_key(cand),
+                "title": cand.work_title_hint,
+                "performer": cand.performer_hint,
+                "label": cand.label_hint,
+                "album_id": hit.id,
+                "album_title": hit.title,
+                "artists": hit.artists,
+                "score": round(score, 3),
+            }
+        )
+
+    no_matches = []
+    for cand in no_match_candidates:
+        no_matches.append(
+            {
+                "key": candidate_key(cand),
+                "title": cand.work_title_hint,
+                "performer": cand.performer_hint,
+                "label": cand.label_hint,
+            }
+        )
+
+    return {
+        "total_candidates": len(candidates),
+        "matched": len(matches),
+        "no_match": len(no_matches),
+        "matches": matches,
+        "no_matches": no_matches,
+        "by_score": by_score,
+        "match_attempted": match_attempted,
+    }
+
+
+def print_test_summary(report: Dict, label: str = "") -> None:
+    if label:
+        print(f"\n=== {label} ===")
+
+    total_candidates = report.get("total_candidates", 0)
+    matches = report.get("matches", [])
+    no_matches = report.get("no_matches", [])
+
+    print(f"Total candidates: {total_candidates}")
+    print(f"Matched: {len(matches)}")
+    print(f"No match: {len(no_matches)}")
+
+    if not report.get("match_attempted", True):
+        print("Matching was skipped (missing credentials/token).")
+        return
+
+    if no_matches:
+        print("\nNO MATCH albums:")
+        for entry in no_matches:
+            title = entry.get("title", "")
+            print(f"  - {title[:70]}")
+
+    print("\nScore distribution:")
+    by_score = report.get("by_score", {})
+    if not by_score:
+        print("  (no matches)")
+    else:
+        for score in sorted(by_score.keys(), reverse=True):
+            count = len(by_score[score])
+            print(f"  {score}: {count} albums")
+
+    low_scores = [(m["title"], m["score"]) for m in matches if m.get("score", 1) < 0.7]
+    if low_scores:
+        print(f"\nLow score matches (< 0.7): {len(low_scores)}")
+        for title, score in sorted(low_scores, key=lambda x: x[1]):
+            print(f"  {score:.2f}: {title[:60]}")
+
+
+def compare_test_reports(current: Dict, baseline: Dict) -> None:
+    print("\n=== COMPARISON ===")
+
+    if not current.get("match_attempted", True):
+        print("Current report skipped matching; comparison unavailable.")
+        return
+    if not baseline.get("match_attempted", True):
+        print("Baseline report skipped matching; comparison unavailable.")
+        return
+
+    current_no = {entry["key"] for entry in current.get("no_matches", [])}
+    baseline_no = {entry["key"] for entry in baseline.get("no_matches", [])}
+
+    fixed = baseline_no - current_no
+    regressed = current_no - baseline_no
+
+    def key_to_title(report: Dict) -> Dict[str, str]:
+        mapping = {}
+        for entry in report.get("no_matches", []):
+            mapping[entry["key"]] = entry.get("title", entry["key"])
+        for entry in report.get("matches", []):
+            mapping.setdefault(entry["key"], entry.get("title", entry["key"]))
+        return mapping
+
+    current_titles = key_to_title(current)
+    baseline_titles = key_to_title(baseline)
+
+    if fixed:
+        print(f"\nFIXED ({len(fixed)} albums now match):")
+        for key in sorted(fixed):
+            print(f"  + {baseline_titles.get(key, key)[:70]}")
+
+    if regressed:
+        print(f"\nREGRESSED ({len(regressed)} albums no longer match):")
+        for key in sorted(regressed):
+            print(f"  - {current_titles.get(key, key)[:70]}")
+
+    current_scores = {m["key"]: m["score"] for m in current.get("matches", [])}
+    baseline_scores = {m["key"]: m["score"] for m in baseline.get("matches", [])}
+
+    improved = []
+    worsened = []
+
+    for key in set(current_scores.keys()) & set(baseline_scores.keys()):
+        diff = current_scores[key] - baseline_scores[key]
+        if diff > 0.1:
+            improved.append((key, baseline_scores[key], current_scores[key]))
+        elif diff < -0.1:
+            worsened.append((key, baseline_scores[key], current_scores[key]))
+
+    if improved:
+        print(f"\nIMPROVED SCORES ({len(improved)}):")
+        for key, old, new in sorted(improved, key=lambda x: x[2] - x[1], reverse=True)[:10]:
+            title = current_titles.get(key, key)
+            print(f"  {old:.2f} -> {new:.2f}: {title[:50]}")
+
+    if worsened:
+        print(f"\nWORSENED SCORES ({len(worsened)}):")
+        for key, old, new in sorted(worsened, key=lambda x: x[2] - x[1])[:10]:
+            title = current_titles.get(key, key)
+            print(f"  {old:.2f} -> {new:.2f}: {title[:50]}")
+
+    print("\n=== SUMMARY ===")
+    print(
+        "NO MATCH: "
+        f"{len(baseline_no)} -> {len(current_no)} ({len(current_no) - len(baseline_no):+d})"
+    )
+    print(f"Fixed: {len(fixed)}, Regressed: {len(regressed)}")
+
+
+def save_test_report(path: Path, report: Dict) -> None:
+    path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+
+def load_test_report(path: Path) -> Dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 # --- Main ---
 
 
@@ -1107,8 +1278,18 @@ def main():
     parser.add_argument("--force", action="store_true", help="Accept low confidence matches")
     parser.add_argument("--country-code", default=TIDAL_COUNTRY_CODE, help="Tidal Country Code")
     parser.add_argument("--debug", action="store_true", help="Verbose logging")
+    parser.add_argument(
+        "--test-report", action="store_true", help="Print a matching summary report"
+    )
+    parser.add_argument("--test-report-save", type=Path, help="Save report JSON to file")
+    parser.add_argument("--test-report-compare", type=Path, help="Compare report JSON to baseline")
 
     args = parser.parse_args()
+
+    wants_report = args.test_report or args.test_report_save or args.test_report_compare
+    if wants_report and not args.dry_run:
+        logger.warning("Test report requested; forcing --dry-run to avoid playlist creation.")
+        args.dry_run = True
 
     if args.debug:
         logger.setLevel(logging.DEBUG)
@@ -1153,9 +1334,11 @@ def main():
     client = TidalClient(token, args.country_code)
 
     matched_albums = []
-    skipped = 0
+    match_results: List[Tuple[Candidate, AlbumHit, float]] = []
+    no_match_candidates: List[Candidate] = []
+    match_attempted = token != "DRY_RUN_TOKEN"
 
-    if token != "DRY_RUN_TOKEN":
+    if match_attempted:
         logger.info("Matching albums...")
         for cand in candidates:
             hit, score, logs = find_best_match(client, cand, force=args.force)
@@ -1168,16 +1351,35 @@ def main():
                 logger.info(f"       -> Released: {hit.release_date} | Tracks: {hit.track_count}")
                 logger.info(f"       -> ID: {hit.id} (Score: {score:.2f})")
                 matched_albums.append(hit.id)
+                match_results.append((cand, hit, score))
             else:
                 logger.warning(f"NO MATCH: '{cand.work_title_hint}'")
                 if args.debug:
                     for log_line in logs:
                         logger.debug(f"  {log_line}")
-                skipped += 1
+                no_match_candidates.append(cand)
 
             time.sleep(0.2)
     else:
         logger.info("Dry run without credentials/token. Skipping matching step.")
+
+    if wants_report:
+        report = build_test_report(candidates, match_results, no_match_candidates, match_attempted)
+        print_test_summary(report, "CURRENT RESULTS")
+
+        if args.test_report_save:
+            save_test_report(args.test_report_save, report)
+            print(f"Saved report JSON to {args.test_report_save}")
+
+        if args.test_report_compare:
+            if args.test_report_compare.exists():
+                baseline = load_test_report(args.test_report_compare)
+                compare_test_reports(report, baseline)
+            else:
+                print(
+                    f"Warning: Baseline file {args.test_report_compare} not found",
+                    file=sys.stderr,
+                )
 
     if args.dry_run:
         logger.info("Dry run complete (Playlist creation skipped).")
