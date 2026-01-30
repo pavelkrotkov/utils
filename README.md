@@ -1,13 +1,14 @@
 # Utils
 
-Standalone utility scripts for PDF conversion and audio transcription.
+Standalone utility scripts for PDF conversion, audio transcription, and TIDAL import.
 
 ## Overview
 
 - PDF to Markdown conversion (Mathpix API or local marker).
 - Audio transcription (OpenAI API) and local diarization (whisper-cpp + pyannote).
+- TIDAL playlist import from Gramophone-style MHTML/Markdown pages.
 
-For deeper context, see `GEMINI.md` and `AGENTS.md`.
+For deeper context, refer to the script headers and inline help.
 
 ## Setup
 
@@ -86,15 +87,15 @@ The importer uses a multi-stage matching strategy optimized for classical music:
 
 #### Testing Matches
 
-Use the helper script to test and compare matching results:
+Use the built-in test report to validate and compare matching results:
 
 ```bash
-# Quick test on a file
-pipx run ./test_matching.py input.md
+# Quick report on a file
+pipx run ./tidal_import_page_to_playlist.py input.md --dry-run --test-report
 
 # Save baseline and compare after changes
-pipx run ./test_matching.py input.mhtml --save baseline.log
-pipx run ./test_matching.py input.mhtml --compare baseline.log
+pipx run ./tidal_import_page_to_playlist.py input.mhtml --dry-run --test-report-save baseline.json
+pipx run ./tidal_import_page_to_playlist.py input.mhtml --dry-run --test-report-compare baseline.json
 ```
 
 ## Audio Transcription
