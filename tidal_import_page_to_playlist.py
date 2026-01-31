@@ -1178,6 +1178,38 @@ def print_test_summary(report: Dict, label: str = "") -> None:
             print(f"  {score:.2f}: {title[:60]}")
 
 
+def print_run_summary(
+    candidates: List[Candidate],
+    match_results: List[Tuple[Candidate, AlbumHit, float]],
+    no_match_candidates: List[Candidate],
+    match_attempted: bool,
+    low_score_threshold: float = 0.7,
+) -> None:
+    print("\n=== SUMMARY ===")
+    print(f"Total candidates: {len(candidates)}")
+    print(f"Matched: {len(match_results)}")
+    print(f"No match: {len(no_match_candidates)}")
+
+    if not match_attempted:
+        print("Matching was skipped (missing credentials/token).")
+        return
+
+    if no_match_candidates:
+        print("\nNO MATCH albums:")
+        for cand in no_match_candidates:
+            print(f"  - {cand.work_title_hint[:70]}")
+
+    low_scores = [
+        (cand.work_title_hint, score)
+        for cand, _hit, score in match_results
+        if score < low_score_threshold
+    ]
+    if low_scores:
+        print(f"\nLow score matches (< {low_score_threshold:.2f}): {len(low_scores)}")
+        for title, score in sorted(low_scores, key=lambda x: x[1]):
+            print(f"  {score:.2f}: {title[:60]}")
+
+
 def compare_test_reports(current: Dict, baseline: Dict) -> None:
     print("\n=== COMPARISON ===")
 
@@ -1383,10 +1415,12 @@ def main():
 
     if args.dry_run:
         logger.info("Dry run complete (Playlist creation skipped).")
+        print_run_summary(candidates, match_results, no_match_candidates, match_attempted)
         return
 
     if not matched_albums:
         logger.warning("No albums matched. Exiting.")
+        print_run_summary(candidates, match_results, no_match_candidates, match_attempted)
         sys.exit(0)
 
     pl_name = args.name
@@ -1423,6 +1457,8 @@ def main():
             sys.exit(4)
     else:
         logger.warning("No tracks found to add.")
+
+    print_run_summary(candidates, match_results, no_match_candidates, match_attempted)
 
 
 if __name__ == "__main__":
