@@ -69,8 +69,7 @@ def frame_from_html(table, transpose: bool = False) -> pd.DataFrame:
     if table is None:
         raise ValueError("table is None")
     rows = [
-        [cell.get_text() for cell in row.find_all(["th", "td"])]
-        for row in table.find_all("tr")
+        [cell.get_text() for cell in row.find_all(["th", "td"])] for row in table.find_all("tr")
     ]
     if not rows:
         raise ValueError("table has no rows")
@@ -161,19 +160,12 @@ def normalize_symbol(ticker: str, suffix: str) -> str:
 
 
 def build_dataframe(frames: list[pd.DataFrame]) -> pd.DataFrame:
-    return (
-        pd.concat(frames, ignore_index=True)
-        .fillna("")
-        .drop_duplicates()
-        .set_index("")
-    )
+    return pd.concat(frames, ignore_index=True).fillna("").drop_duplicates().set_index("")
 
 
 def drop_header_rows_for_display(df: pd.DataFrame) -> pd.DataFrame:
     header_mask = df.apply(
-        lambda row: all(
-            str(row[col]).strip() == str(col).strip() for col in df.columns
-        ),
+        lambda row: all(str(row[col]).strip() == str(col).strip() for col in df.columns),
         axis=1,
     )
     return df.loc[~header_mask]
