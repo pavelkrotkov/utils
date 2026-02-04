@@ -15,7 +15,7 @@ For deeper context, refer to the script headers and inline help.
 Python dependencies:
 
 ```bash
-pip install mpxpy marker-pdf requests torch pyannote.audio beautifulsoup4 lxml
+pip install mpxpy marker-pdf requests torch pyannote.audio beautifulsoup4 lxml numpy pandas
 ```
 
 System tools (macOS via Homebrew):
@@ -96,6 +96,22 @@ pipx run ./tidal_import_page_to_playlist.py input.md --dry-run --test-report
 # Save baseline and compare after changes
 pipx run ./tidal_import_page_to_playlist.py input.mhtml --dry-run --test-report-save baseline.json
 pipx run ./tidal_import_page_to_playlist.py input.mhtml --dry-run --test-report-compare baseline.json
+```
+
+#### JSON-First Matching (Experimental)
+
+Split parsing and matching for controlled tuning. Use `tidal_parse_prompt.md` to produce structured
+JSON, then interactively label ground-truth matches with `tidal_match_from_json.py`.
+
+```bash
+# Label matches and save a truth file alongside the input JSON
+pipx run ./tidal_match_from_json.py albums.json --resume
+```
+
+Train a query/matching model from the first 80 truth records:
+
+```bash
+pipx run ./tidal_match_from_json.py albums.json --train-coverage --training-out tidal_match_training.json
 ```
 
 ## Audio Transcription
