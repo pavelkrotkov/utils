@@ -42,7 +42,7 @@ TIDAL_REDIRECT_URI = os.environ.get("TIDAL_REDIRECT_URI", "http://127.0.0.1:8765
 TIDAL_SCOPES = os.environ.get(
     "TIDAL_SCOPES", "playlists.read playlists.write collection.read collection.write search.read"
 )
-TIDAL_COUNTRY_CODE = os.environ.get("TIDAL_COUNTRY_CODE", "US")
+TIDAL_COUNTRY_CODE = os.environ.get("TIDAL_COUNTRY_CODE", "GB")
 
 TOKEN_FILE_DIR = Path.home() / ".config" / "tidal-utils"
 TOKEN_FILE_NAME = "tokens.json"
