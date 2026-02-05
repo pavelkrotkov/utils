@@ -773,7 +773,7 @@ class TidalClient:
 
     def get_album_tracks(self, album_id: str) -> List[str]:
         tracks = []
-        next_link = f"/albums/{album_id}/relationships/items?page[limit]=100"
+        next_link = f"/albums/{album_id}/relationships/items"
 
         while next_link:
             path = next_link.replace(TIDAL_API_BASE, "")
