@@ -42,7 +42,7 @@ TIDAL_REDIRECT_URI = os.environ.get("TIDAL_REDIRECT_URI", "http://127.0.0.1:8765
 TIDAL_SCOPES = os.environ.get(
     "TIDAL_SCOPES", "playlists.read playlists.write collection.read collection.write search.read"
 )
-TIDAL_COUNTRY_CODE = os.environ.get("TIDAL_COUNTRY_CODE", "GB")
+TIDAL_COUNTRY_CODE = os.environ.get("TIDAL_COUNTRY_CODE", "auto")
 
 TOKEN_FILE_DIR = Path.home() / ".config" / "tidal-utils"
 TOKEN_FILE_NAME = "tokens.json"
@@ -318,6 +318,33 @@ def load_tokens(file_path: Path) -> Optional[Dict]:
         return json.loads(file_path.read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+def token_country_code(token: str) -> Optional[str]:
+    parts = token.split(".")
+    if len(parts) < 2:
+        return None
+    payload = parts[1]
+    padding = "=" * (-len(payload) % 4)
+    try:
+        data = json.loads(base64.urlsafe_b64decode(payload + padding))
+    except Exception:
+        return None
+    cc = data.get("cc")
+    if isinstance(cc, str) and cc:
+        return cc.upper()
+    return None
+
+
+def resolve_country_code(token: str, requested: Optional[str]) -> str:
+    if requested:
+        normalized = requested.strip().upper()
+        if normalized and normalized != "AUTO":
+            return normalized
+    token_cc = token_country_code(token)
+    if token_cc:
+        return token_cc
+    return "US"
 
 
 def get_valid_token(token_file: Path) -> str:
@@ -1417,7 +1444,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("input_path", type=Path, help="Structured JSON input.")
     parser.add_argument("--token-file", type=Path, default=TOKEN_FILE_DIR / TOKEN_FILE_NAME)
-    parser.add_argument("--country-code", default=TIDAL_COUNTRY_CODE, help="TIDAL country code")
+    parser.add_argument(
+        "--country-code",
+        default=TIDAL_COUNTRY_CODE,
+        help="TIDAL country code (use 'auto' to read from token)",
+    )
     parser.add_argument("--limit", type=int, default=5, help="Results per query")
     parser.add_argument("--max-queries", type=int, default=0, help="0 means no limit")
     parser.add_argument("--sleep", type=float, default=0.2, help="Seconds between queries")
@@ -1475,7 +1506,10 @@ def main() -> int:
         truth_path = args.truth or args.input_path.with_suffix(".truth.json")
         truth_records = load_truth_records(truth_path)
         token = get_valid_token(args.token_file)
-        client = TidalClient(token, args.country_code)
+        resolved_country = resolve_country_code(token, args.country_code)
+        if (args.country_code or "").strip().lower() == "auto":
+            print(f"Using token country code: {resolved_country}")
+        client = TidalClient(token, resolved_country)
         weights, template_weights, model = train_coverage(
             client,
             truth_records,
@@ -1500,7 +1534,10 @@ def main() -> int:
     max_queries = args.max_queries or None
 
     token = get_valid_token(args.token_file)
-    client = TidalClient(token, args.country_code)
+    resolved_country = resolve_country_code(token, args.country_code)
+    if (args.country_code or "").strip().lower() == "auto":
+        print(f"Using token country code: {resolved_country}")
+    client = TidalClient(token, resolved_country)
 
     total = len(albums)
     start_idx = max(args.start, 1)
