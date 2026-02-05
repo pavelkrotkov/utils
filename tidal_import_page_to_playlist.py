@@ -44,7 +44,7 @@ TIDAL_REDIRECT_URI = os.environ.get("TIDAL_REDIRECT_URI", "http://127.0.0.1:8765
 TIDAL_SCOPES = os.environ.get(
     "TIDAL_SCOPES", "playlists.read playlists.write collection.read collection.write search.read"
 )
-TIDAL_COUNTRY_CODE = os.environ.get("TIDAL_COUNTRY_CODE", "GB")
+TIDAL_COUNTRY_CODE = os.environ.get("TIDAL_COUNTRY_CODE", "auto")
 
 TOKEN_FILE_DIR = Path.home() / ".config" / "tidal-utils"
 TOKEN_FILE_NAME = "tokens.json"
@@ -620,6 +620,33 @@ def load_tokens(file_path: Path) -> Optional[Dict]:
             return json.load(f)
     except Exception:
         return None
+
+
+def token_country_code(token: str) -> Optional[str]:
+    parts = token.split(".")
+    if len(parts) < 2:
+        return None
+    payload = parts[1]
+    padding = "=" * (-len(payload) % 4)
+    try:
+        data = json.loads(base64.urlsafe_b64decode(payload + padding))
+    except Exception:
+        return None
+    cc = data.get("cc")
+    if isinstance(cc, str) and cc:
+        return cc.upper()
+    return None
+
+
+def resolve_country_code(token: str, requested: Optional[str]) -> str:
+    if requested:
+        normalized = requested.strip().upper()
+        if normalized and normalized != "AUTO":
+            return normalized
+    token_cc = token_country_code(token)
+    if token_cc:
+        return token_cc
+    return "US"
 
 
 def get_valid_token(token_file: Path) -> str:
@@ -1327,7 +1354,11 @@ def main():
         "--dry-run", action="store_true", help="Do not create playlist, just show matches"
     )
     parser.add_argument("--force", action="store_true", help="Accept low confidence matches")
-    parser.add_argument("--country-code", default=TIDAL_COUNTRY_CODE, help="Tidal Country Code")
+    parser.add_argument(
+        "--country-code",
+        default=TIDAL_COUNTRY_CODE,
+        help="TIDAL country code (use 'auto' to read from token)",
+    )
     parser.add_argument("--debug", action="store_true", help="Verbose logging")
     parser.add_argument(
         "--test-report", action="store_true", help="Print a matching summary report"
@@ -1382,7 +1413,10 @@ def main():
         logger.error("TIDAL_CLIENT_ID required for real run.")
         sys.exit(3)
 
-    client = TidalClient(token, args.country_code)
+    resolved_country = resolve_country_code(token, args.country_code)
+    if (args.country_code or "").strip().lower() == "auto":
+        logger.info(f"Using token country code: {resolved_country}")
+    client = TidalClient(token, resolved_country)
 
     matched_albums = []
     match_results: List[Tuple[Candidate, AlbumHit, float]] = []
