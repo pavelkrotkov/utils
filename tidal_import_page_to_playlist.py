@@ -773,22 +773,41 @@ class TidalClient:
 
     def get_album_tracks(self, album_id: str) -> List[str]:
         tracks = []
-        next_link = f"/albums/{album_id}/relationships/items"
+        seen = set()
+        base_path = f"/albums/{album_id}/relationships/items"
+        next_link = base_path
 
         while next_link:
             path = next_link.replace(TIDAL_API_BASE, "")
-            resp = self._req("GET", path)
+            if not path.startswith("/"):
+                path = f"/{path}"
+            resp = self._req("GET", path, params={"include": "items"})
             if resp.status_code != 200:
                 break
             data = resp.json()
 
-            items = data.get("data", [])
+            items = data.get("data") or []
             for item in items:
-                if item["type"] == "tracks":
-                    tracks.append(item["id"])
+                if item.get("type") == "tracks" and item.get("id"):
+                    track_id = str(item["id"])
+                    if track_id not in seen:
+                        tracks.append(track_id)
+                        seen.add(track_id)
+
+            included = data.get("included") or []
+            for item in included:
+                if item.get("type") == "tracks" and item.get("id"):
+                    track_id = str(item["id"])
+                    if track_id not in seen:
+                        tracks.append(track_id)
+                        seen.add(track_id)
 
             links = data.get("links", {})
             next_link = links.get("next")
+            if not next_link:
+                cursor = links.get("meta", {}).get("nextCursor")
+                if cursor:
+                    next_link = f"{base_path}?page[cursor]={urllib.parse.quote(str(cursor))}"
 
         return tracks
 
