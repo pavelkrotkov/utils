@@ -22,6 +22,7 @@ import time
 import unicodedata
 import urllib.parse
 import webbrowser
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -371,6 +372,7 @@ class TidalClient:
         method: str,
         path: str,
         params: Optional[Dict[str, str]] = None,
+        json_data: Optional[Dict] = None,
         retry: int = 2,
     ) -> requests.Response:
         url = f"{TIDAL_API_BASE}{path}"
@@ -379,7 +381,7 @@ class TidalClient:
 
         resp: Optional[requests.Response] = None
         for attempt in range(retry + 1):
-            resp = self.session.request(method, url, params=p)
+            resp = self.session.request(method, url, params=p, json=json_data)
 
             if resp.status_code == 429:
                 sleep_time = int(resp.headers.get("Retry-After", 1)) * (attempt + 1)
@@ -489,6 +491,134 @@ class TidalClient:
             copyright=str(cright),
             track_count=attr.get("numberOfItems"),
         )
+
+    def get_album_tracks(self, album_id: str) -> List[str]:
+        tracks: List[str] = []
+        next_link = f"/albums/{album_id}/relationships/items"
+
+        while next_link:
+            path = next_link.replace(TIDAL_API_BASE, "")
+            resp = self._req("GET", path)
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+
+            items = data.get("data", [])
+            for item in items:
+                if item.get("type") == "tracks" and item.get("id"):
+                    tracks.append(item["id"])
+
+            links = data.get("links", {})
+            next_link = links.get("next")
+
+        return tracks
+
+    def add_tracks_to_playlist(self, playlist_id: str, track_ids: List[str]) -> None:
+        chunk_size = 20
+        for i in range(0, len(track_ids), chunk_size):
+            chunk = track_ids[i : i + chunk_size]
+            body = {"data": [{"type": "tracks", "id": tid} for tid in chunk]}
+            self._req("POST", f"/playlists/{playlist_id}/relationships/items", json_data=body)
+
+    def create_playlist(self, name: str, description: str, is_public: bool) -> str:
+        body = {
+            "data": {
+                "type": "playlists",
+                "attributes": {"name": name, "description": description, "public": is_public},
+            }
+        }
+
+        for path in ["/my/playlists", "/playlists"]:
+            try:
+                resp = self._req("POST", path, json_data=body)
+                if resp.status_code == 201:
+                    loc = resp.headers.get("Location", "")
+                    if loc:
+                        return loc.split("/")[-1]
+                    if resp.content:
+                        return resp.json()["data"]["id"]
+            except Exception:
+                continue
+
+        raise RuntimeError("Failed to create playlist.")
+
+    def list_playlists(self, limit: int = 100) -> List[Dict]:
+        playlists: List[Dict] = []
+        next_link = f"/my/playlists?page[limit]={limit}"
+
+        while next_link:
+            path = next_link.replace(TIDAL_API_BASE, "")
+            resp = self._req("GET", path)
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+            items = data.get("data", [])
+            if isinstance(items, list):
+                playlists.extend(items)
+            links = data.get("links", {})
+            next_link = links.get("next")
+
+        return playlists
+
+    def _fetch_track_album_map(self, track_ids: List[str]) -> Dict[str, List[str]]:
+        album_map: Dict[str, List[str]] = {}
+        chunk_size = 50
+        unique_ids = list(dict.fromkeys(track_ids))
+
+        for i in range(0, len(unique_ids), chunk_size):
+            chunk = unique_ids[i : i + chunk_size]
+            params = {"filter[id]": chunk, "include": "albums"}
+            resp = self._req("GET", "/tracks", params=params)
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+            for item in data.get("data", []):
+                track_id = item.get("id")
+                rel = item.get("relationships", {}).get("albums", {}).get("data", [])
+                if isinstance(rel, dict):
+                    rel = [rel]
+                album_ids: List[str] = []
+                for entry in rel:
+                    if not isinstance(entry, dict):
+                        continue
+                    album_id = entry.get("id")
+                    if album_id:
+                        album_ids.append(str(album_id))
+                if track_id:
+                    album_map[str(track_id)] = album_ids
+
+        return album_map
+
+    def get_playlist_track_album_ids(self, playlist_id: str) -> Tuple[List[str], List[str]]:
+        track_ids: List[str] = []
+        album_ids: List[str] = []
+        next_link = f"/playlists/{playlist_id}/relationships/items"
+
+        while next_link:
+            path = next_link.replace(TIDAL_API_BASE, "")
+            resp = self._req("GET", path)
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+
+            items = data.get("data", [])
+            for item in items:
+                if item.get("type") != "tracks":
+                    continue
+                track_id = item.get("id")
+                if track_id:
+                    track_ids.append(track_id)
+
+            links = data.get("links", {})
+            next_link = links.get("next")
+        if track_ids:
+            album_map = self._fetch_track_album_map(track_ids)
+            for track_id in track_ids:
+                rel_album_ids = album_map.get(track_id, [])
+                if rel_album_ids:
+                    album_ids.append(rel_album_ids[0])
+
+        return track_ids, album_ids
 
 
 def normalize(text: str) -> str:
@@ -1000,6 +1130,104 @@ def save_output(path: Path, records: List[Dict]) -> None:
     path.write_text(json.dumps(records, indent=2), encoding="utf-8")
 
 
+def prompt_yes_no(prompt: str, default: bool = False) -> bool:
+    suffix = "[Y/n]" if default else "[y/N]"
+    raw = input(f"{prompt} {suffix} ").strip().lower()
+    if not raw:
+        return default
+    return raw in {"y", "yes"}
+
+
+def collect_selected_album_ids(records: List[Dict]) -> Tuple[List[Dict[str, str]], int]:
+    selected: List[Dict[str, str]] = []
+    seen: set[str] = set()
+    unmatched = 0
+
+    for entry in records:
+        choice = entry.get("choice") or {}
+        status = choice.get("status") or ""
+        chosen = entry.get("chosen") or {}
+        tidal_id = choice.get("tidal_id") or chosen.get("id") or ""
+        album_title = (chosen.get("title") or (entry.get("album") or {}).get("title") or "").strip()
+
+        if not tidal_id or status in {"none", "skip", ""}:
+            unmatched += 1
+            continue
+
+        if tidal_id not in seen:
+            seen.add(tidal_id)
+            selected.append({"id": tidal_id, "title": album_title})
+
+    return selected, unmatched
+
+
+def default_playlist_name(truth_path: Path) -> str:
+    return f"{truth_path.stem} (Import)"
+
+
+def summarize_playlist(client: TidalClient, playlist_id: str) -> Dict:
+    track_ids, album_ids = client.get_playlist_track_album_ids(playlist_id)
+    album_counts = Counter(album_ids)
+    top_albums = album_counts.most_common(5)
+    top_details = []
+    for album_id, count in top_albums:
+        detail = client.get_album_details(album_id)
+        title = detail.title if detail else album_id
+        artists = ", ".join(detail.artists) if detail else ""
+        top_details.append(
+            {
+                "album_id": album_id,
+                "title": title,
+                "artists": artists,
+                "track_count": count,
+            }
+        )
+
+    return {
+        "track_count": len(track_ids),
+        "album_count": len(album_counts),
+        "top_albums": top_details,
+    }
+
+
+def select_existing_playlist(client: TidalClient, name: str) -> Tuple[Optional[str], bool]:
+    playlists = client.list_playlists()
+    matches = []
+    for item in playlists:
+        attr = item.get("attributes", {}) if isinstance(item, dict) else {}
+        if attr.get("name") == name:
+            matches.append(item)
+
+    if not matches:
+        return None, False
+
+    print(f"\nExisting playlists named '{name}':")
+    for idx, item in enumerate(matches, start=1):
+        pid = item.get("id")
+        stats = summarize_playlist(client, pid)
+        print(f"  {idx}. {pid} | tracks {stats['track_count']} | albums {stats['album_count']}")
+        for album in stats["top_albums"]:
+            title = album["title"]
+            artists = album["artists"]
+            count = album["track_count"]
+            detail = f"{title} ({count})"
+            if artists:
+                detail = f"{detail} | {artists}"
+            print(f"     - {detail}")
+
+    while True:
+        raw = input("Use existing playlist number (0 to create new): ").strip()
+        if not raw:
+            continue
+        if raw.isdigit():
+            choice = int(raw)
+            if choice == 0:
+                return None, True
+            if 1 <= choice <= len(matches):
+                return matches[choice - 1].get("id"), True
+        print("Invalid selection.")
+
+
 def format_features(features: Dict[str, float]) -> str:
     parts = [f"{key}={features[key]:.2f}" for key in sorted(features.keys()) if features[key] > 0]
     return " ".join(parts) if parts else "(no signals)"
@@ -1184,6 +1412,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--start", type=int, default=1, help="1-based start index")
     parser.add_argument("--stop", type=int, default=0, help="1-based stop index")
     parser.add_argument("--print-queries", action="store_true", help="Print queries per album")
+    parser.add_argument("--playlist-name", help="Override playlist name")
+    parser.add_argument("--playlist-description", help="Override playlist description")
+    parser.add_argument("--unlisted", action="store_true", help="Create playlist as private")
     parser.add_argument(
         "--auto-threshold",
         type=float,
@@ -1426,6 +1657,81 @@ def main() -> int:
 
         save_output(output_path, records)
         print(f"Saved {record_id} -> {output_path}")
+
+    selected_entries, unmatched = collect_selected_album_ids(records)
+    if not selected_entries:
+        print("No matched albums to create a playlist.")
+        print(f"Done. Output written to {output_path}")
+        return 0
+
+    if unmatched > 0:
+        print(f"Warning: {unmatched} entries have no match.")
+        if not prompt_yes_no("Proceed with playlist creation?"):
+            print(f"Done. Output written to {output_path}")
+            return 0
+    else:
+        if not prompt_yes_no("All entries matched. Create playlist now?"):
+            print(f"Done. Output written to {output_path}")
+            return 0
+
+    base_name = args.playlist_name or default_playlist_name(output_path)
+    playlist_id, had_existing = select_existing_playlist(client, base_name)
+    playlist_name = base_name
+    if not playlist_id:
+        if had_existing:
+            default_new = f"{base_name} ({datetime.now().date()})"
+            raw_name = input(f"New playlist name (blank for '{default_new}'): ").strip()
+            playlist_name = raw_name or default_new
+        if not prompt_yes_no(f"Create playlist '{playlist_name}'?", default=True):
+            print("Playlist creation cancelled.")
+            print(f"Done. Output written to {output_path}")
+            return 0
+
+        description = args.playlist_description or (
+            f"Imported from {output_path.name} on {datetime.now().date()}."
+        )
+        playlist_id = client.create_playlist(
+            playlist_name, description, is_public=not args.unlisted
+        )
+        print(f"Playlist created: {playlist_id}")
+    else:
+        print(f"Using existing playlist: {playlist_id}")
+
+    all_tracks: List[str] = []
+    seen_tracks: set[str] = set()
+    shortfalls: List[str] = []
+
+    for entry in selected_entries:
+        album_id = entry["id"]
+        detail = client.get_album_details(album_id)
+        title = detail.title if detail and detail.title else entry.get("title", "")
+        expected = detail.track_count if detail else None
+        tracks = client.get_album_tracks(album_id)
+        if expected and len(tracks) < expected:
+            shortfalls.append(f"{title or album_id}: {len(tracks)}/{expected} tracks returned")
+        for track_id in tracks:
+            if track_id in seen_tracks:
+                continue
+            seen_tracks.add(track_id)
+            all_tracks.append(track_id)
+
+    if shortfalls:
+        print("Warning: some albums returned fewer tracks than expected:")
+        for entry in shortfalls:
+            print(f"  - {entry}")
+        if not prompt_yes_no("Proceed with playlist creation anyway?"):
+            print("Playlist creation cancelled.")
+            print(f"Done. Output written to {output_path}")
+            return 0
+
+    if not all_tracks:
+        print("No tracks found to add.")
+        print(f"Done. Output written to {output_path}")
+        return 0
+
+    print(f"Adding {len(all_tracks)} tracks from {len(selected_entries)} albums...")
+    client.add_tracks_to_playlist(playlist_id, all_tracks)
+    print(f"Tracks added: {len(all_tracks)}")
 
     print(f"Done. Output written to {output_path}")
     return 0
