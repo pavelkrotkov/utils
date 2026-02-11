@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict
+from typing import List, Optional, Tuple, Dict, Set
 
 import requests
 from bs4 import BeautifulSoup
@@ -36,6 +36,8 @@ from bs4 import BeautifulSoup
 TIDAL_AUTH_URL = "https://login.tidal.com/authorize"
 TIDAL_TOKEN_URL = "https://auth.tidal.com/v1/oauth2/token"
 TIDAL_API_BASE = "https://openapi.tidal.com/v2"
+TIDAL_API_V1_BASE = "https://api.tidal.com/v1"
+TIDAL_WEB_V1_BASE = "https://tidal.com/v1"
 
 # Default Client ID for a generic 'tidal-utils' app (or user provided)
 TIDAL_CLIENT_ID = os.environ.get("TIDAL_CLIENT_ID")
@@ -45,6 +47,11 @@ TIDAL_SCOPES = os.environ.get(
     "TIDAL_SCOPES", "playlists.read playlists.write collection.read collection.write search.read"
 )
 TIDAL_COUNTRY_CODE = os.environ.get("TIDAL_COUNTRY_CODE", "auto")
+TIDAL_WEB_TOKEN = os.environ.get("TIDAL_WEB_TOKEN")
+TIDAL_WEB_COOKIES = os.environ.get("TIDAL_WEB_COOKIES")
+TIDAL_WEB_LOCALE = os.environ.get("TIDAL_WEB_LOCALE", "en_US")
+TIDAL_WEB_DEVICE_TYPE = os.environ.get("TIDAL_WEB_DEVICE_TYPE", "BROWSER")
+TIDAL_WEB_USER_AGENT = os.environ.get("TIDAL_WEB_USER_AGENT")
 
 TOKEN_FILE_DIR = Path.home() / ".config" / "tidal-utils"
 TOKEN_FILE_NAME = "tokens.json"
@@ -701,6 +708,159 @@ class TidalClient:
             }
         )
 
+    def _req_v1(self, path: str, params: Dict = None, retry=2) -> requests.Response:
+        url = f"{TIDAL_API_V1_BASE}{path}"
+        p = params or {}
+        p["countryCode"] = self.country_code
+
+        for attempt in range(retry + 1):
+            resp = self.session.get(url, params=p, headers={"Accept": "application/json"})
+
+            if resp.status_code == 429:
+                sleep_time = int(resp.headers.get("Retry-After", 1)) * (attempt + 1)
+                time.sleep(sleep_time)
+                continue
+
+            if 500 <= resp.status_code < 600:
+                time.sleep(1 * (attempt + 1))
+                continue
+
+            if resp.status_code >= 400:
+                if resp.status_code == 404:
+                    return resp
+                resp.raise_for_status()
+
+            return resp
+        return resp
+
+    def _req_web_v1(self, path: str, params: Dict = None, retry=2) -> requests.Response:
+        url = f"{TIDAL_WEB_V1_BASE}{path}"
+        p = params or {}
+        if "countryCode" not in p:
+            p["countryCode"] = self.country_code
+        if "locale" not in p:
+            p["locale"] = TIDAL_WEB_LOCALE
+        if "deviceType" not in p:
+            p["deviceType"] = TIDAL_WEB_DEVICE_TYPE
+
+        token = TIDAL_WEB_TOKEN or self.token
+        headers = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
+        if TIDAL_WEB_COOKIES:
+            headers["Cookie"] = TIDAL_WEB_COOKIES
+        if TIDAL_WEB_USER_AGENT:
+            headers["User-Agent"] = TIDAL_WEB_USER_AGENT
+
+        for attempt in range(retry + 1):
+            resp = self.session.get(url, params=p, headers=headers)
+
+            if resp.status_code == 429:
+                sleep_time = int(resp.headers.get("Retry-After", 1)) * (attempt + 1)
+                time.sleep(sleep_time)
+                continue
+
+            if 500 <= resp.status_code < 600:
+                time.sleep(1 * (attempt + 1))
+                continue
+
+            if resp.status_code >= 400:
+                if resp.status_code == 404:
+                    return resp
+                return resp
+
+            return resp
+        return resp
+
+    def _parse_pages_path(self, path: str) -> Tuple[str, Dict[str, str]]:
+        parsed = urllib.parse.urlparse(path)
+        if parsed.scheme and parsed.netloc:
+            raw_path = parsed.path
+            raw_query = parsed.query
+        else:
+            if "?" in path:
+                raw_path, raw_query = path.split("?", 1)
+            else:
+                raw_path, raw_query = path, ""
+
+        params: Dict[str, str] = {}
+        if raw_query:
+            for key, values in urllib.parse.parse_qs(raw_query).items():
+                if values:
+                    params[key] = values[-1]
+        if not raw_path.startswith("/"):
+            raw_path = f"/{raw_path}"
+        return raw_path, params
+
+    def _extract_tracks_from_pages(self, doc: Dict) -> Tuple[List[str], List[str]]:
+        tracks: List[str] = []
+        seen: Set[str] = set()
+        data_paths: List[str] = []
+
+        def add_track(track_id: Optional[str]) -> None:
+            if not track_id:
+                return
+            tid = str(track_id)
+            if tid not in seen:
+                seen.add(tid)
+                tracks.append(tid)
+
+        def handle_item(entry: Dict) -> None:
+            if not isinstance(entry, dict):
+                return
+            item = entry.get("item") if isinstance(entry.get("item"), dict) else entry
+            item_type = entry.get("type") or item.get("type")
+            if item_type and item_type != "track":
+                return
+            track_id = item.get("id")
+            add_track(track_id)
+
+        def handle_paged_list(paged: Dict) -> None:
+            data_path = paged.get("dataApiPath")
+            if data_path:
+                data_paths.append(data_path)
+            items = paged.get("items")
+            if isinstance(items, list):
+                for entry in items:
+                    if isinstance(entry, dict):
+                        handle_item(entry)
+
+        def handle_module(module: Dict) -> None:
+            if module.get("type") != "ALBUM_ITEMS":
+                return
+            paged = module.get("pagedList")
+            if isinstance(paged, dict):
+                handle_paged_list(paged)
+            items = module.get("items")
+            if isinstance(items, list):
+                for entry in items:
+                    if isinstance(entry, dict):
+                        handle_item(entry)
+
+        if isinstance(doc, dict):
+            top_items = doc.get("items")
+            if isinstance(top_items, list):
+                for entry in top_items:
+                    if isinstance(entry, dict):
+                        handle_item(entry)
+
+            modules = doc.get("modules")
+            if isinstance(modules, list):
+                for module in modules:
+                    if isinstance(module, dict):
+                        handle_module(module)
+
+            rows = doc.get("rows")
+            if isinstance(rows, list):
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    mods = row.get("modules")
+                    if isinstance(mods, list):
+                        for module in mods:
+                            if isinstance(module, dict):
+                                handle_module(module)
+
+        return tracks, data_paths
+
     def _req(
         self, method: str, path: str, params: Dict = None, json_data: Dict = None, retry=2
     ) -> requests.Response:
@@ -798,7 +958,79 @@ class TidalClient:
 
         return hits
 
-    def get_album_tracks(self, album_id: str) -> List[str]:
+    def _get_album_tracks_v1(self, album_id: str) -> List[str]:
+        tracks: List[str] = []
+        seen: Set[str] = set()
+        offset = 0
+        limit = 100
+        total: Optional[int] = None
+
+        while True:
+            params = {"limit": str(limit), "offset": str(offset)}
+            resp = self._req_v1(f"/albums/{album_id}/tracks", params=params)
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+            items = data.get("items") if isinstance(data, dict) else None
+            if not isinstance(items, list):
+                break
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                track_id = item.get("id")
+                if track_id is None:
+                    continue
+                track_id = str(track_id)
+                if track_id not in seen:
+                    seen.add(track_id)
+                    tracks.append(track_id)
+            if total is None and isinstance(data, dict):
+                total = data.get("totalNumberOfItems")
+            if not items:
+                break
+            offset += len(items)
+            if total is not None and offset >= total:
+                break
+
+        return tracks
+
+    def _get_album_tracks_web(self, album_id: str) -> List[str]:
+        tracks: List[str] = []
+        seen: Set[str] = set()
+
+        resp = self._req_web_v1(
+            "/pages/album",
+            params={
+                "albumId": str(album_id),
+                "locale": TIDAL_WEB_LOCALE,
+                "deviceType": TIDAL_WEB_DEVICE_TYPE,
+            },
+        )
+        if resp.status_code != 200:
+            return tracks
+
+        data = resp.json()
+        page_tracks, data_paths = self._extract_tracks_from_pages(data)
+        for tid in page_tracks:
+            if tid not in seen:
+                seen.add(tid)
+                tracks.append(tid)
+
+        for data_path in dict.fromkeys(data_paths):
+            path, params = self._parse_pages_path(data_path)
+            resp = self._req_web_v1(path, params=params)
+            if resp.status_code != 200:
+                continue
+            doc = resp.json()
+            more_tracks, _ = self._extract_tracks_from_pages(doc)
+            for tid in more_tracks:
+                if tid not in seen:
+                    seen.add(tid)
+                    tracks.append(tid)
+
+        return tracks
+
+    def get_album_tracks(self, album_id: str, expected: Optional[int] = None) -> List[str]:
         tracks = []
         seen = set()
         base_path = f"/albums/{album_id}/relationships/items"
@@ -835,6 +1067,20 @@ class TidalClient:
                 cursor = links.get("meta", {}).get("nextCursor")
                 if cursor:
                     next_link = f"{base_path}?page[cursor]={urllib.parse.quote(str(cursor))}"
+
+        if tracks and (expected is None or len(tracks) >= expected):
+            return tracks
+
+        v1_tracks = self._get_album_tracks_v1(album_id)
+        if len(v1_tracks) > len(tracks):
+            tracks = v1_tracks
+
+        if tracks and (expected is None or len(tracks) >= expected):
+            return tracks
+
+        web_tracks = self._get_album_tracks_web(album_id)
+        if len(web_tracks) > len(tracks):
+            return web_tracks
 
         return tracks
 
@@ -1419,6 +1665,7 @@ def main():
     client = TidalClient(token, resolved_country)
 
     matched_albums = []
+    matched_album_counts: Dict[str, int] = {}
     match_results: List[Tuple[Candidate, AlbumHit, float]] = []
     no_match_candidates: List[Candidate] = []
     match_attempted = token != "DRY_RUN_TOKEN"
@@ -1436,6 +1683,8 @@ def main():
                 logger.info(f"       -> Released: {hit.release_date} | Tracks: {hit.track_count}")
                 logger.info(f"       -> ID: {hit.id} (Score: {score:.2f})")
                 matched_albums.append(hit.id)
+                if hit.track_count:
+                    matched_album_counts[hit.id] = hit.track_count
                 match_results.append((cand, hit, score))
             else:
                 logger.warning(f"NO MATCH: '{cand.work_title_hint}'")
@@ -1495,7 +1744,8 @@ def main():
     logger.info("Fetching tracks...")
     for aid in matched_albums:
         try:
-            tracks = client.get_album_tracks(aid)
+            expected = matched_album_counts.get(aid)
+            tracks = client.get_album_tracks(aid, expected=expected)
             all_tracks.extend(tracks)
         except Exception as e:
             logger.error(f"Error fetching tracks for album {aid}: {e}")
