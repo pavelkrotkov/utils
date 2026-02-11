@@ -24,7 +24,7 @@ import urllib.parse
 import webbrowser
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -35,14 +35,22 @@ import requests
 TIDAL_AUTH_URL = "https://login.tidal.com/authorize"
 TIDAL_TOKEN_URL = "https://auth.tidal.com/v1/oauth2/token"
 TIDAL_API_BASE = "https://openapi.tidal.com/v2"
+TIDAL_API_V1_BASE = "https://api.tidal.com/v1"
+TIDAL_WEB_V1_BASE = "https://tidal.com/v1"
 
 TIDAL_CLIENT_ID = os.environ.get("TIDAL_CLIENT_ID")
 TIDAL_CLIENT_SECRET = os.environ.get("TIDAL_CLIENT_SECRET")
 TIDAL_REDIRECT_URI = os.environ.get("TIDAL_REDIRECT_URI", "http://127.0.0.1:8765/callback")
 TIDAL_SCOPES = os.environ.get(
-    "TIDAL_SCOPES", "playlists.read playlists.write collection.read collection.write search.read"
+    "TIDAL_SCOPES",
+    "playlists.read playlists.write collection.read collection.write search.read user.read",
 )
 TIDAL_COUNTRY_CODE = os.environ.get("TIDAL_COUNTRY_CODE", "auto")
+TIDAL_WEB_TOKEN = os.environ.get("TIDAL_WEB_TOKEN")
+TIDAL_WEB_COOKIES = os.environ.get("TIDAL_WEB_COOKIES")
+TIDAL_WEB_LOCALE = os.environ.get("TIDAL_WEB_LOCALE", "en_US")
+TIDAL_WEB_DEVICE_TYPE = os.environ.get("TIDAL_WEB_DEVICE_TYPE", "BROWSER")
+TIDAL_WEB_USER_AGENT = os.environ.get("TIDAL_WEB_USER_AGENT")
 
 TOKEN_FILE_DIR = Path.home() / ".config" / "tidal-utils"
 TOKEN_FILE_NAME = "tokens.json"
@@ -394,6 +402,180 @@ class TidalClient:
             }
         )
 
+    def _req_v1(
+        self,
+        path: str,
+        params: Optional[Dict[str, str]] = None,
+        retry: int = 2,
+    ) -> requests.Response:
+        url = f"{TIDAL_API_V1_BASE}{path}"
+        p = params or {}
+        p["countryCode"] = self.country_code
+
+        resp: Optional[requests.Response] = None
+        for attempt in range(retry + 1):
+            resp = self.session.get(url, params=p, headers={"Accept": "application/json"})
+
+            if resp.status_code == 429:
+                sleep_time = int(resp.headers.get("Retry-After", 1)) * (attempt + 1)
+                time.sleep(sleep_time)
+                continue
+
+            if 500 <= resp.status_code < 600:
+                time.sleep(1 * (attempt + 1))
+                continue
+
+            if resp.status_code >= 400:
+                if resp.status_code == 404:
+                    return resp
+                resp.raise_for_status()
+
+            return resp
+
+        if resp is None:
+            raise RuntimeError("Failed to reach TIDAL API.")
+        return resp
+
+    def _req_web_v1(
+        self,
+        path: str,
+        params: Optional[Dict[str, str]] = None,
+        retry: int = 2,
+    ) -> requests.Response:
+        url = f"{TIDAL_WEB_V1_BASE}{path}"
+        p = params or {}
+        if "countryCode" not in p:
+            p["countryCode"] = self.country_code
+        if "locale" not in p:
+            p["locale"] = TIDAL_WEB_LOCALE
+        if "deviceType" not in p:
+            p["deviceType"] = TIDAL_WEB_DEVICE_TYPE
+
+        token = TIDAL_WEB_TOKEN or self.token
+        headers = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
+        if TIDAL_WEB_COOKIES:
+            headers["Cookie"] = TIDAL_WEB_COOKIES
+        if TIDAL_WEB_USER_AGENT:
+            headers["User-Agent"] = TIDAL_WEB_USER_AGENT
+
+        resp: Optional[requests.Response] = None
+        for attempt in range(retry + 1):
+            resp = self.session.get(url, params=p, headers=headers)
+
+            if resp.status_code == 429:
+                sleep_time = int(resp.headers.get("Retry-After", 1)) * (attempt + 1)
+                time.sleep(sleep_time)
+                continue
+
+            if 500 <= resp.status_code < 600:
+                time.sleep(1 * (attempt + 1))
+                continue
+
+            if resp.status_code >= 400:
+                if resp.status_code == 404:
+                    return resp
+                return resp
+
+            return resp
+
+        if resp is None:
+            raise RuntimeError("Failed to reach TIDAL API.")
+        return resp
+
+    def _parse_pages_path(self, path: str) -> Tuple[str, Dict[str, str]]:
+        parsed = urllib.parse.urlparse(path)
+        if parsed.scheme and parsed.netloc:
+            raw_path = parsed.path
+            raw_query = parsed.query
+        else:
+            if "?" in path:
+                raw_path, raw_query = path.split("?", 1)
+            else:
+                raw_path, raw_query = path, ""
+
+        params: Dict[str, str] = {}
+        if raw_query:
+            for key, values in urllib.parse.parse_qs(raw_query).items():
+                if values:
+                    params[key] = values[-1]
+        if not raw_path.startswith("/"):
+            raw_path = f"/{raw_path}"
+        return raw_path, params
+
+    def _extract_tracks_from_pages(self, doc: Dict) -> Tuple[List[str], List[str]]:
+        tracks: List[str] = []
+        seen: set[str] = set()
+        data_paths: List[str] = []
+
+        def add_track(track_id: Optional[str]) -> None:
+            if not track_id:
+                return
+            tid = str(track_id)
+            if tid not in seen:
+                seen.add(tid)
+                tracks.append(tid)
+
+        def handle_item(entry: Dict) -> None:
+            if not isinstance(entry, dict):
+                return
+            raw_item = entry.get("item")
+            item = raw_item if isinstance(raw_item, dict) else entry
+            if not isinstance(item, dict):
+                return
+            item_type = entry.get("type") or item.get("type")
+            if item_type and item_type != "track":
+                return
+            track_id = item.get("id")
+            add_track(track_id)
+
+        def handle_paged_list(paged: Dict) -> None:
+            data_path = paged.get("dataApiPath")
+            if data_path:
+                data_paths.append(data_path)
+            items = paged.get("items")
+            if isinstance(items, list):
+                for entry in items:
+                    if isinstance(entry, dict):
+                        handle_item(entry)
+
+        def handle_module(module: Dict) -> None:
+            if module.get("type") != "ALBUM_ITEMS":
+                return
+            paged = module.get("pagedList")
+            if isinstance(paged, dict):
+                handle_paged_list(paged)
+            items = module.get("items")
+            if isinstance(items, list):
+                for entry in items:
+                    if isinstance(entry, dict):
+                        handle_item(entry)
+
+        if isinstance(doc, dict):
+            top_items = doc.get("items")
+            if isinstance(top_items, list):
+                for entry in top_items:
+                    if isinstance(entry, dict):
+                        handle_item(entry)
+
+            modules = doc.get("modules")
+            if isinstance(modules, list):
+                for module in modules:
+                    if isinstance(module, dict):
+                        handle_module(module)
+
+            rows = doc.get("rows")
+            if isinstance(rows, list):
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    mods = row.get("modules")
+                    if isinstance(mods, list):
+                        for module in mods:
+                            if isinstance(module, dict):
+                                handle_module(module)
+
+        return tracks, data_paths
+
     def _req(
         self,
         method: str,
@@ -519,7 +701,79 @@ class TidalClient:
             track_count=attr.get("numberOfItems"),
         )
 
-    def get_album_tracks(self, album_id: str) -> List[str]:
+    def _get_album_tracks_v1(self, album_id: str) -> List[str]:
+        tracks: List[str] = []
+        seen: set[str] = set()
+        offset = 0
+        limit = 100
+        total: Optional[int] = None
+
+        while True:
+            params = {"limit": str(limit), "offset": str(offset)}
+            resp = self._req_v1(f"/albums/{album_id}/tracks", params=params)
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+            items = data.get("items") if isinstance(data, dict) else None
+            if not isinstance(items, list):
+                break
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                track_id = item.get("id")
+                if track_id is None:
+                    continue
+                track_id = str(track_id)
+                if track_id not in seen:
+                    seen.add(track_id)
+                    tracks.append(track_id)
+            if total is None and isinstance(data, dict):
+                total = data.get("totalNumberOfItems")
+            if not items:
+                break
+            offset += len(items)
+            if total is not None and offset >= total:
+                break
+
+        return tracks
+
+    def _get_album_tracks_web(self, album_id: str) -> List[str]:
+        tracks: List[str] = []
+        seen: set[str] = set()
+
+        resp = self._req_web_v1(
+            "/pages/album",
+            params={
+                "albumId": str(album_id),
+                "locale": TIDAL_WEB_LOCALE,
+                "deviceType": TIDAL_WEB_DEVICE_TYPE,
+            },
+        )
+        if resp.status_code != 200:
+            return tracks
+
+        data = resp.json()
+        page_tracks, data_paths = self._extract_tracks_from_pages(data)
+        for tid in page_tracks:
+            if tid not in seen:
+                seen.add(tid)
+                tracks.append(tid)
+
+        for data_path in dict.fromkeys(data_paths):
+            path, params = self._parse_pages_path(data_path)
+            resp = self._req_web_v1(path, params=params)
+            if resp.status_code != 200:
+                continue
+            doc = resp.json()
+            more_tracks, _ = self._extract_tracks_from_pages(doc)
+            for tid in more_tracks:
+                if tid not in seen:
+                    seen.add(tid)
+                    tracks.append(tid)
+
+        return tracks
+
+    def get_album_tracks(self, album_id: str, expected: Optional[int] = None) -> List[str]:
         tracks: List[str] = []
         seen: set[str] = set()
         base_path = f"/albums/{album_id}/relationships/items"
@@ -557,7 +811,65 @@ class TidalClient:
                 if cursor:
                     next_link = f"{base_path}?page[cursor]={urllib.parse.quote(str(cursor))}"
 
+        if tracks and (expected is None or len(tracks) >= expected):
+            return tracks
+
+        v1_tracks = self._get_album_tracks_v1(album_id)
+        if len(v1_tracks) > len(tracks):
+            tracks = v1_tracks
+
+        if tracks and (expected is None or len(tracks) >= expected):
+            return tracks
+
+        web_tracks = self._get_album_tracks_web(album_id)
+        if len(web_tracks) > len(tracks):
+            return web_tracks
+
         return tracks
+
+    def get_current_user_id(self) -> Optional[str]:
+        resp = self._req("GET", "/users/me")
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        item = data.get("data") if isinstance(data, dict) else None
+        if isinstance(item, dict):
+            user_id = item.get("id")
+            if user_id:
+                return str(user_id)
+        return None
+
+    def get_user_collection_id(self) -> str:
+        user_id = self.get_current_user_id()
+        if not user_id:
+            raise RuntimeError("Failed to resolve current user id.")
+        resp = self._req("GET", f"/userCollections/{user_id}")
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"Failed to resolve user collection id: {resp.status_code} {resp.text}"
+            )
+        return user_id
+
+    def add_albums_to_collection(self, collection_id: str, album_ids: List[str]) -> None:
+        chunk_size = 50
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        unique_ids = list(dict.fromkeys(album_ids))
+
+        for i in range(0, len(unique_ids), chunk_size):
+            chunk = unique_ids[i : i + chunk_size]
+            body = {
+                "data": [
+                    {"type": "albums", "id": album_id, "meta": {"addedAt": now}}
+                    for album_id in chunk
+                ]
+            }
+            resp = self._req(
+                "POST", f"/userCollections/{collection_id}/relationships/albums", json_data=body
+            )
+            if resp.status_code not in {200, 201, 204}:
+                raise RuntimeError(
+                    f"Failed to add albums to collection: {resp.status_code} {resp.text}"
+                )
 
     def add_tracks_to_playlist(self, playlist_id: str, track_ids: List[str]) -> None:
         chunk_size = 20
@@ -1466,6 +1778,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--playlist-description", help="Override playlist description")
     parser.add_argument("--unlisted", action="store_true", help="Create playlist as private")
     parser.add_argument(
+        "--output-mode",
+        choices=["playlist", "favorite"],
+        default="favorite",
+        help="Output target: playlist or favorite (default: favorite)",
+    )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Apply changes (default is dry-run)",
+    )
+    parser.add_argument(
         "--auto-threshold",
         type=float,
         default=0.7,
@@ -1716,42 +2039,68 @@ def main() -> int:
 
     selected_entries, unmatched = collect_selected_album_ids(records)
     if not selected_entries:
-        print("No matched albums to create a playlist.")
+        print("No matched albums to act on.")
+        print(f"Done. Output written to {output_path}")
+        return 0
+
+    output_mode = args.output_mode
+    apply_changes = args.apply
+
+    if output_mode == "favorite":
+        if unmatched > 0:
+            print(f"Warning: {unmatched} entries have no match.")
+
+        album_ids = [entry["id"] for entry in selected_entries]
+        unique_album_ids = list(dict.fromkeys(album_ids))
+
+        if not apply_changes:
+            print(f"Dry run: would favorite {len(unique_album_ids)} albums.")
+            print("Use --apply to perform changes.")
+            print(f"Done. Output written to {output_path}")
+            return 0
+
+        collection_id = client.get_user_collection_id()
+        print(f"Favoriting {len(unique_album_ids)} albums in collection {collection_id}...")
+        client.add_albums_to_collection(collection_id, unique_album_ids)
+        print(f"Albums favorited: {len(unique_album_ids)}")
         print(f"Done. Output written to {output_path}")
         return 0
 
     if unmatched > 0:
         print(f"Warning: {unmatched} entries have no match.")
-        if not prompt_yes_no("Proceed with playlist creation?"):
+        if apply_changes and not prompt_yes_no("Proceed with playlist creation?"):
             print(f"Done. Output written to {output_path}")
             return 0
     else:
-        if not prompt_yes_no("All entries matched. Create playlist now?"):
+        if apply_changes and not prompt_yes_no("All entries matched. Create playlist now?"):
             print(f"Done. Output written to {output_path}")
             return 0
 
     base_name = args.playlist_name or default_playlist_name(output_path)
-    playlist_id, had_existing = select_existing_playlist(client, base_name)
     playlist_name = base_name
-    if not playlist_id:
-        if had_existing:
-            default_new = f"{base_name} ({datetime.now().date()})"
-            raw_name = input(f"New playlist name (blank for '{default_new}'): ").strip()
-            playlist_name = raw_name or default_new
-        if not prompt_yes_no(f"Create playlist '{playlist_name}'?", default=True):
-            print("Playlist creation cancelled.")
-            print(f"Done. Output written to {output_path}")
-            return 0
+    playlist_id: Optional[str] = None
 
-        description = args.playlist_description or (
-            f"Imported from {output_path.name} on {datetime.now().date()}."
-        )
-        playlist_id = client.create_playlist(
-            playlist_name, description, is_public=not args.unlisted
-        )
-        print(f"Playlist created: {playlist_id}")
-    else:
-        print(f"Using existing playlist: {playlist_id}")
+    if apply_changes:
+        playlist_id, had_existing = select_existing_playlist(client, base_name)
+        if not playlist_id:
+            if had_existing:
+                default_new = f"{base_name} ({datetime.now().date()})"
+                raw_name = input(f"New playlist name (blank for '{default_new}'): ").strip()
+                playlist_name = raw_name or default_new
+            if not prompt_yes_no(f"Create playlist '{playlist_name}'?", default=True):
+                print("Playlist creation cancelled.")
+                print(f"Done. Output written to {output_path}")
+                return 0
+
+            description = args.playlist_description or (
+                f"Imported from {output_path.name} on {datetime.now().date()}."
+            )
+            playlist_id = client.create_playlist(
+                playlist_name, description, is_public=not args.unlisted
+            )
+            print(f"Playlist created: {playlist_id}")
+        else:
+            print(f"Using existing playlist: {playlist_id}")
 
     all_tracks: List[str] = []
     seen_tracks: set[str] = set()
@@ -1762,7 +2111,7 @@ def main() -> int:
         detail = client.get_album_details(album_id)
         title = detail.title if detail and detail.title else entry.get("title", "")
         expected = detail.track_count if detail else None
-        tracks = client.get_album_tracks(album_id)
+        tracks = client.get_album_tracks(album_id, expected=expected)
         if expected and len(tracks) < expected:
             shortfalls.append(f"{title or album_id}: {len(tracks)}/{expected} tracks returned")
         for track_id in tracks:
@@ -1775,7 +2124,7 @@ def main() -> int:
         print("Warning: some albums returned fewer tracks than expected:")
         for entry in shortfalls:
             print(f"  - {entry}")
-        if not prompt_yes_no("Proceed with playlist creation anyway?"):
+        if apply_changes and not prompt_yes_no("Proceed with playlist creation anyway?"):
             print("Playlist creation cancelled.")
             print(f"Done. Output written to {output_path}")
             return 0
@@ -1784,6 +2133,15 @@ def main() -> int:
         print("No tracks found to add.")
         print(f"Done. Output written to {output_path}")
         return 0
+
+    if not apply_changes:
+        print(f"Dry run: would create playlist '{playlist_name}' and add {len(all_tracks)} tracks.")
+        print("Use --apply to perform changes.")
+        print(f"Done. Output written to {output_path}")
+        return 0
+
+    if not playlist_id:
+        raise RuntimeError("Playlist id is missing for apply mode.")
 
     print(f"Adding {len(all_tracks)} tracks from {len(selected_entries)} albums...")
     client.add_tracks_to_playlist(playlist_id, all_tracks)
