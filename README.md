@@ -4,7 +4,7 @@ Standalone utility scripts for PDF conversion, audio transcription, and TIDAL im
 
 ## Overview
 
-- PDF to Markdown conversion (Mathpix API or local marker).
+- PDF to Markdown conversion (Mathpix API, Docling, or local marker).
 - Audio transcription (OpenAI API) and local diarization (whisper-cpp + pyannote).
 - TIDAL playlist import from Gramophone-style MHTML/Markdown pages.
 
@@ -15,7 +15,7 @@ For deeper context, refer to the script headers and inline help.
 Python dependencies:
 
 ```bash
-pip install mpxpy marker-pdf requests torch pyannote.audio beautifulsoup4 lxml numpy pandas
+pip install mpxpy marker-pdf docling requests torch pyannote.audio beautifulsoup4 lxml numpy pandas
 ```
 
 System tools (macOS via Homebrew):
@@ -43,6 +43,13 @@ Mathpix (best for math-heavy PDFs):
 ```bash
 pipx run ./pdf_convert_mathpix_sdk.py input.pdf -o output.md
 pipx run ./pdf_convert_mathpix_api.py input.pdf -o output.md
+```
+
+Docling (local, structured parsing):
+
+```bash
+pipx run ./pdf_convert_docling.py input.pdf -o output.md
+pipx run ./pdf_convert_docling.py input.pdf --page-range 1-5
 ```
 
 Marker (best for simpler PDFs, local):
