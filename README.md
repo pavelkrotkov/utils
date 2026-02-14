@@ -54,6 +54,8 @@ pipx run ./pdf_convert_docling.py input.pdf -o output.md
 pipx run ./pdf_convert_docling.py input.pdf --page-range 1-5
 ```
 
+Note: If you omit `--page-range`, the script uses Docling defaults. Provide a contiguous range like `1-5` when you want a subset of pages.
+
 LlamaParse (LlamaCloud, hosted):
 
 ```bash
