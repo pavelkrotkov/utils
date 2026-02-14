@@ -15,7 +15,7 @@ For deeper context, refer to the script headers and inline help.
 Python dependencies:
 
 ```bash
-pip install mpxpy marker-pdf pymupdf4llm llama-cloud pypdf requests torch pyannote.audio beautifulsoup4 lxml numpy pandas
+pip install mpxpy marker-pdf pymupdf4llm[layout] llama-cloud pypdf requests torch pyannote.audio beautifulsoup4 lxml numpy pandas
 ```
 
 System tools (macOS via Homebrew):
