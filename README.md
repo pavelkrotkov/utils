@@ -4,7 +4,7 @@ Standalone utility scripts for PDF conversion, audio transcription, and TIDAL im
 
 ## Overview
 
-- PDF to Markdown conversion (Mathpix API, Docling, or local marker).
+- PDF to Markdown conversion (Mathpix API, Docling, LlamaParse, PyMuPDF4LLM, or local marker).
 - Audio transcription (OpenAI API) and local diarization (whisper-cpp + pyannote).
 - TIDAL playlist import from Gramophone-style MHTML/Markdown pages.
 
@@ -16,6 +16,7 @@ Python dependencies:
 
 ```bash
 pip install mpxpy marker-pdf docling requests torch pyannote.audio beautifulsoup4 lxml numpy pandas
+pip install mpxpy marker-pdf pymupdf4llm[layout] llama-cloud pypdf requests torch pyannote.audio beautifulsoup4 lxml numpy pandas
 ```
 
 System tools (macOS via Homebrew):
@@ -27,6 +28,7 @@ brew install ffmpeg whisper-cpp jq
 Environment variables:
 
 - `MATHPIX_APP_ID`, `MATHPIX_APP_KEY` for Mathpix tools.
+- `LLAMA_CLOUD_API_KEY` for LlamaParse (LlamaCloud).
 - `OPENAI_API_KEY` for OpenAI transcription.
 - `TIDAL_CLIENT_ID` for TIDAL import (Required).
 - `TIDAL_CLIENT_SECRET` for TIDAL import (Optional for some app types).
@@ -51,6 +53,27 @@ Docling (local, structured parsing):
 pipx run ./pdf_convert_docling.py input.pdf -o output.md
 pipx run ./pdf_convert_docling.py input.pdf --page-range 1-5
 ```
+
+LlamaParse (LlamaCloud, hosted):
+
+```bash
+pipx run ./pdf_convert_llamaparse.py input.pdf -o output.md
+pipx run ./pdf_convert_llamaparse.py input.pdf --page-range 1-5
+pipx run ./pdf_convert_llamaparse.py --fetch-job job_id -o output-3.md
+```
+
+Create an API key at https://cloud.llamaindex.ai via API Key -> Generate New Key, then set `LLAMA_CLOUD_API_KEY`.
+
+The script always chunks PDFs, saves `output-<i>.md` partials, and skips existing chunks on rerun to resume.
+
+PyMuPDF4LLM (local, fast layout-aware parsing):
+
+```bash
+pipx run ./pdf_convert_pymupdf4llm.py input.pdf -o output.md
+pipx run ./pdf_convert_pymupdf4llm.py input.pdf --page-range 0-4
+```
+
+Layout mode requires `pymupdf4llm[layout]` (or `pymupdf4llm[ocr,layout]` for OCR support).
 
 Marker (best for simpler PDFs, local):
 
