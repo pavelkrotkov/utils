@@ -125,7 +125,10 @@ def main() -> None:
 
     converter = DocumentConverter()
     try:
-        result = converter.convert(str(args.pdf_path), page_range=page_range)
+        if page_range is None:
+            result = converter.convert(str(args.pdf_path))
+        else:
+            result = converter.convert(str(args.pdf_path), page_range=page_range)
     except Exception as exc:
         print(f"ERROR: Docling conversion failed: {exc}", file=sys.stderr)
         sys.exit(1)
