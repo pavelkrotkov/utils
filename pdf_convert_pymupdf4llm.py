@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # /// script
-# dependencies = ["pymupdf4llm"]
+# dependencies = ["pymupdf4llm[layout]"]
 # ///
 """
 Convert a local PDF to Markdown using pymupdf4llm (PyMuPDF).
