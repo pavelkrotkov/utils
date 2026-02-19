@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# dependencies = [
+#   "torch",
+#   "pyannote.audio",
+# ]
+# ///
 """
 audio_transcribe_whisper.py - Robust speech pipeline combining whisper-cpp ASR and pyannote diarization
 
