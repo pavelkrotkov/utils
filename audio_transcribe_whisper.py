@@ -31,6 +31,7 @@ import argparse
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -489,6 +490,29 @@ def run_ffmpeg_convert(input_path: Path, output_path: Path, ffmpeg_bin: str, ver
         sys.exit(1)
 
 
+def resolve_whisper_bin(whisper_bin: str, verbose: bool = False) -> str:
+    """
+    Resolve whisper executable name/path.
+
+    If user keeps default `whisper-cpp` and that binary is unavailable, auto-fallback
+    to `whisper-cli` (used by current Homebrew whisper-cpp formula).
+    """
+    if shutil.which(whisper_bin):
+        return whisper_bin
+
+    if whisper_bin == "whisper-cpp":
+        fallback_bin = "whisper-cli"
+        if shutil.which(fallback_bin):
+            if verbose:
+                print(
+                    "INFO: 'whisper-cpp' not found; using 'whisper-cli' from PATH.",
+                    file=sys.stderr,
+                )
+            return fallback_bin
+
+    return whisper_bin
+
+
 def run_whisper(
     audio_path: Path,
     json_path: Path,
@@ -582,6 +606,7 @@ def main() -> None:
     maybe_set_metal_env()
     hf_token = args.hf_token or os.environ.get("HF_TOKEN")
     speaker_names = [s.strip() for s in args.speakers.split(",")] if args.speakers else None
+    args.whisper_bin = resolve_whisper_bin(args.whisper_bin, args.verbose)
 
     if not args.input.exists():
         print(f"ERROR: Input file not found: {args.input}", file=sys.stderr)
@@ -675,8 +700,6 @@ def main() -> None:
 
     finally:
         if not args.keep_temp:
-            import shutil
-
             shutil.rmtree(temp_dir, ignore_errors=True)
         elif args.verbose:
             print(f"INFO: Temporary files kept in: {temp_dir}", file=sys.stderr)
