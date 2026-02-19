@@ -336,8 +336,32 @@ def run_diarization(
     if verbose:
         print(f"INFO: Running diarization on {audio_path} with params {kwargs}", file=sys.stderr)
 
-    diarization = pipeline(str(audio_path), **kwargs)
-    return diarization
+    diarization_output = pipeline(str(audio_path), **kwargs)
+
+    # pyannote versions may return either Annotation directly or a DiarizeOutput
+    # wrapper containing `.speaker_diarization`.
+    if isinstance(diarization_output, Annotation):
+        return diarization_output
+
+    if hasattr(diarization_output, "speaker_diarization"):
+        speaker_diarization = getattr(diarization_output, "speaker_diarization")
+        if isinstance(speaker_diarization, Annotation):
+            if verbose:
+                print(
+                    "INFO: Received DiarizeOutput; using .speaker_diarization field.",
+                    file=sys.stderr,
+                )
+            return speaker_diarization
+
+    print(
+        f"ERROR: Unsupported diarization output type: {type(diarization_output).__name__}",
+        file=sys.stderr,
+    )
+    print(
+        "Expected pyannote.core.Annotation or object with .speaker_diarization.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 # ───────────────────────────────────────────────────────────────────────────────
