@@ -124,7 +124,14 @@ if [ "$SIZE_BYTES" -gt "$MAX_BYTES" ]; then
   TMP_FILE=$(mktemp /tmp/transcribe-XXXXXX.m4a)
   ffmpeg -y -i "$INPUT" -ac 1 -ar 16000 -b:a 32k "$TMP_FILE" >/dev/null 2>&1
 
+  if [ ! -s "$TMP_FILE" ]; then
+    echo "Error: ffmpeg produced an empty downsampled file." >&2
+    exit 1
+  fi
+
   NEW_SIZE=$(stat -f%z "$TMP_FILE")
+  REDUCTION_PCT=$((100 - (NEW_SIZE * 100 / SIZE_BYTES)))
+  echo "Downsampled size: ${SIZE_BYTES} -> ${NEW_SIZE} bytes (${REDUCTION_PCT}% smaller)."
   if [ "$NEW_SIZE" -gt "$MAX_BYTES" ]; then
     echo "Downsampled file is still larger than ${MAX_MB}MB. Consider splitting the audio." >&2
     rm -f "$TMP_FILE"
