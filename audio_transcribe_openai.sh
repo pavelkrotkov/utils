@@ -3,6 +3,19 @@ set -euo pipefail
 
 MAX_MB=25
 MAX_BYTES=$((MAX_MB * 1024 * 1024))
+TMP_FILE=""
+RESPONSE_FILE=""
+
+cleanup() {
+  if [ -n "${TMP_FILE:-}" ]; then
+    rm -f "$TMP_FILE"
+  fi
+  if [ -n "${RESPONSE_FILE:-}" ]; then
+    rm -f "$RESPONSE_FILE"
+  fi
+}
+
+trap cleanup EXIT
 
 # Models supported by /v1/audio/transcriptions
 SUPPORTED_MODELS=(
@@ -96,11 +109,15 @@ if [ ! -f "$INPUT" ]; then
   exit 1
 fi
 
+if [ -z "${OPENAI_API_KEY:-}" ]; then
+  echo "Error: OPENAI_API_KEY is not set." >&2
+  exit 1
+fi
+
 # Get file size (macOS)
 SIZE_BYTES=$(stat -f%z "$INPUT")
 
 FILE_TO_SEND="$INPUT"
-TMP_FILE=""
 
 if [ "$SIZE_BYTES" -gt "$MAX_BYTES" ]; then
   echo "Input file is larger than ${MAX_MB}MB, downsampling with ffmpeg..."
@@ -119,23 +136,54 @@ fi
 
 echo "Transcribing with OpenAI model: ${MODEL}..."
 
-RESPONSE=$(curl -sS \
+RESPONSE_FILE=$(mktemp /tmp/transcribe-response-XXXXXX.json)
+HTTP_STATUS=$(curl -sS -o "$RESPONSE_FILE" -w '%{http_code}' \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -F "file=@${FILE_TO_SEND}" \
   -F "model=${MODEL}" \
   https://api.openai.com/v1/audio/transcriptions)
 
-# Clean up temp file if used
-if [ -n "${TMP_FILE:-}" ]; then
-  rm -f "$TMP_FILE"
+if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+  echo "Error: OpenAI API request failed (HTTP ${HTTP_STATUS})." >&2
+  if command -v jq >/dev/null 2>&1 && jq -e . >/dev/null 2>&1 < "$RESPONSE_FILE"; then
+    ERROR_MESSAGE=$(jq -r '.error.message // empty' "$RESPONSE_FILE")
+    ERROR_TYPE=$(jq -r '.error.type // empty' "$RESPONSE_FILE")
+    if [ -n "$ERROR_MESSAGE" ]; then
+      if [ -n "$ERROR_TYPE" ]; then
+        echo "API error (${ERROR_TYPE}): ${ERROR_MESSAGE}" >&2
+      else
+        echo "API error: ${ERROR_MESSAGE}" >&2
+      fi
+    else
+      echo "Response body:" >&2
+      cat "$RESPONSE_FILE" >&2
+    fi
+  else
+    echo "Response body:" >&2
+    cat "$RESPONSE_FILE" >&2
+  fi
+  exit 1
 fi
 
-# If jq is available, extract just the text field
 if command -v jq >/dev/null 2>&1; then
-  echo "$RESPONSE" | jq -r '.text' > "$OUTPUT"
+  if ! jq -e . >/dev/null 2>&1 < "$RESPONSE_FILE"; then
+    echo "Error: API returned non-JSON response." >&2
+    cat "$RESPONSE_FILE" >&2
+    exit 1
+  fi
+
+  TRANSCRIPT=$(jq -r '.text // empty' "$RESPONSE_FILE")
+  if [ -z "$TRANSCRIPT" ]; then
+    echo "Error: API response did not contain a non-empty '.text' field." >&2
+    echo "Response body:" >&2
+    cat "$RESPONSE_FILE" >&2
+    exit 1
+  fi
+
+  printf '%s\n' "$TRANSCRIPT" > "$OUTPUT"
 else
   # Fallback: save raw JSON
-  echo "$RESPONSE" > "$OUTPUT"
+  cat "$RESPONSE_FILE" > "$OUTPUT"
 fi
 
 echo "Saved transcript to: $OUTPUT"
