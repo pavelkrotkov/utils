@@ -28,6 +28,7 @@ Usage Examples:
 """
 
 import argparse
+import inspect
 import json
 import os
 import platform
@@ -236,6 +237,23 @@ def load_whisper_segments(
 # ───────────────────────────────────────────────────────────────────────────────
 
 
+def print_pyannote_access_help() -> None:
+    """Print actionable help for common Hugging Face access issues."""
+    print("To fix pyannote model access:", file=sys.stderr)
+    print("1) Log in to Hugging Face with the account tied to your HF_TOKEN.", file=sys.stderr)
+    print("2) Open and accept model terms:", file=sys.stderr)
+    print("   - https://huggingface.co/pyannote/speaker-diarization-3.1", file=sys.stderr)
+    print(
+        "   - https://huggingface.co/pyannote/speaker-diarization-community-1",
+        file=sys.stderr,
+    )
+    print("3) Ensure HF_TOKEN has read permission.", file=sys.stderr)
+    print(
+        "Note: pyannoteAI is a hosted service; this script uses local pyannote.audio models from Hugging Face.",
+        file=sys.stderr,
+    )
+
+
 def load_pyannote(model_name: str, hf_token: Optional[str], verbose: bool = False) -> Pipeline:
     """
     Load pyannote pipeline with fallback from 3.1 to community-1 if needed.
@@ -244,8 +262,31 @@ def load_pyannote(model_name: str, hf_token: Optional[str], verbose: bool = Fals
     if verbose:
         print(f"INFO: Loading pyannote model: {model_name}", file=sys.stderr)
 
+    def from_pretrained_with_compatible_token(name: str) -> Pipeline:
+        """
+        Support both legacy and newer pyannote/huggingface-hub auth argument names.
+        """
+        if not hf_token:
+            return Pipeline.from_pretrained(name)
+
+        try:
+            params = inspect.signature(Pipeline.from_pretrained).parameters
+        except (TypeError, ValueError):
+            params = {}
+
+        if "token" in params:
+            return Pipeline.from_pretrained(name, token=hf_token)
+        if "use_auth_token" in params:
+            return Pipeline.from_pretrained(name, use_auth_token=hf_token)
+
+        # Last-resort runtime probing for unusual versions/signatures.
+        try:
+            return Pipeline.from_pretrained(name, token=hf_token)
+        except TypeError:
+            return Pipeline.from_pretrained(name, use_auth_token=hf_token)
+
     try:
-        pipeline = Pipeline.from_pretrained(model_name, use_auth_token=hf_token)
+        pipeline = from_pretrained_with_compatible_token(model_name)
         if verbose:
             print(f"INFO: Successfully loaded {model_name}", file=sys.stderr)
         return pipeline
@@ -259,7 +300,7 @@ def load_pyannote(model_name: str, hf_token: Optional[str], verbose: bool = Fals
             if verbose:
                 print(f"INFO: Retrying with fallback model: {fallback}", file=sys.stderr)
             try:
-                pipeline = Pipeline.from_pretrained(fallback, use_auth_token=hf_token)
+                pipeline = from_pretrained_with_compatible_token(fallback)
                 if verbose:
                     print(f"INFO: Successfully loaded {fallback}", file=sys.stderr)
                 return pipeline
@@ -267,17 +308,11 @@ def load_pyannote(model_name: str, hf_token: Optional[str], verbose: bool = Fals
                 print(
                     f"ERROR: Failed to load both {model_name} and {fallback}: {e2}", file=sys.stderr
                 )
-                print(
-                    "Ensure you have accepted model terms on HuggingFace and provided valid HF_TOKEN.",
-                    file=sys.stderr,
-                )
+                print_pyannote_access_help()
                 sys.exit(1)
 
         print(f"ERROR: Failed to load pyannote model {model_name}: {e}", file=sys.stderr)
-        print(
-            "Ensure you have accepted model terms on HuggingFace and provided valid HF_TOKEN.",
-            file=sys.stderr,
-        )
+        print_pyannote_access_help()
         sys.exit(1)
 
 
@@ -301,8 +336,32 @@ def run_diarization(
     if verbose:
         print(f"INFO: Running diarization on {audio_path} with params {kwargs}", file=sys.stderr)
 
-    diarization = pipeline(str(audio_path), **kwargs)
-    return diarization
+    diarization_output = pipeline(str(audio_path), **kwargs)
+
+    # pyannote versions may return either Annotation directly or a DiarizeOutput
+    # wrapper containing `.speaker_diarization`.
+    if isinstance(diarization_output, Annotation):
+        return diarization_output
+
+    if hasattr(diarization_output, "speaker_diarization"):
+        speaker_diarization = getattr(diarization_output, "speaker_diarization")
+        if isinstance(speaker_diarization, Annotation):
+            if verbose:
+                print(
+                    "INFO: Received DiarizeOutput; using .speaker_diarization field.",
+                    file=sys.stderr,
+                )
+            return speaker_diarization
+
+    print(
+        f"ERROR: Unsupported diarization output type: {type(diarization_output).__name__}",
+        file=sys.stderr,
+    )
+    print(
+        "Expected pyannote.core.Annotation or object with .speaker_diarization.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 # ───────────────────────────────────────────────────────────────────────────────
