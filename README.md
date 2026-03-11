@@ -1,10 +1,12 @@
 # Utils
 
-Standalone utility scripts for PDF conversion, audio transcription, and TIDAL import.
+Standalone utility scripts for PDF conversion, Markdown splitting, audio transcription,
+and TIDAL import.
 
 ## Overview
 
 - PDF to Markdown conversion (Mathpix API, Docling, LlamaParse, PyMuPDF4LLM, or local marker).
+- Markdown splitting into per-section or per-subsection files.
 - Audio transcription (OpenAI API) and local diarization (whisper-cpp + pyannote).
 - TIDAL playlist import from Gramophone-style MHTML/Markdown pages.
 
@@ -82,6 +84,23 @@ Marker (best for simpler PDFs, local):
 ```bash
 pipx run ./pdf_convert_marker.py input.pdf -o output.md
 ```
+
+## Markdown Tools
+
+Split a Markdown file into smaller Markdown files in the same folder at each `##` or
+`###` heading.
+
+```bash
+./markdown_split.sh notes.md '##'
+./markdown_split.sh notes.md '###'
+```
+
+Behavior:
+
+- Uses the full heading text as the output filename.
+- Appends ` 2`, ` 3`, etc. only when duplicate heading names collide.
+- Writes content before the first matching heading to `<input> Preamble.md`.
+- Ignores matching headings inside fenced code blocks.
 
 ## Audio & Music Tools
 
