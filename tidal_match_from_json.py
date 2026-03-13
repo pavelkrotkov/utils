@@ -14,7 +14,6 @@ import random
 import re
 import sys
 import time
-import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -32,196 +31,32 @@ from tidal_pipeline.client import (
     get_valid_token,
     resolve_country_code,
 )
-
-DEFAULT_WEIGHTS = {
-    "title": 0.35,
-    "composer": 0.1,
-    "performer": 0.25,
-    "ensemble": 0.15,
-    "conductor": 0.1,
-    "instrument": 0.05,
-    "label": 0.1,
-    "year": 0.05,
-}
-
-DEFAULT_TEMPLATE_WEIGHTS = {
-    "title": 1.0,
-    "title_short": 1.0,
-    "title_sorted": 0.7,
-    "title_reversed": 0.7,
-    "title_ngrams": 0.8,
-    "title_shuffle": 0.6,
-    "work": 0.9,
-    "work_ngrams": 0.8,
-    "composer": 1.4,
-    "composer_title": 1.2,
-    "composer_work": 1.2,
-    "performer": 1.7,
-    "performer_title": 2.3,
-    "performer_instrument": 0.9,
-    "performer_ensemble": 2.2,
-    "performer_composer": 2.1,
-    "performer_work": 2.0,
-    "ensemble": 1.8,
-    "ensemble_title": 1.5,
-    "conductor": 1.1,
-    "conductor_title": 1.4,
-    "conductor_composer": 1.0,
-    "instrument_title": 1.1,
-    "label_title": 0.8,
-}
-
-PERFORMER_WEIGHT_BOOST = 1.5
-
-STOPWORDS = {
-    "the",
-    "and",
-    "for",
-    "with",
-    "from",
-    "vol",
-    "volume",
-    "edition",
-    "series",
-    "part",
-    "no",
-    "op",
-    "major",
-    "minor",
-}
-
-ENSEMBLE_HINTS = {
-    "orchestra",
-    "philharmonic",
-    "symphony",
-    "ensemble",
-    "quartet",
-    "trio",
-    "quintet",
-    "choir",
-    "chorus",
-    "consort",
-    "players",
-    "sinfonia",
-    "academy",
-    "capella",
-    "coro",
-    "chamber",
-    "opera",
-    "filharmonica",
-    "radio",
-    "baroque",
-    "knot",
-    "jupiter",
-    "inalto",
-    "psophos",
-}
-
-SKIP_ARTIST_SEGMENTS = {"sols", "sols.", "soloists", "soloist", "with"}
-GENERIC_ARTIST_TOKENS = {
-    "orchestra",
-    "philharmonic",
-    "symphony",
-    "ensemble",
-    "quartet",
-    "quartett",
-    "trio",
-    "quintet",
-    "choir",
-    "chorus",
-    "consort",
-    "players",
-    "sinfonia",
-    "academy",
-    "capella",
-    "coro",
-    "chamber",
-    "opera",
-    "baroque",
-}
-GENERIC_TITLE_TOKENS = {
-    "chamber",
-    "works",
-    "work",
-    "symphonies",
-    "symphony",
-    "sonatas",
-    "sonata",
-    "concertos",
-    "concerto",
-    "quartets",
-    "quartet",
-    "lieder",
-    "orchestral",
-    "solo",
-    "piano",
-    "violin",
-    "string",
-}
-GENERIC_LINE_PREFIXES = {
-    "sols",
-    "sols incl",
-    "incl",
-    "label",
-    "with",
-}
-
-INSTRUMENT_MAP = {
-    "pf": "piano",
-    "fp": "fortepiano",
-    "pno": "piano",
-    "piano": "piano",
-    "fortepiano": "fortepiano",
-    "vn": "violin",
-    "violin": "violin",
-    "va": "viola",
-    "viola": "viola",
-    "vc": "cello",
-    "cello": "cello",
-    "db": "double bass",
-    "double": "double",
-    "bass": "bass",
-    "fl": "flute",
-    "flute": "flute",
-    "ob": "oboe",
-    "oboe": "oboe",
-    "cl": "clarinet",
-    "clarinet": "clarinet",
-    "bn": "bassoon",
-    "bassoon": "bassoon",
-    "hn": "horn",
-    "horn": "horn",
-    "tpt": "trumpet",
-    "trumpet": "trumpet",
-    "trb": "trombone",
-    "trombone": "trombone",
-    "hp": "harp",
-    "harp": "harp",
-    "org": "organ",
-    "organ": "organ",
-    "hpd": "harpsichord",
-    "harpsichord": "harpsichord",
-    "mandolin": "mandolin",
-    "lute": "lute",
-    "cornett": "cornett",
-    "gtr": "guitar",
-    "guitar": "guitar",
-    "perc": "percussion",
-    "percussion": "percussion",
-    "sop": "soprano",
-    "soprano": "soprano",
-    "mez": "mezzo",
-    "mezzo-soprano": "mezzo",
-    "mezzo": "mezzo",
-    "counterten": "countertenor",
-    "countertenor": "countertenor",
-    "ten": "tenor",
-    "tenor": "tenor",
-    "bar": "baritone",
-    "baritone": "baritone",
-    "cond": "conductor",
-    "conductor": "conductor",
-}
+from tidal_pipeline.models import (
+    DEFAULT_TEMPLATE_WEIGHTS,
+    DEFAULT_WEIGHTS,
+    GENERIC_TITLE_TOKENS,
+    INSTRUMENT_MAP,
+    PERFORMER_WEIGHT_BOOST,
+    SKIP_ARTIST_SEGMENTS,
+)
+from tidal_pipeline.normalize import (
+    artist_tokens_from_list,
+    clean_markdown_inline,
+    extract_numeric_tokens,
+    extract_year,
+    is_markdown_separator,
+    looks_like_ensemble,
+    merge_unique,
+    normalize,
+    normalize_instruments,
+    normalize_with_symbols,
+    overlap_score,
+    phrase_overlap_score,
+    split_tokens,
+    strip_generic_prefixes,
+    tokenize,
+    tokens_from_list,
+)
 
 
 @dataclass
@@ -258,161 +93,6 @@ class Candidate:
 class QueryCandidate:
     template: str
     query: str
-
-
-def normalize(text: str) -> str:
-    if not text:
-        return ""
-    text = (
-        text.replace(".", " ")
-        .replace("’", " ")
-        .replace("‘", " ")
-        .replace("“", " ")
-        .replace("”", " ")
-        .replace("'", " ")
-        .replace('"', " ")
-        .replace(":", " ")
-        .replace(";", " ")
-        .replace(",", " ")
-        .replace("+", " ")
-        .replace("(", " ")
-        .replace(")", " ")
-    )
-    text = unicodedata.normalize("NFKD", text).encode("ASCII", "ignore").decode("ASCII")
-    text = text.lower()
-    text = re.sub(r"[/\-&—–]", " ", text)
-    text = re.sub(r"[^a-z0-9\s]", "", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
-
-
-def normalize_with_symbols(text: str) -> str:
-    if not text:
-        return ""
-    text = (
-        text.replace("’", "'")
-        .replace("‘", "'")
-        .replace("“", '"')
-        .replace("”", '"')
-    )
-    text = unicodedata.normalize("NFKD", text).encode("ASCII", "ignore").decode("ASCII")
-    text = text.lower()
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
-
-
-def tokenize(text: str) -> set[str]:
-    norm = normalize(text)
-    return {t for t in norm.split() if len(t) > 2 and t not in STOPWORDS}
-
-
-def split_tokens(text: str) -> List[str]:
-    norm = normalize(text)
-    tokens = [t for t in norm.split() if len(t) > 1 and t not in STOPWORDS]
-    return tokens
-
-
-def tokens_from_list(values: Iterable[str]) -> set[str]:
-    tokens: set[str] = set()
-    for value in values:
-        tokens.update(tokenize(value))
-    return tokens
-
-
-def artist_tokens_from_list(values: Iterable[str]) -> set[str]:
-    tokens: set[str] = set()
-    for value in values:
-        for token in tokenize(value):
-            if token not in GENERIC_ARTIST_TOKENS:
-                tokens.add(token)
-    return tokens
-
-
-def normalize_instruments(values: Iterable[str]) -> set[str]:
-    tokens: set[str] = set()
-    for value in values:
-        for raw in normalize(value).split():
-            if raw in GENERIC_LINE_PREFIXES or raw in SKIP_ARTIST_SEGMENTS:
-                continue
-            tokens.add(INSTRUMENT_MAP.get(raw, raw))
-    return {t for t in tokens if t}
-
-
-def phrase_overlap_score(left_values: Iterable[str], right_values: Iterable[str]) -> float:
-    left_norms = [normalize(value) for value in left_values if normalize(value)]
-    right_norms = [normalize(value) for value in right_values if normalize(value)]
-    if not left_norms:
-        return 0.0
-    matched = 0
-    for left in left_norms:
-        if any(left == right or left in right or right in left for right in right_norms):
-            matched += 1
-    return matched / len(left_norms)
-
-
-def overlap_score(left: set[str], right: set[str]) -> float:
-    if not left:
-        return 0.0
-    return len(left & right) / len(left)
-
-
-def extract_year(text: str) -> Optional[str]:
-    match = re.search(r"\b(19\d{2}|20\d{2})\b", text or "")
-    return match.group(1) if match else None
-
-
-def extract_numeric_tokens(values: Iterable[str]) -> set[str]:
-    tokens: set[str] = set()
-    for value in values:
-        tokens.update(re.findall(r"\b\d+\b", normalize_with_symbols(value)))
-    return tokens
-
-
-def merge_unique(values: Iterable[str]) -> List[str]:
-    seen: set[str] = set()
-    merged: List[str] = []
-    for value in values:
-        cleaned = " ".join(str(value or "").split()).strip()
-        if not cleaned:
-            continue
-        key = normalize(cleaned)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        merged.append(cleaned)
-    return merged
-
-
-def looks_like_ensemble(text: str) -> bool:
-    lowered = normalize(text)
-    if not lowered:
-        return False
-    if any(hint in lowered for hint in ENSEMBLE_HINTS):
-        return True
-    tokens = lowered.split()
-    return any(token in {"rso", "lpo", "rlpo", "bbc"} for token in tokens)
-
-
-def clean_markdown_inline(text: str) -> str:
-    cleaned = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", text or "")
-    cleaned = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", cleaned)
-    cleaned = cleaned.replace("**", "").replace("__", "")
-    cleaned = cleaned.replace("*", "").replace("_", "")
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned
-
-
-def strip_generic_prefixes(text: str) -> str:
-    cleaned = clean_markdown_inline(text)
-    lowered = normalize(cleaned)
-    for prefix in sorted(GENERIC_LINE_PREFIXES, key=len, reverse=True):
-        prefix_norm = normalize(prefix)
-        if lowered.startswith(prefix_norm):
-            raw_words = cleaned.split()
-            prefix_words = prefix_norm.split()
-            cleaned = " ".join(raw_words[len(prefix_words) :]).strip(" -–—:;,.")
-            lowered = normalize(cleaned)
-    return cleaned
 
 
 def parse_heading_metadata(heading_line: str, fallback_title: str) -> Tuple[List[str], str, str]:
@@ -1347,10 +1027,6 @@ def build_record_id(album: AlbumInput) -> str:
             album.title or "",
         ]
     )
-
-
-def is_markdown_separator(line: str) -> bool:
-    return bool(re.fullmatch(r"\*\s+\*\s+\*", line.strip()))
 
 
 def resolve_source_path(source_file: str, input_path: Path) -> Optional[Path]:

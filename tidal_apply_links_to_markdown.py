@@ -8,13 +8,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
-
-SEPARATOR_RE = re.compile(r"^\*\s+\*\s+\*$")
+from tidal_pipeline.normalize import is_markdown_separator
 
 
 @dataclass
@@ -30,10 +28,6 @@ class LinkUpdate:
     @property
     def line(self) -> str:
         return f"[**Listen on TIDAL**]({self.url})"
-
-
-def is_separator(line: str) -> bool:
-    return bool(SEPARATOR_RE.fullmatch(line.strip()))
 
 
 def load_updates(truth_path: Path) -> List[LinkUpdate]:
@@ -67,7 +61,7 @@ def load_updates(truth_path: Path) -> List[LinkUpdate]:
 
 def find_block_end(lines: List[str], start_idx: int) -> int:
     for idx in range(start_idx, len(lines)):
-        if is_separator(lines[idx]):
+        if is_markdown_separator(lines[idx]):
             return idx
     return len(lines)
 
