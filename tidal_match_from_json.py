@@ -35,25 +35,18 @@ from tidal_pipeline.models import (
     DEFAULT_TEMPLATE_WEIGHTS,
     DEFAULT_WEIGHTS,
     GENERIC_TITLE_TOKENS,
-    INSTRUMENT_MAP,
     PERFORMER_WEIGHT_BOOST,
-    SKIP_ARTIST_SEGMENTS,
 )
 from tidal_pipeline.normalize import (
     artist_tokens_from_list,
-    clean_markdown_inline,
     extract_numeric_tokens,
     extract_year,
-    is_markdown_separator,
-    looks_like_ensemble,
-    merge_unique,
     normalize,
     normalize_instruments,
     normalize_with_symbols,
     overlap_score,
     phrase_overlap_score,
     split_tokens,
-    strip_generic_prefixes,
     tokenize,
     tokens_from_list,
 )
@@ -73,6 +66,8 @@ class AlbumInput:
     source_file: str = ""
     source_line: Optional[int] = None
     source_raw: str = ""
+    source_subsection: str = ""
+    source_context: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -93,335 +88,6 @@ class Candidate:
 class QueryCandidate:
     template: str
     query: str
-
-
-def parse_heading_metadata(heading_line: str, fallback_title: str) -> Tuple[List[str], str, str]:
-    cleaned_heading = clean_markdown_inline(re.sub(r"^#{1,6}\s*", "", heading_line or "")).strip()
-    bold_segments = [clean_markdown_inline(seg) for seg in re.findall(r"\*\*(.+?)\*\*", heading_line or "")]
-    composers: List[str] = []
-    for segment in bold_segments:
-        composers.extend(
-            part.strip()
-            for part in re.split(r"\s*[.;/]\s*", segment)
-            if part.strip()
-        )
-    composers = merge_unique(composers)
-
-    remainder = re.sub(r"\*\*.+?\*\*", " ", re.sub(r"^#{1,6}\s*", "", heading_line or ""))
-    remainder = clean_markdown_inline(remainder).strip(" -–—:;,.")
-    if not composers and cleaned_heading:
-        words = cleaned_heading.split()
-        composer_words: List[str] = []
-        for word in words:
-            stripped = re.sub(r"[^A-Za-z.]", "", word)
-            if not stripped:
-                break
-            if stripped.isupper():
-                composer_words.append(word)
-                continue
-            break
-        if composer_words:
-            composers = merge_unique([" ".join(composer_words)])
-            remainder = cleaned_heading[len(" ".join(composer_words)) :].strip(" -–—:;,.")
-    if not remainder:
-        remainder = fallback_title
-
-    return composers, remainder, cleaned_heading or fallback_title
-
-
-def extract_review_slug(subsection: str) -> str:
-    match = re.search(r"/review/([^)\s]+)", subsection or "", flags=re.IGNORECASE)
-    return match.group(1).strip() if match else ""
-
-
-def extract_italicized_phrases(text: str) -> List[str]:
-    phrases: List[str] = []
-    for match in re.findall(r"_([^_]+)_", text or ""):
-        cleaned = clean_markdown_inline(match).strip(" -–—:;,.")
-        if normalize(cleaned) in {"gramophone", "review"}:
-            continue
-        if cleaned and len(cleaned) > 2:
-            phrases.append(cleaned)
-    return merge_unique(phrases)
-
-
-def build_slug_phrases(slug: str, remove_terms: Iterable[str]) -> List[str]:
-    if not slug:
-        return []
-    tokens = [token for token in slug.replace("-", " ").split() if token]
-    remove = tokens_from_list(remove_terms)
-    pruned = [token for token in tokens if normalize(token) not in remove]
-    phrases = [" ".join(tokens).strip()]
-    if pruned and pruned != tokens:
-        phrases.append(" ".join(pruned).strip())
-    return merge_unique(phrases)
-
-
-def extract_detail_lines(subsection: str) -> List[str]:
-    return [line.strip() for line in (subsection or "").splitlines() if line.strip()]
-
-
-def split_artist_segments(text: str) -> List[str]:
-    if not text:
-        return []
-    segments = [text]
-    for splitter in (r"\s+with\s+", r"\s*/\s*", r"\s*;\s*", r"\s*,\s*"):
-        next_segments: List[str] = []
-        for segment in segments:
-            next_segments.extend([part.strip() for part in re.split(splitter, segment) if part.strip()])
-        segments = next_segments
-    return segments
-
-
-def strip_instrument_tokens(text: str, instruments: Iterable[str]) -> str:
-    lowered_instruments = {normalize(value) for value in instruments if value}
-    tokens = []
-    for tok in clean_markdown_inline(text).split():
-        norm = normalize(tok)
-        mapped = normalize(INSTRUMENT_MAP.get(norm, norm))
-        if norm in lowered_instruments or mapped in lowered_instruments:
-            continue
-        tokens.append(tok)
-    return " ".join(tokens).strip(" -–—:;,.")
-
-
-def prune_artist_values(
-    values: Iterable[str],
-    peer_values: Iterable[str],
-    instruments: Iterable[str],
-) -> List[str]:
-    peers = [normalize(value) for value in peer_values if value]
-    instrument_tokens = {normalize(value) for value in instruments if value}
-    kept: List[str] = []
-    for value in merge_unique(values):
-        norm = normalize(value)
-        if not norm:
-            continue
-        if any(token in instrument_tokens for token in norm.split()):
-            if any(peer and peer in norm and peer != norm for peer in peers):
-                continue
-        if any(peer and peer in norm and peer != norm for peer in peers):
-            continue
-        kept.append(value)
-    return merge_unique(kept)
-
-
-def prune_composer_values(values: Iterable[str], title: str, full_title: str) -> List[str]:
-    kept: List[str] = []
-    title_norm = normalize(title)
-    full_title_norm = normalize(full_title)
-    for value in merge_unique(values):
-        norm = normalize(value)
-        if not norm:
-            continue
-        if norm == title_norm:
-            continue
-        if full_title_norm and norm == full_title_norm:
-            continue
-        kept.append(value)
-    return merge_unique(kept)
-
-
-def parse_performer_metadata(
-    performer_line: str,
-    label_line: str,
-) -> Tuple[List[str], List[str], str, List[str], str]:
-    raw_line = performer_line or ""
-    raw_line = raw_line.strip()
-    label = ""
-    match = re.search(r"\(([^)]+)\)\s*$", raw_line or label_line or "")
-    if match:
-        label = match.group(1).strip()
-
-    instruments = normalize_instruments(re.findall(r"_([^_]+)_", raw_line))
-    cleaned_line = raw_line
-    if match and raw_line:
-        cleaned_line = raw_line[: match.start()].strip()
-
-    bold_segments = [strip_generic_prefixes(seg.strip()) for seg in re.findall(r"\*\*(.+?)\*\*", cleaned_line)]
-    bold_segments = [segment for segment in bold_segments if segment]
-
-    performers: List[str] = []
-    ensembles: List[str] = []
-    conductor_parts: List[str] = []
-
-    if len(bold_segments) > 1:
-        candidate_segments = bold_segments
-        for segment in candidate_segments:
-            cleaned_segment = strip_instrument_tokens(segment, instruments)
-            if not cleaned_segment:
-                continue
-            if "/" in cleaned_segment:
-                left_side, right_side = [part.strip() for part in cleaned_segment.split("/", 1)]
-                if left_side:
-                    for idx, part in enumerate(
-                        [item.strip() for item in re.split(r"\s*;\s*", left_side) if item.strip()]
-                    ):
-                        cleaned = strip_instrument_tokens(strip_generic_prefixes(part), instruments)
-                        if not cleaned or normalize(cleaned) in SKIP_ARTIST_SEGMENTS:
-                            continue
-                        if "&" in cleaned and idx == 0:
-                            performers.extend(piece.strip() for piece in cleaned.split("&") if piece.strip())
-                            continue
-                        ensembles.append(cleaned)
-                if right_side:
-                    for part in [item.strip() for item in re.split(r"\s*;\s*|\s*,\s*", right_side) if item.strip()]:
-                        cleaned = strip_instrument_tokens(strip_generic_prefixes(part), instruments)
-                        if cleaned and normalize(cleaned) not in SKIP_ARTIST_SEGMENTS:
-                            conductor_parts.append(cleaned)
-                continue
-
-            cleaned = strip_instrument_tokens(cleaned_segment, instruments)
-            if not cleaned or normalize(cleaned) in SKIP_ARTIST_SEGMENTS:
-                continue
-            if looks_like_ensemble(cleaned):
-                ensembles.append(cleaned)
-            else:
-                performers.append(cleaned)
-    else:
-        plain_line = strip_generic_prefixes(clean_markdown_inline(cleaned_line))
-        left_side = plain_line
-        right_side = ""
-        if "/" in plain_line:
-            left_side, right_side = [part.strip() for part in plain_line.split("/", 1)]
-
-        left_segments = [part.strip() for part in re.split(r"\s*;\s*", left_side) if part.strip()]
-        for idx, segment in enumerate(left_segments):
-            cleaned = strip_instrument_tokens(strip_generic_prefixes(segment), instruments)
-            if not cleaned or normalize(cleaned) in SKIP_ARTIST_SEGMENTS:
-                continue
-            if "&" in cleaned and not looks_like_ensemble(cleaned):
-                performers.extend(part.strip() for part in cleaned.split("&") if part.strip())
-                continue
-            if right_side and (idx > 0 or (len(left_segments) == 1 and len(cleaned.split()) <= 4)):
-                ensembles.append(cleaned)
-                continue
-            if looks_like_ensemble(cleaned):
-                ensembles.append(cleaned)
-            else:
-                performers.append(cleaned)
-
-        if right_side:
-            for segment in [part.strip() for part in re.split(r"\s*,\s*", right_side) if part.strip()]:
-                cleaned = strip_instrument_tokens(strip_generic_prefixes(segment), instruments)
-                if not cleaned or normalize(cleaned) in SKIP_ARTIST_SEGMENTS:
-                    continue
-                conductor_parts.append(cleaned)
-
-    return (
-        merge_unique(performers),
-        merge_unique(ensembles),
-        "; ".join(merge_unique(conductor_parts)),
-        sorted(instruments),
-        label,
-    )
-
-
-def enrich_album_from_source(album: AlbumInput, input_path: Path) -> AlbumInput:
-    source_path = resolve_source_path(album.source_file, input_path)
-    subsection = extract_source_subsection(source_path, album.source_line)
-    if not subsection:
-        return album
-
-    lines = extract_detail_lines(subsection)
-    heading_line = ""
-    performer_line = ""
-    label_line = ""
-    heading_idx = -1
-
-    for idx, line in enumerate(lines):
-        if line.startswith("##") and "![](" not in line:
-            heading_line = line
-            heading_idx = idx
-    if heading_idx >= 0:
-        for line in lines[heading_idx + 1 :]:
-            lowered = line.lower()
-            if "/review/" in lowered:
-                break
-            if not performer_line and ("**" in line or "_" in line):
-                performer_line = line
-                continue
-            if performer_line and (re.fullmatch(r"\([^()]+\)", line) or lowered.startswith("label:")):
-                label_line = line
-                break
-
-    prose_lines: List[str] = []
-    if heading_idx >= 0:
-        for line in lines[heading_idx + 1 :]:
-            lowered = line.lower()
-            if "/review/" in lowered:
-                break
-            if line == performer_line or line == label_line:
-                continue
-            prose_lines.append(line)
-
-    composers, main_title, full_title = parse_heading_metadata(heading_line, album.title)
-    parsed_performers, parsed_ensembles, parsed_conductor, parsed_instruments, parsed_label = (
-        parse_performer_metadata(performer_line, label_line)
-    )
-
-    review_slug = extract_review_slug(subsection)
-    slug_phrases = build_slug_phrases(
-        review_slug,
-        [
-            *album.performers,
-            *album.ensembles,
-            album.conductor,
-            *parsed_performers,
-            *parsed_ensembles,
-            parsed_conductor,
-        ],
-    )
-    prose_work_hints = extract_italicized_phrases("\n".join(prose_lines))
-
-    title = main_title or album.title
-    works = merge_unique(
-        [
-            title,
-            full_title,
-            *album.works,
-            *slug_phrases,
-            *prose_work_hints,
-        ]
-    )
-    merged_composers = prune_composer_values([*composers, *album.composers], title, full_title)
-
-    performer_source = parsed_performers if parsed_performers else album.performers
-    ensemble_source = parsed_ensembles if parsed_ensembles else album.ensembles
-    if not parsed_performers:
-        performer_source = [*performer_source, *album.performers]
-    if not parsed_ensembles:
-        ensemble_source = [*ensemble_source, *album.ensembles]
-
-    merged_performers = prune_artist_values(
-        performer_source,
-        [*parsed_performers, *parsed_ensembles, parsed_conductor, *album.performers, *album.ensembles],
-        [*parsed_instruments, *album.instruments],
-    )
-    merged_ensembles = prune_artist_values(
-        ensemble_source,
-        [*parsed_performers, *parsed_ensembles, parsed_conductor, *album.performers, *album.ensembles],
-        [*parsed_instruments, *album.instruments],
-    )
-
-    return AlbumInput(
-        title=title,
-        composers=merged_composers,
-        performers=merged_performers,
-        ensembles=merged_ensembles,
-        conductor=parsed_conductor or album.conductor,
-        label=(
-            parsed_label
-            or clean_markdown_inline(re.sub(r"^Label:\s*", "", label_line, flags=re.IGNORECASE)).strip("()")
-            or album.label
-        ),
-        year=album.year,
-        works=works,
-        instruments=merge_unique([*parsed_instruments, *album.instruments]),
-        source_file=album.source_file,
-        source_line=album.source_line,
-        source_raw=album.source_raw,
-    )
 
 
 def score_hit(
@@ -793,6 +459,8 @@ def load_album_inputs(path: Path) -> List[AlbumInput]:
                 source_file=str(source.get("file", "") or ""),
                 source_line=source.get("line"),
                 source_raw=str(source.get("raw", "") or ""),
+                source_subsection=str(source.get("subsection", "") or ""),
+                source_context=source.get("context", {}) if isinstance(source.get("context"), dict) else {},
             )
         )
     return albums
@@ -980,6 +648,8 @@ def album_from_record(record: Dict) -> AlbumInput:
         source_file=str(source.get("file", "") or ""),
         source_line=source.get("line"),
         source_raw=str(source.get("raw", "") or ""),
+        source_subsection=str(source.get("subsection", "") or ""),
+        source_context=source.get("context", {}) if isinstance(source.get("context"), dict) else {},
     )
 
 
@@ -1029,58 +699,14 @@ def build_record_id(album: AlbumInput) -> str:
     )
 
 
-def resolve_source_path(source_file: str, input_path: Path) -> Optional[Path]:
-    if not source_file:
-        return None
-
-    raw_path = Path(source_file)
-    candidates: List[Path] = []
-    if raw_path.is_absolute():
-        candidates.append(raw_path)
-    else:
-        candidates.extend(
-            [
-                Path.cwd() / raw_path,
-                input_path.parent / raw_path,
-                input_path.parent.parent / raw_path,
-            ]
-        )
-
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return None
-
-
-def extract_source_subsection(source_path: Optional[Path], source_line: Optional[int]) -> str:
-    if not source_path or not source_line or not source_path.exists():
-        return ""
-
-    lines = source_path.read_text(encoding="utf-8").splitlines()
-    idx = max(0, min(len(lines) - 1, int(source_line) - 1))
-
-    start = idx
-    while start > 0 and not is_markdown_separator(lines[start - 1]):
-        start -= 1
-
-    end = idx
-    while end < len(lines) and not is_markdown_separator(lines[end]):
-        end += 1
-
-    return "\n".join(lines[start:end]).strip()
-
-
 def build_source_payload(album: AlbumInput, input_path: Path) -> Dict:
-    source_path = resolve_source_path(album.source_file, input_path)
-    payload = {
+    return {
         "file": album.source_file,
         "line": album.source_line,
         "raw": album.source_raw,
-        "subsection": extract_source_subsection(source_path, album.source_line),
+        "subsection": album.source_subsection,
+        "context": album.source_context,
     }
-    if source_path:
-        payload["resolved_path"] = str(source_path)
-    return payload
 
 
 def search_candidates_for_album(
@@ -1630,7 +1256,7 @@ def main() -> int:
             if status in {"selected", "none", "auto_selected"}:
                 continue
 
-        album = enrich_album_from_source(raw_album, args.input_path)
+        album = raw_album
 
         if args.batch_review:
             print(f"\n[{idx}/{total}] {album.title}")

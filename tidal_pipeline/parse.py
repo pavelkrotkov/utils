@@ -10,12 +10,17 @@ from typing import List, Optional, Tuple
 
 from bs4 import BeautifulSoup
 
-from tidal_pipeline.models import INSTRUMENT_ABBREVS, SKIP_SEGMENTS
+from tidal_pipeline.models import INSTRUMENT_ABBREVS, INSTRUMENT_MAP, SKIP_ARTIST_SEGMENTS, SKIP_SEGMENTS
 from tidal_pipeline.normalize import (
+    clean_markdown_inline,
     extract_instruments,
     is_markdown_separator,
     looks_like_ensemble,
+    merge_unique,
     normalize,
+    normalize_instruments,
+    strip_generic_prefixes,
+    tokens_from_list,
 )
 
 
@@ -24,9 +29,11 @@ class ParsedCandidate:
     work_title_hint: str
     performer_hint: str = ""
     label_hint: str = ""
+    title_line: str = ""
     performer_line: str = ""
     label_line: str = ""
     raw_text: str = ""
+    subsection: str = ""
     line_number: Optional[int] = None
     source_file: str = ""
 
@@ -153,9 +160,15 @@ def parse_mhtml(file_path: Path) -> Tuple[str, List[ParsedCandidate]]:
                 work_title_hint=work_title,
                 performer_hint=performer_hint,
                 label_hint=label_hint,
+                title_line=work_title,
                 performer_line=performer_line,
                 label_line=label_line,
                 raw_text=text[:200],
+                subsection="\n".join(
+                    segment
+                    for segment in [work_title, performer_line, label_line]
+                    if segment
+                ),
                 source_file=file_path.name,
             ),
             candidates,
@@ -191,7 +204,7 @@ def candidate_from_markdown_block(
     if review_pos < 0:
         return None
 
-    title_entries: List[Tuple[int, str]] = []
+    title_entries: List[Tuple[int, str, str]] = []
     for line_number, line in block[: review_pos + 1]:
         stripped = line.strip()
         if not stripped.startswith("##"):
@@ -202,12 +215,12 @@ def candidate_from_markdown_block(
             continue
         cleaned = clean_markdown_heading(stripped)
         if cleaned:
-            title_entries.append((line_number, cleaned))
+            title_entries.append((line_number, stripped, cleaned))
 
     if not title_entries:
         return None
 
-    line_number, work_title = title_entries[-1]
+    line_number, title_line, work_title = title_entries[-1]
     if should_skip_candidate(work_title):
         return None
 
@@ -252,9 +265,11 @@ def candidate_from_markdown_block(
         work_title_hint=work_title,
         performer_hint=performer_hint,
         label_hint=label_hint,
+        title_line=title_line,
         performer_line=performer_line,
         label_line=label_line,
         raw_text=work_title,
+        subsection="\n".join(line for _, line in block).strip(),
         line_number=line_number,
         source_file=file_path.name,
     )
@@ -398,9 +413,15 @@ def parse_markdown_legacy(file_path: Path) -> Tuple[str, List[ParsedCandidate]]:
                         work_title_hint=work_title,
                         performer_hint=performer_hint,
                         label_hint=label_hint,
+                        title_line=raw_text,
                         performer_line=performer_line,
                         label_line=label_line,
                         raw_text=raw_text[:200],
+                        subsection="\n".join(
+                            segment
+                            for segment in [raw_text, performer_line, label_line]
+                            if segment
+                        ),
                         line_number=i,
                         source_file=file_path.name,
                     ),
@@ -488,29 +509,262 @@ def split_performer_hint(text: str) -> Tuple[List[str], List[str], str, List[str
     return performers, ensembles, conductor, instruments
 
 
+def parse_heading_metadata(heading_line: str, fallback_title: str) -> Tuple[List[str], str, str]:
+    cleaned_heading = clean_markdown_inline(re.sub(r"^#{1,6}\s*", "", heading_line or "")).strip()
+    bold_segments = [clean_markdown_inline(seg) for seg in re.findall(r"\*\*(.+?)\*\*", heading_line or "")]
+    composers: List[str] = []
+    for segment in bold_segments:
+        composers.extend(
+            part.strip()
+            for part in re.split(r"\s*[.;/]\s*", segment)
+            if part.strip()
+        )
+    composers = merge_unique(composers)
+
+    remainder = re.sub(r"\*\*.+?\*\*", " ", re.sub(r"^#{1,6}\s*", "", heading_line or ""))
+    remainder = clean_markdown_inline(remainder).strip(" -–—:;,.")
+    if not composers and cleaned_heading:
+        words = cleaned_heading.split()
+        composer_words: List[str] = []
+        for word in words:
+            stripped = re.sub(r"[^A-Za-z.]", "", word)
+            if not stripped:
+                break
+            if stripped.isupper():
+                composer_words.append(word)
+                continue
+            break
+        if composer_words:
+            composers = merge_unique([" ".join(composer_words)])
+            remainder = cleaned_heading[len(" ".join(composer_words)) :].strip(" -–—:;,.")
+    if not remainder:
+        remainder = fallback_title
+
+    return composers, remainder, cleaned_heading or fallback_title
+
+
+def extract_review_slug(subsection: str) -> str:
+    match = re.search(r"/review/([^)\s]+)", subsection or "", flags=re.IGNORECASE)
+    return match.group(1).strip() if match else ""
+
+
+def extract_italicized_phrases(text: str) -> List[str]:
+    phrases: List[str] = []
+    for match in re.findall(r"_([^_]+)_", text or ""):
+        cleaned = clean_markdown_inline(match).strip(" -–—:;,.")
+        if normalize(cleaned) in {"gramophone", "review"}:
+            continue
+        if cleaned and len(cleaned) > 2:
+            phrases.append(cleaned)
+    return merge_unique(phrases)
+
+
+def build_slug_phrases(slug: str, remove_terms: List[str]) -> List[str]:
+    if not slug:
+        return []
+    tokens = [token for token in slug.replace("-", " ").split() if token]
+    remove = tokens_from_list(remove_terms)
+    pruned = [token for token in tokens if normalize(token) not in remove]
+    phrases = [" ".join(tokens).strip()]
+    if pruned and pruned != tokens:
+        phrases.append(" ".join(pruned).strip())
+    return merge_unique(phrases)
+
+
+def strip_instrument_tokens(text: str, instruments: List[str]) -> str:
+    lowered_instruments = {normalize(value) for value in instruments if value}
+    tokens: List[str] = []
+    for token in clean_markdown_inline(text).split():
+        norm = normalize(token)
+        mapped = normalize(INSTRUMENT_MAP.get(norm, norm))
+        if norm in lowered_instruments or mapped in lowered_instruments:
+            continue
+        tokens.append(token)
+    return " ".join(tokens).strip(" -–—:;,.")
+
+
+def prune_artist_values(
+    values: List[str],
+    peer_values: List[str],
+    instruments: List[str],
+) -> List[str]:
+    peers = [normalize(value) for value in peer_values if value]
+    instrument_tokens = {normalize(value) for value in instruments if value}
+    kept: List[str] = []
+    for value in merge_unique(values):
+        norm = normalize(value)
+        if not norm:
+            continue
+        if any(token in instrument_tokens for token in norm.split()):
+            if any(peer and peer in norm and peer != norm for peer in peers):
+                continue
+        if any(peer and peer in norm and peer != norm for peer in peers):
+            continue
+        kept.append(value)
+    return merge_unique(kept)
+
+
+def prune_composer_values(values: List[str], title: str, full_title: str) -> List[str]:
+    kept: List[str] = []
+    title_norm = normalize(title)
+    full_title_norm = normalize(full_title)
+    for value in merge_unique(values):
+        norm = normalize(value)
+        if not norm:
+            continue
+        if norm == title_norm:
+            continue
+        if full_title_norm and norm == full_title_norm:
+            continue
+        kept.append(value)
+    return merge_unique(kept)
+
+
+def parse_performer_metadata(
+    performer_line: str,
+    label_line: str,
+) -> Tuple[List[str], List[str], str, List[str], str]:
+    raw_line = (performer_line or "").strip()
+    label = ""
+    match = re.search(r"\(([^)]+)\)\s*$", raw_line or label_line or "")
+    if match:
+        label = match.group(1).strip()
+
+    instruments = sorted(normalize_instruments(re.findall(r"_([^_]+)_", raw_line)))
+    cleaned_line = raw_line
+    if match and raw_line:
+        cleaned_line = raw_line[: match.start()].strip()
+
+    bold_segments = [strip_generic_prefixes(seg.strip()) for seg in re.findall(r"\*\*(.+?)\*\*", cleaned_line)]
+    bold_segments = [segment for segment in bold_segments if segment]
+
+    performers: List[str] = []
+    ensembles: List[str] = []
+    conductor_parts: List[str] = []
+
+    if len(bold_segments) > 1:
+        for segment in bold_segments:
+            cleaned_segment = strip_instrument_tokens(segment, instruments)
+            if not cleaned_segment:
+                continue
+            if "/" in cleaned_segment:
+                left_side, right_side = [part.strip() for part in cleaned_segment.split("/", 1)]
+                if left_side:
+                    for idx, part in enumerate(
+                        [item.strip() for item in re.split(r"\s*;\s*", left_side) if item.strip()]
+                    ):
+                        cleaned = strip_instrument_tokens(strip_generic_prefixes(part), instruments)
+                        if not cleaned or normalize(cleaned) in SKIP_ARTIST_SEGMENTS:
+                            continue
+                        if "&" in cleaned and idx == 0:
+                            performers.extend(piece.strip() for piece in cleaned.split("&") if piece.strip())
+                            continue
+                        ensembles.append(cleaned)
+                if right_side:
+                    for part in [item.strip() for item in re.split(r"\s*;\s*|\s*,\s*", right_side) if item.strip()]:
+                        cleaned = strip_instrument_tokens(strip_generic_prefixes(part), instruments)
+                        if cleaned and normalize(cleaned) not in SKIP_ARTIST_SEGMENTS:
+                            conductor_parts.append(cleaned)
+                continue
+
+            cleaned = strip_instrument_tokens(cleaned_segment, instruments)
+            if not cleaned or normalize(cleaned) in SKIP_ARTIST_SEGMENTS:
+                continue
+            if looks_like_ensemble(cleaned):
+                ensembles.append(cleaned)
+            else:
+                performers.append(cleaned)
+    else:
+        plain_line = strip_generic_prefixes(clean_markdown_inline(cleaned_line))
+        left_side = plain_line
+        right_side = ""
+        if "/" in plain_line:
+            left_side, right_side = [part.strip() for part in plain_line.split("/", 1)]
+
+        left_segments = [part.strip() for part in re.split(r"\s*;\s*", left_side) if part.strip()]
+        for idx, segment in enumerate(left_segments):
+            cleaned = strip_instrument_tokens(strip_generic_prefixes(segment), instruments)
+            if not cleaned or normalize(cleaned) in SKIP_ARTIST_SEGMENTS:
+                continue
+            if "&" in cleaned and not looks_like_ensemble(cleaned):
+                performers.extend(part.strip() for part in cleaned.split("&") if part.strip())
+                continue
+            if right_side and (idx > 0 or (len(left_segments) == 1 and len(cleaned.split()) <= 4)):
+                ensembles.append(cleaned)
+                continue
+            if looks_like_ensemble(cleaned):
+                ensembles.append(cleaned)
+            else:
+                performers.append(cleaned)
+
+        if right_side:
+            for segment in [part.strip() for part in re.split(r"\s*,\s*", right_side) if part.strip()]:
+                cleaned = strip_instrument_tokens(strip_generic_prefixes(segment), instruments)
+                if not cleaned or normalize(cleaned) in SKIP_ARTIST_SEGMENTS:
+                    continue
+                conductor_parts.append(cleaned)
+
+    conductor = "; ".join(merge_unique(conductor_parts))
+    if not label and label_line.lower().startswith("label:"):
+        label = clean_markdown_inline(re.sub(r"^label:\s*", "", label_line, flags=re.IGNORECASE)).strip("()")
+
+    performers = prune_artist_values(performers, ensembles + ([conductor] if conductor else []), instruments)
+    ensembles = prune_artist_values(ensembles, performers + ([conductor] if conductor else []), instruments)
+    return performers, ensembles, conductor, instruments, label
+
+
 def candidate_to_entry(candidate: ParsedCandidate) -> dict:
-    performers, ensembles, conductor, instruments = split_performer_hint(candidate.performer_hint)
+    composers, title, full_title = parse_heading_metadata(
+        candidate.title_line or candidate.work_title_hint,
+        candidate.work_title_hint,
+    )
+
+    performers, ensembles, conductor, instruments, parsed_label = parse_performer_metadata(
+        candidate.performer_line or candidate.performer_hint,
+        candidate.label_line or (f"({candidate.label_hint})" if candidate.label_hint else ""),
+    )
+    if not performers and not ensembles and not conductor:
+        performers, ensembles, conductor, fallback_instruments = split_performer_hint(candidate.performer_hint)
+        if not instruments:
+            instruments = fallback_instruments
+
+    subsection = candidate.subsection or candidate.raw_text or candidate.work_title_hint
+    review_slug = extract_review_slug(subsection)
+    slug_phrases = build_slug_phrases(review_slug, [candidate.work_title_hint, title, *composers])
+    prose_work_hints = extract_italicized_phrases(subsection)
+    works = merge_unique(
+        [
+            title,
+            candidate.work_title_hint,
+            *slug_phrases,
+            *prose_work_hints,
+        ]
+    )
+    composers = prune_composer_values(composers, title, full_title)
+
+    label = parsed_label or candidate.label_hint
     return {
         "source": {
             "file": candidate.source_file,
             "line": candidate.line_number or 0,
-            "raw": candidate.raw_text or candidate.work_title_hint,
+            "raw": candidate.raw_text or subsection or candidate.work_title_hint,
+            "subsection": subsection,
             "context": {
-                "title_line": candidate.work_title_hint,
+                "title_line": candidate.title_line or candidate.work_title_hint,
                 "performer_line": candidate.performer_line or candidate.performer_hint,
                 "label_line": candidate.label_line
                 or (f"({candidate.label_hint})" if candidate.label_hint else ""),
             },
         },
         "album": {
-            "title": candidate.work_title_hint,
-            "composers": [],
+            "title": title,
+            "composers": composers,
             "performers": performers,
             "ensembles": ensembles,
             "conductor": conductor,
-            "label": candidate.label_hint,
+            "label": label,
             "year": "",
-            "works": [candidate.work_title_hint] if candidate.work_title_hint else [],
+            "works": works or ([title] if title else []),
             "instruments": instruments,
         },
     }
