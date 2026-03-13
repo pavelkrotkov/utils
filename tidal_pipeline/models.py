@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
 
 
 DEFAULT_WEIGHTS = {
@@ -203,3 +205,40 @@ INSTRUMENT_MAP = {
 INSTRUMENT_ABBREVS = set(INSTRUMENT_MAP.keys())
 SEPARATOR_RE = re.compile(r"^\*\s+\*\s+\*$")
 
+
+@dataclass
+class AlbumInput:
+    title: str = ""
+    composers: List[str] = field(default_factory=list)
+    performers: List[str] = field(default_factory=list)
+    ensembles: List[str] = field(default_factory=list)
+    conductor: str = ""
+    label: str = ""
+    year: str = ""
+    works: List[str] = field(default_factory=list)
+    instruments: List[str] = field(default_factory=list)
+    source_file: str = ""
+    source_line: Optional[int] = None
+    source_raw: str = ""
+    source_subsection: str = ""
+    source_context: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class Candidate:
+    id: str
+    title: str
+    artists: List[str]
+    release_date: str
+    copyright: str
+    score: float
+    features: Dict[str, float]
+    queries: List[str] = field(default_factory=list)
+    track_count: Optional[int] = None
+    details_fetched: bool = False
+
+
+@dataclass
+class QueryCandidate:
+    template: str
+    query: str
