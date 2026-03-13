@@ -165,6 +165,186 @@ Train a query/matching model from the first 80 truth records:
 pipx run ./tidal_match_from_json.py albums.json --train-coverage --training-out tidal_match_training.json
 ```
 
+#### Formal Matching Pipeline
+
+The matcher can be described as a pipeline over album records indexed by $i$.
+
+Let:
+
+- $x_i$ be the source review block for album $i$
+- $a_i^{(0)}$ be the raw parsed album record emitted by `tidal_parse_to_json.py`
+- $a_i$ be the enriched album record actually used for matching
+
+The end-to-end flow is
+
+$$
+x_i \xrightarrow{P} a_i^{(0)}
+\xrightarrow{E} a_i
+\xrightarrow{G} Q_i^{\mathrm{all}}
+\xrightarrow{S} \widetilde{Q}_i
+\xrightarrow{\text{TIDAL}} H_i
+\xrightarrow{D} C_i
+\xrightarrow{\text{score}} \hat{c}_i
+\xrightarrow{\text{decision}} y_i.
+$$
+
+Here:
+
+- $P$ is the raw parser
+- $E$ is the enrichment step
+- $G$ generates candidate queries
+- $S$ selects a capped subset of those queries
+- $D$ deduplicates repeated TIDAL hits by album id
+- $\hat{c}_i$ is the top-ranked candidate
+- $y_i$ is the final decision recorded in the truth file
+
+The raw parse is
+
+$$
+a_i^{(0)} = P(x_i).
+$$
+
+The matcher then reparses the original source block and enriches the record:
+
+$$
+a_i = E(a_i^{(0)}, x_i).
+$$
+
+Conceptually, $a_i$ is a structured object with fields
+
+$$
+a_i =
+(
+\text{title}_i,
+\text{composers}_i,
+\text{performers}_i,
+\text{ensembles}_i,
+\text{conductor}_i,
+\text{label}_i,
+\text{year}_i,
+\text{works}_i,
+\text{instruments}_i
+).
+$$
+
+The enrichment step matters because it can recover cleaner composer, performer,
+ensemble, conductor, label, and work hints from the original source text.
+
+From $a_i$, the matcher generates many candidate queries
+
+$$
+Q_i^{\mathrm{all}} = G(a_i) = \{q_{ik}\}_{k=1}^{K_i}.
+$$
+
+These queries come from templates such as `composer_title`, `performer_work`,
+`ensemble_title`, `conductor_composer`, and `label_title`. The code does not send
+all generated queries to TIDAL. It first selects a diversified subset:
+
+$$
+\widetilde{Q}_i = S\!\left(Q_i^{\mathrm{all}}\right),
+\qquad
+\left|\widetilde{Q}_i\right| \le K_{\max}.
+$$
+
+For each selected query $q_{ik} \in \widetilde{Q}_i$, TIDAL returns a small hit list
+
+$$
+H_{ik} = \{r_{ikl}\}_{l=1}^{L_{ik}}.
+$$
+
+The full raw hit set is
+
+$$
+H_i = \bigcup_k H_{ik}.
+$$
+
+Those raw hits are then deduplicated by TIDAL album id:
+
+$$
+C_i = D(H_i).
+$$
+
+Scoring is applied to each unique candidate $c \in C_i$, not to each raw search hit
+independently.
+
+For each candidate $c \in C_i$, the matcher computes feature similarities
+
+$$
+\phi_f(a_i, c) \in [0,1]
+$$
+
+for
+
+$$
+f \in \{
+\text{title},
+\text{composer},
+\text{performer},
+\text{ensemble},
+\text{conductor},
+\text{instrument},
+\text{label},
+\text{year}
+\}.
+$$
+
+The base score is a weighted sum
+
+$$
+s_i^{\mathrm{base}}(c) = \sum_f w_f \, \phi_f(a_i, c),
+$$
+
+and the final score applies multiplicative penalties for cases such as weak artist
+support, missing composer evidence on generic titles, or numeric mismatches:
+
+$$
+s_i(c) = p_i(c) \cdot s_i^{\mathrm{base}}(c),
+\qquad 0 < p_i(c) \le 1.
+$$
+
+Candidates are ranked by score, then by supporting evidence such as how many
+selected queries surfaced the same album:
+
+$$
+\hat{c}_i = \arg\max_{c \in C_i} \operatorname{rank}_i(c).
+$$
+
+In practice, the ranking key is based primarily on $s_i(c)$, then on query support,
+then on a stable title tiebreak.
+
+The final decision $y_i$ is:
+
+$$
+y_i =
+\begin{cases}
+\hat{c}_i.\mathrm{id}, & \text{if the top candidate passes the auto-selection rule} \\
+\text{manual review}, & \text{otherwise.}
+\end{cases}
+$$
+
+The auto-selection rule accepts $\hat{c}_i$ when its score exceeds the main threshold,
+or when a recent-release rule is satisfied. Otherwise the record is marked
+`needs_review`, and the user chooses a ranked candidate, `none`, `skip`, or an
+explicit TIDAL album id.
+
+The resulting truth set is
+
+$$
+T = \{(a_i, \widetilde{Q}_i, C_i, y_i)\}_{i=1}^{N}.
+$$
+
+If desired, `--train-coverage` uses a prefix of $T$ to update both the feature
+weights $w_f$ and the query-template weights used by $S$.
+
+Finally, if $y_i$ is a selected TIDAL album id, `tidal_apply_links_to_markdown.py`
+maps it back to the source line and inserts
+
+$$
+\texttt{https://tidal.com/browse/album/<id>}
+$$
+
+at the end of the corresponding markdown subsection.
+
 ## Audio Transcription
 
 OpenAI API (simple transcription):

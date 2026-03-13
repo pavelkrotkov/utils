@@ -1,0 +1,101 @@
+{
+  "data": {
+    "id": "461743751",
+    "type": "albums",
+    "attributes": {
+      "title": "Walton: Cello Concerto, Symphony No. 1 & Scapino",
+      "barcodeId": "0095115532829",
+      "numberOfVolumes": 1,
+      "numberOfItems": 8,
+      "duration": "PT1H16M38S",
+      "explicit": false,
+      "releaseDate": "2025-11-07",
+      "copyright": {
+        "text": "Chandos Records Ltd"
+      },
+      "popularity": 0.2008500099182129,
+      "accessType": "PUBLIC",
+      "availability": [
+        "STREAM",
+        "DJ"
+      ],
+      "mediaTags": [
+        "DOLBY_ATMOS",
+        "HIRES_LOSSLESS",
+        "LOSSLESS"
+      ],
+      "externalLinks": [
+        {
+          "href": "https://tidal.com/browse/album/461743751",
+          "meta": {
+            "type": "TIDAL_SHARING"
+          }
+        }
+      ],
+      "type": "ALBUM",
+      "albumType": "ALBUM"
+    },
+    "relationships": {
+      "usageRules": {
+        "links": {
+          "self": "/albums/461743751/relationships/usageRules?countryCode=US"
+        }
+      },
+      "similarAlbums": {
+        "links": {
+          "self": "/albums/461743751/relationships/similarAlbums?countryCode=US"
+        }
+      },
+      "artists": {
+        "links": {
+          "self": "/albums/461743751/relationships/artists?countryCode=US"
+        }
+      },
+      "genres": {
+        "links": {
+          "self": "/albums/461743751/relationships/genres?countryCode=US"
+        }
+      },
+      "suggestedCoverArts": {
+        "links": {
+          "self": "/albums/461743751/relationships/suggestedCoverArts?countryCode=US"
+        }
+      },
+      "priceConfig": {
+        "links": {
+          "self": "/albums/461743751/relationships/priceConfig?countryCode=US"
+        }
+      },
+      "owners": {
+        "links": {
+          "self": "/albums/461743751/relationships/owners?countryCode=US"
+        }
+      },
+      "coverArt": {
+        "links": {
+          "self": "/albums/461743751/relationships/coverArt?countryCode=US"
+        }
+      },
+      "items": {
+        "data": [],
+        "links": {
+          "self": "/albums/461743751/relationships/items?countryCode=US"
+        }
+      },
+      "replacement": {
+        "links": {
+          "self": "/albums/461743751/relationships/replacement?countryCode=US"
+        }
+      },
+      "providers": {
+        "links": {
+          "self": "/albums/461743751/relationships/providers?countryCode=US"
+        }
+      }
+    }
+  },
+  "links": {
+    "self": "/albums/461743751?include=items&countryCode=US"
+  },
+  "included": []
+}

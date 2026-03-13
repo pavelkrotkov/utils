@@ -221,7 +221,145 @@ def parse_mhtml(file_path: Path) -> Tuple[str, List[Candidate]]:
     return page_title, candidates
 
 
-def parse_markdown(file_path: Path) -> Tuple[str, List[Candidate]]:
+def is_separator_line(line: str) -> bool:
+    return bool(re.fullmatch(r"\*\s+\*\s+\*", line.strip()))
+
+
+def is_review_line(line: str) -> bool:
+    lowered = line.lower()
+    return "/review/" in lowered and "](" in line
+
+
+def is_markdown_image_heading(line: str) -> bool:
+    stripped = line.strip()
+    return stripped.startswith("##") and "![](" in stripped
+
+
+def clean_markdown_heading(line: str) -> str:
+    text = re.sub(r"^#{1,6}\s*", "", line).strip()
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text).strip()
+    text = text.replace("**", "").replace("__", "")
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def candidate_from_markdown_block(
+    block: List[Tuple[int, str]],
+    file_path: Path,
+) -> Optional[Candidate]:
+    review_pos = next((idx for idx, (_, line) in enumerate(block) if is_review_line(line)), -1)
+    if review_pos < 0:
+        return None
+
+    title_entries: List[Tuple[int, str]] = []
+    for line_number, line in block[: review_pos + 1]:
+        stripped = line.strip()
+        if not stripped.startswith("##"):
+            continue
+        if is_markdown_image_heading(stripped):
+            continue
+        if "Related Reviews" in stripped or "Related News" in stripped:
+            continue
+        cleaned = clean_markdown_heading(stripped)
+        if cleaned:
+            title_entries.append((line_number, cleaned))
+
+    if not title_entries:
+        return None
+
+    line_number, work_title = title_entries[-1]
+    if should_skip_candidate(work_title):
+        return None
+
+    performer_hint = ""
+    label_hint = ""
+    performer_line = ""
+    label_line = ""
+
+    in_detail_section = False
+    for _, raw_line in block:
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("##") and clean_markdown_heading(stripped) == work_title:
+            in_detail_section = True
+            continue
+        if not in_detail_section:
+            continue
+        if is_review_line(stripped) or is_separator_line(stripped):
+            break
+        if stripped.startswith("##"):
+            break
+        if stripped.lower().startswith("label:"):
+            if not label_hint:
+                label_hint = stripped.split(":", 1)[1].strip()
+                label_line = stripped
+            continue
+        if not performer_line:
+            performer_line = stripped
+            clean_perf = re.sub(r"[*_]", "", stripped).strip()
+            label_match = re.search(r"\(([^)]+)\)\s*$", clean_perf)
+            if label_match:
+                label_hint = label_match.group(1).strip()
+                label_line = stripped
+                clean_perf = clean_perf[: label_match.start()].strip()
+            performer_hint = clean_perf
+
+    if not performer_hint and not label_hint:
+        return None
+
+    return Candidate(
+        work_title_hint=work_title,
+        performer_hint=performer_hint,
+        label_hint=label_hint,
+        performer_line=performer_line,
+        label_line=label_line,
+        raw_text=work_title,
+        line_number=line_number,
+        source_file=file_path.name,
+    )
+
+
+def parse_markdown_blocks(file_path: Path) -> Tuple[str, List[Candidate]]:
+    lines = file_path.read_text(encoding="utf-8").splitlines()
+    page_title = file_path.stem
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("# "):
+            page_title = stripped[2:].strip()
+            break
+        if stripped.startswith("## ") and not is_markdown_image_heading(stripped):
+            cleaned = clean_markdown_heading(stripped)
+            if cleaned:
+                page_title = cleaned
+                break
+
+    blocks: List[List[Tuple[int, str]]] = []
+    current: List[Tuple[int, str]] = []
+    for line_number, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if stripped.startswith("## Related Reviews") or stripped.startswith("## Related News"):
+            break
+        if is_separator_line(stripped):
+            if current:
+                blocks.append(current)
+                current = []
+            continue
+        current.append((line_number, line))
+    if current:
+        blocks.append(current)
+
+    candidates: List[Candidate] = []
+    seen_fingerprints: set = set()
+    for block in blocks:
+        candidate = candidate_from_markdown_block(block, file_path)
+        if candidate:
+            add_candidate(candidate, candidates, seen_fingerprints)
+
+    return page_title, candidates
+
+
+def parse_markdown_legacy(file_path: Path) -> Tuple[str, List[Candidate]]:
     lines = file_path.read_text(encoding="utf-8").splitlines()
     page_title = file_path.stem
     for line in lines:
@@ -341,6 +479,13 @@ def parse_markdown(file_path: Path) -> Tuple[str, List[Candidate]]:
     return page_title, candidates
 
 
+def parse_markdown(file_path: Path) -> Tuple[str, List[Candidate]]:
+    page_title, candidates = parse_markdown_blocks(file_path)
+    if candidates:
+        return page_title, candidates
+    return parse_markdown_legacy(file_path)
+
+
 def extract_candidates(file_path: Path) -> Tuple[str, List[Candidate]]:
     ext = file_path.suffix.lower()
     if ext in {".mhtml", ".mht"}:
@@ -448,7 +593,7 @@ def candidate_to_entry(candidate: Candidate) -> dict:
             "conductor": conductor,
             "label": candidate.label_hint,
             "year": "",
-            "works": [],
+            "works": [candidate.work_title_hint] if candidate.work_title_hint else [],
             "instruments": instruments,
         },
     }
