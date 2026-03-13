@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import argparse
+import json
 import random
+import time
+from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from tidal_pipeline.client import AlbumHit, TidalClient
@@ -370,8 +375,6 @@ def search_candidates_for_album(
             )
 
         if sleep_seconds:
-            import time
-
             time.sleep(sleep_seconds)
 
     return sorted(
@@ -412,3 +415,379 @@ def choose_auto_candidate(
             )
 
     return None, ""
+
+
+def parse_list(value) -> List[str]:
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    return []
+
+
+def load_album_inputs(path: Path) -> List[AlbumInput]:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(raw, dict) and "albums" in raw:
+        entries = raw["albums"]
+    elif isinstance(raw, list):
+        entries = raw
+    else:
+        raise ValueError("Input JSON must be a list or have an 'albums' key.")
+
+    albums: List[AlbumInput] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        source = entry.get("source", {}) if isinstance(entry.get("source"), dict) else {}
+        album = entry.get("album", {}) if isinstance(entry.get("album"), dict) else entry
+
+        albums.append(
+            AlbumInput(
+                title=str(album.get("title", "") or ""),
+                composers=parse_list(album.get("composers")),
+                performers=parse_list(album.get("performers")),
+                ensembles=parse_list(album.get("ensembles")),
+                conductor=str(album.get("conductor", "") or ""),
+                label=str(album.get("label", "") or ""),
+                year=str(album.get("year", "") or ""),
+                works=parse_list(album.get("works")),
+                instruments=parse_list(album.get("instruments")),
+                source_file=str(source.get("file", "") or ""),
+                source_line=source.get("line"),
+                source_raw=str(source.get("raw", "") or ""),
+                source_subsection=str(source.get("subsection", "") or ""),
+                source_context=source.get("context", {}) if isinstance(source.get("context"), dict) else {},
+            )
+        )
+    return albums
+
+
+def load_weights(path: Optional[Path]) -> Dict[str, float]:
+    if not path or not path.exists():
+        return dict(DEFAULT_WEIGHTS)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    weights = dict(DEFAULT_WEIGHTS)
+    for key, value in raw.items():
+        if key in weights:
+            weights[key] = float(value)
+    return weights
+
+
+def load_training_model(path: Optional[Path]) -> Tuple[Dict[str, float], Dict[str, float]]:
+    if not path or not path.exists():
+        return dict(DEFAULT_WEIGHTS), dict(DEFAULT_TEMPLATE_WEIGHTS)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    weights = dict(DEFAULT_WEIGHTS)
+    template_weights = dict(DEFAULT_TEMPLATE_WEIGHTS)
+    for key, value in raw.get("weights", {}).items():
+        if key in weights:
+            weights[key] = float(value)
+    for key, value in raw.get("template_weights", {}).items():
+        if key in template_weights:
+            template_weights[key] = float(value)
+    return weights, template_weights
+
+
+def save_training_model(path: Path, model: Dict) -> None:
+    path.write_text(json.dumps(model, indent=2), encoding="utf-8")
+
+
+def load_truth_records(path: Path) -> List[Dict]:
+    if not path.exists():
+        raise RuntimeError(f"Truth file not found: {path}")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        raise RuntimeError("Truth file must be a JSON array.")
+    return [entry for entry in data if isinstance(entry, dict)]
+
+
+def save_truth_records(path: Path, records: List[Dict]) -> None:
+    path.write_text(json.dumps(records, indent=2), encoding="utf-8")
+
+
+def load_existing_output(path: Path) -> Tuple[List[Dict], Dict[str, Dict]]:
+    if not path.exists():
+        return [], {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        raise ValueError("Output file must be a JSON array.")
+    by_id = {entry.get("record_id", ""): entry for entry in data if isinstance(entry, dict)}
+    return data, by_id
+
+
+def update_scoring_weights(
+    weights: Dict[str, float],
+    feature_sums: Dict[str, float],
+    count: int,
+) -> Dict[str, float]:
+    if count == 0:
+        return weights
+    updated = dict(weights)
+    for key in updated:
+        avg = feature_sums.get(key, 0.0) / count
+        updated[key] = round((updated[key] * 0.7) + (avg * 0.3), 4)
+    return updated
+
+
+def update_template_weights(
+    template_weights: Dict[str, float],
+    stats: Dict[str, Dict[str, int]],
+) -> Dict[str, float]:
+    updated = dict(template_weights)
+    for template, counts in stats.items():
+        attempts = counts.get("attempts", 0)
+        hits = counts.get("hits", 0)
+        if attempts == 0:
+            continue
+        success = hits / attempts
+        base = updated.get(template, 0.5)
+        updated[template] = round(base * (0.5 + success), 4)
+    return updated
+
+
+def album_from_record(record: Dict) -> AlbumInput:
+    source = record.get("source", {}) if isinstance(record.get("source"), dict) else {}
+    album = record.get("album", {}) if isinstance(record.get("album"), dict) else record
+    return AlbumInput(
+        title=str(album.get("title", "") or ""),
+        composers=parse_list(album.get("composers")),
+        performers=parse_list(album.get("performers")),
+        ensembles=parse_list(album.get("ensembles")),
+        conductor=str(album.get("conductor", "") or ""),
+        label=str(album.get("label", "") or ""),
+        year=str(album.get("year", "") or ""),
+        works=parse_list(album.get("works")),
+        instruments=parse_list(album.get("instruments")),
+        source_file=str(source.get("file", "") or ""),
+        source_line=source.get("line"),
+        source_raw=str(source.get("raw", "") or ""),
+        source_subsection=str(source.get("subsection", "") or ""),
+        source_context=source.get("context", {}) if isinstance(source.get("context"), dict) else {},
+    )
+
+
+def build_record_id(album: AlbumInput) -> str:
+    return "|".join([album.source_file or "", str(album.source_line or 0), album.title or ""])
+
+
+def train_coverage(
+    client: TidalClient,
+    truth_records: List[Dict],
+    weights: Dict[str, float],
+    template_weights: Dict[str, float],
+    args: argparse.Namespace,
+    rng: random.Random,
+) -> Tuple[Dict[str, float], Dict[str, float], Dict]:
+    start_time = time.time()
+    stats: Dict[str, Dict[str, int]] = {}
+    feature_sums: Dict[str, float] = {key: 0.0 for key in weights}
+    feature_count = 0
+
+    train_records = truth_records[: args.train_limit]
+    targets: List[Tuple[str, AlbumInput, str]] = []
+    for record in train_records:
+        choice = record.get("choice") or {}
+        tidal_id = choice.get("tidal_id") or ""
+        if not tidal_id:
+            continue
+        album = album_from_record(record)
+        record_id = record.get("record_id") or build_record_id(album)
+        targets.append((record_id, album, tidal_id))
+
+    covered: set[str] = set()
+    api_calls = 0
+    iteration = 0
+
+    while iteration < args.train_iterations:
+        if (time.time() - start_time) / 60 >= args.train_minutes:
+            break
+        if api_calls >= args.train_max_calls:
+            break
+        uncovered = [(record_id, album, tidal_id) for record_id, album, tidal_id in targets if record_id not in covered]
+        if not uncovered:
+            break
+
+        remaining_calls = args.train_max_calls - api_calls
+        per_record = max(1, remaining_calls // max(1, len(uncovered)))
+        max_queries = args.max_queries or per_record
+        max_queries = min(max_queries, per_record)
+
+        for record_id, album, tidal_id in uncovered:
+            if api_calls >= args.train_max_calls:
+                break
+            if (time.time() - start_time) / 60 >= args.train_minutes:
+                break
+
+            candidates = build_query_candidates(album, rng, shuffle_count=args.shuffle_count)
+            selected = select_query_candidates(candidates, template_weights, max_queries, rng)
+
+            for candidate in selected:
+                if api_calls >= args.train_max_calls:
+                    break
+                stats.setdefault(candidate.template, {"attempts": 0, "hits": 0})
+                stats[candidate.template]["attempts"] += 1
+                hits = client.search_albums(candidate.query, limit=args.limit)
+                api_calls += 1
+
+                if any(hit.id == tidal_id for hit in hits):
+                    stats[candidate.template]["hits"] += 1
+                    covered.add(record_id)
+                    for hit in hits:
+                        if hit.id == tidal_id:
+                            _, features = score_candidate(album, hit, weights)
+                            for key, value in features.items():
+                                feature_sums[key] += value
+                            feature_count += 1
+                            break
+                    break
+
+            if args.sleep and api_calls < args.train_max_calls:
+                time.sleep(args.sleep)
+
+        template_weights = update_template_weights(template_weights, stats)
+        iteration += 1
+
+    weights = update_scoring_weights(weights, feature_sums, feature_count)
+
+    model = {
+        "meta": {
+            "coverage": len(covered) / max(1, len(targets)),
+            "covered": len(covered),
+            "total": len(targets),
+            "iterations": iteration,
+            "api_calls": api_calls,
+            "minutes": round((time.time() - start_time) / 60, 2),
+            "seed": args.seed,
+            "train_limit": args.train_limit,
+            "max_calls": args.train_max_calls,
+        },
+        "weights": weights,
+        "template_weights": template_weights,
+        "template_stats": stats,
+        "uncovered": [record_id for record_id, _, _ in targets if record_id not in covered],
+    }
+
+    return weights, template_weights, model
+
+
+def album_to_dict(album: AlbumInput) -> Dict:
+    return {
+        "title": album.title,
+        "composers": album.composers,
+        "performers": album.performers,
+        "ensembles": album.ensembles,
+        "conductor": album.conductor,
+        "label": album.label,
+        "year": album.year,
+        "works": album.works,
+        "instruments": album.instruments,
+    }
+
+
+def candidate_to_dict(candidate: Candidate) -> Dict:
+    return {
+        "id": candidate.id,
+        "title": candidate.title,
+        "artists": candidate.artists,
+        "release_date": candidate.release_date,
+        "copyright": candidate.copyright,
+        "track_count": candidate.track_count,
+        "score": candidate.score,
+        "features": candidate.features,
+        "queries": candidate.queries,
+        "details_fetched": candidate.details_fetched,
+    }
+
+
+def query_candidate_to_dict(candidate: QueryCandidate) -> Dict:
+    return {
+        "template": candidate.template,
+        "query": candidate.query,
+    }
+
+
+def build_source_payload(album: AlbumInput) -> Dict:
+    return {
+        "file": album.source_file,
+        "line": album.source_line,
+        "raw": album.source_raw,
+        "subsection": album.source_subsection,
+        "context": album.source_context,
+    }
+
+
+def build_record(
+    album: AlbumInput,
+    record_id: str,
+    ordered: List[Candidate],
+    selected_queries: List[QueryCandidate],
+    chosen: Optional[Candidate],
+    choice: Dict[str, object],
+    weights: Dict[str, float],
+    args: argparse.Namespace,
+    auto_reason: str,
+    mode: str,
+) -> Dict:
+    top_candidate = ordered[0] if ordered else None
+    return {
+        "record_id": record_id,
+        "source": build_source_payload(album),
+        "album": album_to_dict(album),
+        "queries": [candidate.query for candidate in selected_queries],
+        "query_candidates": [query_candidate_to_dict(candidate) for candidate in selected_queries],
+        "candidates": [candidate_to_dict(candidate) for candidate in ordered],
+        "top_candidates": [candidate_to_dict(candidate) for candidate in ordered[: args.top]],
+        "choice": choice,
+        "chosen": candidate_to_dict(chosen) if chosen else None,
+        "review": {
+            "mode": mode,
+            "top_score": round(top_candidate.score, 3) if top_candidate else 0.0,
+            "top_release_year": extract_year(top_candidate.release_date) if top_candidate else "",
+            "candidate_count": len(ordered),
+            "auto_reason": auto_reason,
+            "auto_threshold": args.auto_threshold,
+            "recent_year": args.auto_recent_year,
+            "recent_threshold": args.auto_recent_threshold,
+        },
+        "meta": {
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "weights": weights,
+            "limit": args.limit,
+            "max_queries": args.max_queries,
+        },
+    }
+
+
+def summarize_review_records(records: List[Dict]) -> Dict[str, int]:
+    summary = {"auto_selected": 0, "selected": 0, "needs_review": 0, "none": 0, "skip": 0}
+    for entry in records:
+        choice = entry.get("choice") or {}
+        status = str(choice.get("status") or "")
+        if status in summary:
+            summary[status] += 1
+    return summary
+
+
+def collect_selected_album_ids(records: List[Dict]) -> Tuple[List[Dict[str, str]], int]:
+    selected: List[Dict[str, str]] = []
+    seen: set[str] = set()
+    unmatched = 0
+
+    for entry in records:
+        choice = entry.get("choice") or {}
+        status = choice.get("status") or ""
+        chosen = entry.get("chosen") or {}
+        tidal_id = choice.get("tidal_id") or chosen.get("id") or ""
+        album_title = (chosen.get("title") or (entry.get("album") or {}).get("title") or "").strip()
+
+        if not tidal_id or status in {"none", "skip", ""}:
+            unmatched += 1
+            continue
+
+        if tidal_id not in seen:
+            seen.add(tidal_id)
+            selected.append({"id": tidal_id, "title": album_title})
+
+    return selected, unmatched
