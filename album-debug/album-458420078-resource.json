@@ -1,0 +1,100 @@
+{
+  "data": {
+    "id": "458420078",
+    "type": "albums",
+    "attributes": {
+      "title": "Donizetti: Lucia di Lammermoor",
+      "barcodeId": "0880242111715",
+      "numberOfVolumes": 1,
+      "numberOfItems": 39,
+      "duration": "PT2H21M41S",
+      "explicit": false,
+      "releaseDate": "2025-10-31",
+      "copyright": {
+        "text": "2025 EuroArts Music International"
+      },
+      "popularity": 0.3036028742790222,
+      "accessType": "PUBLIC",
+      "availability": [
+        "STREAM",
+        "DJ"
+      ],
+      "mediaTags": [
+        "HIRES_LOSSLESS",
+        "LOSSLESS"
+      ],
+      "externalLinks": [
+        {
+          "href": "https://tidal.com/browse/album/458420078",
+          "meta": {
+            "type": "TIDAL_SHARING"
+          }
+        }
+      ],
+      "type": "ALBUM",
+      "albumType": "ALBUM"
+    },
+    "relationships": {
+      "usageRules": {
+        "links": {
+          "self": "/albums/458420078/relationships/usageRules?countryCode=US"
+        }
+      },
+      "similarAlbums": {
+        "links": {
+          "self": "/albums/458420078/relationships/similarAlbums?countryCode=US"
+        }
+      },
+      "artists": {
+        "links": {
+          "self": "/albums/458420078/relationships/artists?countryCode=US"
+        }
+      },
+      "genres": {
+        "links": {
+          "self": "/albums/458420078/relationships/genres?countryCode=US"
+        }
+      },
+      "suggestedCoverArts": {
+        "links": {
+          "self": "/albums/458420078/relationships/suggestedCoverArts?countryCode=US"
+        }
+      },
+      "priceConfig": {
+        "links": {
+          "self": "/albums/458420078/relationships/priceConfig?countryCode=US"
+        }
+      },
+      "owners": {
+        "links": {
+          "self": "/albums/458420078/relationships/owners?countryCode=US"
+        }
+      },
+      "coverArt": {
+        "links": {
+          "self": "/albums/458420078/relationships/coverArt?countryCode=US"
+        }
+      },
+      "items": {
+        "data": [],
+        "links": {
+          "self": "/albums/458420078/relationships/items?countryCode=US"
+        }
+      },
+      "replacement": {
+        "links": {
+          "self": "/albums/458420078/relationships/replacement?countryCode=US"
+        }
+      },
+      "providers": {
+        "links": {
+          "self": "/albums/458420078/relationships/providers?countryCode=US"
+        }
+      }
+    }
+  },
+  "links": {
+    "self": "/albums/458420078?include=items&countryCode=US"
+  },
+  "included": []
+}

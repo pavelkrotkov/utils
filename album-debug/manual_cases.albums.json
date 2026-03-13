@@ -1,0 +1,622 @@
+[
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 72,
+      "raw": "Brahms Two String Quartets, Op 51",
+      "context": {
+        "title_line": "Brahms Two String Quartets, Op 51",
+        "performer_line": "**Zehetmair Quartet**(ECM New Series)",
+        "label_line": "**Zehetmair Quartet**(ECM New Series)"
+      }
+    },
+    "album": {
+      "title": "Brahms Two String Quartets, Op 51",
+      "composers": [],
+      "performers": [],
+      "ensembles": [
+        "Zehetmair Quartet"
+      ],
+      "conductor": "",
+      "label": "ECM New Series",
+      "year": "",
+      "works": [
+        "Brahms Two String Quartets, Op 51"
+      ],
+      "instruments": []
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 96,
+      "raw": "Beethoven Piano Sonatas Nos 28-32",
+      "context": {
+        "title_line": "Beethoven Piano Sonatas Nos 28-32",
+        "performer_line": "**Paul Wee** _pf_(BIS)",
+        "label_line": "**Paul Wee** _pf_(BIS)"
+      }
+    },
+    "album": {
+      "title": "Beethoven Piano Sonatas Nos 28-32",
+      "composers": [],
+      "performers": [
+        "Paul Wee"
+      ],
+      "ensembles": [],
+      "conductor": "",
+      "label": "BIS",
+      "year": "",
+      "works": [
+        "Beethoven Piano Sonatas Nos 28-32"
+      ],
+      "instruments": [
+        "pf"
+      ]
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 156,
+      "raw": "Beethoven Piano Concerto No 4 Sciarrino Il Sogno di Stradella",
+      "context": {
+        "title_line": "Beethoven Piano Concerto No 4 Sciarrino Il Sogno di Stradella",
+        "performer_line": "**Jonathan Biss** _pf_ **Swedish RSO / Malin Broman; Omer Meir Wellber**(Orchid)",
+        "label_line": "**Jonathan Biss** _pf_ **Swedish RSO / Malin Broman; Omer Meir Wellber**(Orchid)"
+      }
+    },
+    "album": {
+      "title": "Beethoven Piano Concerto No 4 Sciarrino Il Sogno di Stradella",
+      "composers": [],
+      "performers": [
+        "Jonathan Biss",
+        "Swedish RSO"
+      ],
+      "ensembles": [],
+      "conductor": "Malin Broman; Omer Meir Wellber",
+      "label": "Orchid",
+      "year": "",
+      "works": [
+        "Beethoven Piano Concerto No 4 Sciarrino Il Sogno di Stradella"
+      ],
+      "instruments": [
+        "pf"
+      ]
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 180,
+      "raw": "Gregson A Vision in a Dream",
+      "context": {
+        "title_line": "Gregson A Vision in a Dream",
+        "performer_line": "**BBC Philharmonic Orchestra /** **Ben Gernon**(Chandos)",
+        "label_line": "**BBC Philharmonic Orchestra /** **Ben Gernon**(Chandos)"
+      }
+    },
+    "album": {
+      "title": "Gregson A Vision in a Dream",
+      "composers": [],
+      "performers": [],
+      "ensembles": [
+        "BBC Philharmonic Orchestra"
+      ],
+      "conductor": "Ben Gernon",
+      "label": "Chandos",
+      "year": "",
+      "works": [
+        "Gregson A Vision in a Dream"
+      ],
+      "instruments": []
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 204,
+      "raw": "Nielsen. Shostakovich. Vestergård‘Track 1’",
+      "context": {
+        "title_line": "Nielsen. Shostakovich. Vestergård‘Track 1’",
+        "performer_line": "**Novo Quartet**(Aparté)",
+        "label_line": "**Novo Quartet**(Aparté)"
+      }
+    },
+    "album": {
+      "title": "Nielsen. Shostakovich. Vestergård‘Track 1’",
+      "composers": [],
+      "performers": [],
+      "ensembles": [
+        "Novo Quartet"
+      ],
+      "conductor": "",
+      "label": "Aparté",
+      "year": "",
+      "works": [
+        "Nielsen. Shostakovich. Vestergård‘Track 1’"
+      ],
+      "instruments": []
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 216,
+      "raw": "JS Bach‘Sonatas and Partitas, Vol 2’",
+      "context": {
+        "title_line": "JS Bach‘Sonatas and Partitas, Vol 2’",
+        "performer_line": "**Chris Thile** _mandolin_(Nonesuch)",
+        "label_line": "**Chris Thile** _mandolin_(Nonesuch)"
+      }
+    },
+    "album": {
+      "title": "JS Bach‘Sonatas and Partitas, Vol 2’",
+      "composers": [],
+      "performers": [
+        "Chris Thile mandolin"
+      ],
+      "ensembles": [],
+      "conductor": "",
+      "label": "Nonesuch",
+      "year": "",
+      "works": [
+        "JS Bach‘Sonatas and Partitas, Vol 2’"
+      ],
+      "instruments": []
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 264,
+      "raw": "Merula‘Concerti spirituali’",
+      "context": {
+        "title_line": "Merula‘Concerti spirituali’",
+        "performer_line": "**InAlto / Lambert Colson** _cornett_ with **Bernard Foccroulle** _org_(Ricercar)",
+        "label_line": "**InAlto / Lambert Colson** _cornett_ with **Bernard Foccroulle** _org_(Ricercar)"
+      }
+    },
+    "album": {
+      "title": "Merula‘Concerti spirituali’",
+      "composers": [],
+      "performers": [
+        "InAlto"
+      ],
+      "ensembles": [],
+      "conductor": "Lambert Colson cornett with Bernard Foccroulle org",
+      "label": "Ricercar",
+      "year": "",
+      "works": [
+        "Merula‘Concerti spirituali’"
+      ],
+      "instruments": [
+        "org"
+      ]
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 276,
+      "raw": "Bonds Montgomery Variations Still Symphonies Nos 2 & 4",
+      "context": {
+        "title_line": "Bonds Montgomery Variations Still Symphonies Nos 2 & 4",
+        "performer_line": "**Philadelphia Orchestra / Yannick Nézet-Séguin**(DG)",
+        "label_line": "**Philadelphia Orchestra / Yannick Nézet-Séguin**(DG)"
+      }
+    },
+    "album": {
+      "title": "Bonds Montgomery Variations Still Symphonies Nos 2 & 4",
+      "composers": [],
+      "performers": [],
+      "ensembles": [
+        "Philadelphia Orchestra"
+      ],
+      "conductor": "Yannick Nézet-Séguin",
+      "label": "DG",
+      "year": "",
+      "works": [
+        "Bonds Montgomery Variations Still Symphonies Nos 2 & 4"
+      ],
+      "instruments": []
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 288,
+      "raw": "Butterworth. Holst Orchestral works",
+      "context": {
+        "title_line": "Butterworth. Holst Orchestral works",
+        "performer_line": "**RLPO / Andrew Manze**(Onyx)",
+        "label_line": "**RLPO / Andrew Manze**(Onyx)"
+      }
+    },
+    "album": {
+      "title": "Butterworth. Holst Orchestral works",
+      "composers": [],
+      "performers": [
+        "RLPO"
+      ],
+      "ensembles": [],
+      "conductor": "Andrew Manze",
+      "label": "Onyx",
+      "year": "",
+      "works": [
+        "Butterworth. Holst Orchestral works"
+      ],
+      "instruments": []
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 324,
+      "raw": "Tchaikovsky Solo piano works",
+      "context": {
+        "title_line": "Tchaikovsky Solo piano works",
+        "performer_line": "**Daniil Trifonov** _pf_(DG)",
+        "label_line": "**Daniil Trifonov** _pf_(DG)"
+      }
+    },
+    "album": {
+      "title": "Tchaikovsky Solo piano works",
+      "composers": [],
+      "performers": [
+        "Daniil Trifonov"
+      ],
+      "ensembles": [],
+      "conductor": "",
+      "label": "DG",
+      "year": "",
+      "works": [
+        "Tchaikovsky Solo piano works"
+      ],
+      "instruments": [
+        "pf"
+      ]
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 336,
+      "raw": "Dowland. Purcell‘Songs of Passion’",
+      "context": {
+        "title_line": "Dowland. Purcell‘Songs of Passion’",
+        "performer_line": "**Lea Desandre** _sop_ **Jupiter / Thomas Dunford** _lute_(Erato)",
+        "label_line": "**Lea Desandre** _sop_ **Jupiter / Thomas Dunford** _lute_(Erato)"
+      }
+    },
+    "album": {
+      "title": "Dowland. Purcell‘Songs of Passion’",
+      "composers": [],
+      "performers": [
+        "Lea Desandre",
+        "Jupiter"
+      ],
+      "ensembles": [],
+      "conductor": "Thomas Dunford lute",
+      "label": "Erato",
+      "year": "",
+      "works": [
+        "Dowland. Purcell‘Songs of Passion’"
+      ],
+      "instruments": [
+        "sop"
+      ]
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 440,
+      "raw": "Firsova. Smirnov‘Love and Loss’",
+      "context": {
+        "title_line": "Firsova. Smirnov‘Love and Loss’",
+        "performer_line": "**Rudersdal Chamber Players**",
+        "label_line": ""
+      }
+    },
+    "album": {
+      "title": "Firsova. Smirnov‘Love and Loss’",
+      "composers": [],
+      "performers": [],
+      "ensembles": [
+        "Rudersdal Chamber Players"
+      ],
+      "conductor": "",
+      "label": "",
+      "year": "",
+      "works": [
+        "Firsova. Smirnov‘Love and Loss’"
+      ],
+      "instruments": []
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 454,
+      "raw": "D Scarlatti Keyboard Sonatas",
+      "context": {
+        "title_line": "D Scarlatti Keyboard Sonatas",
+        "performer_line": "**Javier Perianes** _pf_",
+        "label_line": ""
+      }
+    },
+    "album": {
+      "title": "D Scarlatti Keyboard Sonatas",
+      "composers": [],
+      "performers": [
+        "Javier Perianes"
+      ],
+      "ensembles": [],
+      "conductor": "",
+      "label": "",
+      "year": "",
+      "works": [
+        "D Scarlatti Keyboard Sonatas"
+      ],
+      "instruments": [
+        "pf"
+      ]
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 496,
+      "raw": "Schubert‘Quintette imaginaire’",
+      "context": {
+        "title_line": "Schubert‘Quintette imaginaire’",
+        "performer_line": "**Sandrine Piau** _sop_ **Quatuor Psophos**",
+        "label_line": ""
+      }
+    },
+    "album": {
+      "title": "Schubert‘Quintette imaginaire’",
+      "composers": [],
+      "performers": [
+        "Sandrine Piau",
+        "Quatuor Psophos"
+      ],
+      "ensembles": [],
+      "conductor": "",
+      "label": "",
+      "year": "",
+      "works": [
+        "Schubert‘Quintette imaginaire’"
+      ],
+      "instruments": [
+        "sop"
+      ]
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 524,
+      "raw": "JS Bach‘King of Kings’ – Orchestral Transcriptions by Andrew Davis",
+      "context": {
+        "title_line": "JS Bach‘King of Kings’ – Orchestral Transcriptions by Andrew Davis",
+        "performer_line": "**BBC Philharmonic Orchestra / Martyn Brabbins, Andrew Davis**(Chandos)",
+        "label_line": "**BBC Philharmonic Orchestra / Martyn Brabbins, Andrew Davis**(Chandos)"
+      }
+    },
+    "album": {
+      "title": "JS Bach‘King of Kings’ – Orchestral Transcriptions by Andrew Davis",
+      "composers": [],
+      "performers": [],
+      "ensembles": [
+        "BBC Philharmonic Orchestra"
+      ],
+      "conductor": "Martyn Brabbins, Andrew Davis",
+      "label": "Chandos",
+      "year": "",
+      "works": [
+        "JS Bach‘King of Kings’ – Orchestral Transcriptions by Andrew Davis"
+      ],
+      "instruments": []
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 584,
+      "raw": "Froberger‘Suites for Harpsichord, Vol 4’",
+      "context": {
+        "title_line": "Froberger‘Suites for Harpsichord, Vol 4’",
+        "performer_line": "**Gilbert Rowland** _hpd_(Athene)",
+        "label_line": "**Gilbert Rowland** _hpd_(Athene)"
+      }
+    },
+    "album": {
+      "title": "Froberger‘Suites for Harpsichord, Vol 4’",
+      "composers": [],
+      "performers": [
+        "Gilbert Rowland"
+      ],
+      "ensembles": [],
+      "conductor": "",
+      "label": "Athene",
+      "year": "",
+      "works": [
+        "Froberger‘Suites for Harpsichord, Vol 4’"
+      ],
+      "instruments": [
+        "hpd"
+      ]
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 596,
+      "raw": "Schubert. Beethoven‘Schubert+’",
+      "context": {
+        "title_line": "Schubert. Beethoven‘Schubert+’",
+        "performer_line": "**Can Çakmur** _pf_(BIS)",
+        "label_line": "**Can Çakmur** _pf_(BIS)"
+      }
+    },
+    "album": {
+      "title": "Schubert. Beethoven‘Schubert+’",
+      "composers": [],
+      "performers": [
+        "Can Çakmur"
+      ],
+      "ensembles": [],
+      "conductor": "",
+      "label": "BIS",
+      "year": "",
+      "works": [
+        "Schubert. Beethoven‘Schubert+’"
+      ],
+      "instruments": [
+        "pf"
+      ]
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 608,
+      "raw": "JS Bach‘Bach’s Horns’",
+      "context": {
+        "title_line": "JS Bach‘Bach’s Horns’",
+        "performer_line": "**Solomon’s Knot**(Prospero)",
+        "label_line": "**Solomon’s Knot**(Prospero)"
+      }
+    },
+    "album": {
+      "title": "JS Bach‘Bach’s Horns’",
+      "composers": [],
+      "performers": [
+        "Solomon’s Knot"
+      ],
+      "ensembles": [],
+      "conductor": "",
+      "label": "Prospero",
+      "year": "",
+      "works": [
+        "JS Bach‘Bach’s Horns’"
+      ],
+      "instruments": []
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 668,
+      "raw": "Britten Sinfonia da Requiem. Winter Words. The Prince of the Pagodas",
+      "context": {
+        "title_line": "Britten Sinfonia da Requiem. Winter Words. The Prince of the Pagodas",
+        "performer_line": "**London Philharmonic Orchestra / Edward Gardner**(LPO)",
+        "label_line": "**London Philharmonic Orchestra / Edward Gardner**(LPO)"
+      }
+    },
+    "album": {
+      "title": "Britten Sinfonia da Requiem. Winter Words. The Prince of the Pagodas",
+      "composers": [],
+      "performers": [],
+      "ensembles": [
+        "London Philharmonic Orchestra"
+      ],
+      "conductor": "Edward Gardner",
+      "label": "LPO",
+      "year": "",
+      "works": [
+        "Britten Sinfonia da Requiem. Winter Words. The Prince of the Pagodas"
+      ],
+      "instruments": []
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 704,
+      "raw": "Biber‘Just Biber’",
+      "context": {
+        "title_line": "Biber‘Just Biber’",
+        "performer_line": "**Rachel Podger** _vn_ **Brecon Baroque**(Channel Classics)",
+        "label_line": "**Rachel Podger** _vn_ **Brecon Baroque**(Channel Classics)"
+      }
+    },
+    "album": {
+      "title": "Biber‘Just Biber’",
+      "composers": [],
+      "performers": [
+        "Rachel Podger",
+        "Brecon Baroque"
+      ],
+      "ensembles": [],
+      "conductor": "",
+      "label": "Channel Classics",
+      "year": "",
+      "works": [
+        "Biber‘Just Biber’"
+      ],
+      "instruments": [
+        "vn"
+      ]
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 798,
+      "raw": "Tchaikovsky Symphony No 6, etc",
+      "context": {
+        "title_line": "Tchaikovsky Symphony No 6, etc",
+        "performer_line": "**Royal Liverpool Philharmonic Orchestra / Domingo Hindoyan**(Onyx)",
+        "label_line": "**Royal Liverpool Philharmonic Orchestra / Domingo Hindoyan**(Onyx)"
+      }
+    },
+    "album": {
+      "title": "Tchaikovsky Symphony No 6, etc",
+      "composers": [],
+      "performers": [],
+      "ensembles": [
+        "Royal Liverpool Philharmonic Orchestra"
+      ],
+      "conductor": "Domingo Hindoyan",
+      "label": "Onyx",
+      "year": "",
+      "works": [
+        "Tchaikovsky Symphony No 6, etc"
+      ],
+      "instruments": []
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 846,
+      "raw": "Bizet‘Les Mélodies’",
+      "context": {
+        "title_line": "Bizet‘Les Mélodies’",
+        "performer_line": "**Sols; Luca Montebugnoli, Edoardo Torbianelli** _pf_(Harmonia Mundi)",
+        "label_line": "**Sols; Luca Montebugnoli, Edoardo Torbianelli** _pf_(Harmonia Mundi)"
+      }
+    },
+    "album": {
+      "title": "Bizet‘Les Mélodies’",
+      "composers": [],
+      "performers": [
+        "Sols Luca Montebugnoli Edoardo Torbianelli"
+      ],
+      "ensembles": [],
+      "conductor": "",
+      "label": "Harmonia Mundi",
+      "year": "",
+      "works": [
+        "Bizet‘Les Mélodies’"
+      ],
+      "instruments": [
+        "pf"
+      ]
+    }
+  }
+]

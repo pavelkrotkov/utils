@@ -1,0 +1,101 @@
+{
+  "data": {
+    "id": "456502686",
+    "type": "albums",
+    "attributes": {
+      "title": "Galina Ustvolskaya: Symphonies Nos. 1\u20135",
+      "barcodeId": "7318599923048",
+      "numberOfVolumes": 1,
+      "numberOfItems": 14,
+      "duration": "PT1H27M1S",
+      "explicit": false,
+      "releaseDate": "2025-10-24",
+      "copyright": {
+        "text": "BIS"
+      },
+      "popularity": 0.0519704499473678,
+      "accessType": "PUBLIC",
+      "availability": [
+        "STREAM",
+        "DJ"
+      ],
+      "mediaTags": [
+        "DOLBY_ATMOS",
+        "HIRES_LOSSLESS",
+        "LOSSLESS"
+      ],
+      "externalLinks": [
+        {
+          "href": "https://tidal.com/browse/album/456502686",
+          "meta": {
+            "type": "TIDAL_SHARING"
+          }
+        }
+      ],
+      "type": "ALBUM",
+      "albumType": "ALBUM"
+    },
+    "relationships": {
+      "usageRules": {
+        "links": {
+          "self": "/albums/456502686/relationships/usageRules?countryCode=MY"
+        }
+      },
+      "similarAlbums": {
+        "links": {
+          "self": "/albums/456502686/relationships/similarAlbums?countryCode=MY"
+        }
+      },
+      "artists": {
+        "links": {
+          "self": "/albums/456502686/relationships/artists?countryCode=MY"
+        }
+      },
+      "genres": {
+        "links": {
+          "self": "/albums/456502686/relationships/genres?countryCode=MY"
+        }
+      },
+      "suggestedCoverArts": {
+        "links": {
+          "self": "/albums/456502686/relationships/suggestedCoverArts?countryCode=MY"
+        }
+      },
+      "priceConfig": {
+        "links": {
+          "self": "/albums/456502686/relationships/priceConfig?countryCode=MY"
+        }
+      },
+      "owners": {
+        "links": {
+          "self": "/albums/456502686/relationships/owners?countryCode=MY"
+        }
+      },
+      "coverArt": {
+        "links": {
+          "self": "/albums/456502686/relationships/coverArt?countryCode=MY"
+        }
+      },
+      "items": {
+        "data": [],
+        "links": {
+          "self": "/albums/456502686/relationships/items?countryCode=MY"
+        }
+      },
+      "replacement": {
+        "links": {
+          "self": "/albums/456502686/relationships/replacement?countryCode=MY"
+        }
+      },
+      "providers": {
+        "links": {
+          "self": "/albums/456502686/relationships/providers?countryCode=MY"
+        }
+      }
+    }
+  },
+  "links": {
+    "self": "/albums/456502686?include=items&countryCode=MY"
+  },
+  "included": []
+}

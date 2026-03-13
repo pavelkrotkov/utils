@@ -51,18 +51,19 @@ TIDAL_WEB_COOKIES = os.environ.get("TIDAL_WEB_COOKIES")
 TIDAL_WEB_LOCALE = os.environ.get("TIDAL_WEB_LOCALE", "en_US")
 TIDAL_WEB_DEVICE_TYPE = os.environ.get("TIDAL_WEB_DEVICE_TYPE", "BROWSER")
 TIDAL_WEB_USER_AGENT = os.environ.get("TIDAL_WEB_USER_AGENT")
+REQUEST_TIMEOUT_SECONDS = float(os.environ.get("TIDAL_REQUEST_TIMEOUT_SECONDS", "20"))
 
 TOKEN_FILE_DIR = Path.home() / ".config" / "tidal-utils"
 TOKEN_FILE_NAME = "tokens.json"
 
 DEFAULT_WEIGHTS = {
-    "title": 0.45,
-    "composer": 0.2,
-    "performer": 0.2,
-    "ensemble": 0.1,
-    "conductor": 0.05,
+    "title": 0.35,
+    "composer": 0.1,
+    "performer": 0.25,
+    "ensemble": 0.15,
+    "conductor": 0.1,
     "instrument": 0.05,
-    "label": 0.05,
+    "label": 0.1,
     "year": 0.05,
 }
 
@@ -75,15 +76,19 @@ DEFAULT_TEMPLATE_WEIGHTS = {
     "title_shuffle": 0.6,
     "work": 0.9,
     "work_ngrams": 0.8,
+    "composer": 1.4,
     "composer_title": 1.2,
     "composer_work": 1.2,
-    "performer_title": 2.0,
-    "performer_instrument": 2.2,
-    "performer_ensemble": 2.0,
-    "performer_composer": 1.8,
-    "performer_work": 1.6,
-    "ensemble_title": 1.2,
-    "conductor_title": 1.1,
+    "performer": 1.7,
+    "performer_title": 2.3,
+    "performer_instrument": 0.9,
+    "performer_ensemble": 2.2,
+    "performer_composer": 2.1,
+    "performer_work": 2.0,
+    "ensemble": 1.8,
+    "ensemble_title": 1.5,
+    "conductor": 1.1,
+    "conductor_title": 1.4,
     "conductor_composer": 1.0,
     "instrument_title": 1.1,
     "label_title": 0.8,
@@ -108,10 +113,88 @@ STOPWORDS = {
     "minor",
 }
 
+ENSEMBLE_HINTS = {
+    "orchestra",
+    "philharmonic",
+    "symphony",
+    "ensemble",
+    "quartet",
+    "trio",
+    "quintet",
+    "choir",
+    "chorus",
+    "consort",
+    "players",
+    "sinfonia",
+    "academy",
+    "capella",
+    "coro",
+    "chamber",
+    "opera",
+    "filharmonica",
+    "radio",
+    "baroque",
+    "knot",
+    "jupiter",
+    "inalto",
+    "psophos",
+}
+
+SKIP_ARTIST_SEGMENTS = {"sols", "sols.", "soloists", "soloist", "with"}
+GENERIC_ARTIST_TOKENS = {
+    "orchestra",
+    "philharmonic",
+    "symphony",
+    "ensemble",
+    "quartet",
+    "quartett",
+    "trio",
+    "quintet",
+    "choir",
+    "chorus",
+    "consort",
+    "players",
+    "sinfonia",
+    "academy",
+    "capella",
+    "coro",
+    "chamber",
+    "opera",
+    "baroque",
+}
+GENERIC_TITLE_TOKENS = {
+    "chamber",
+    "works",
+    "work",
+    "symphonies",
+    "symphony",
+    "sonatas",
+    "sonata",
+    "concertos",
+    "concerto",
+    "quartets",
+    "quartet",
+    "lieder",
+    "orchestral",
+    "solo",
+    "piano",
+    "violin",
+    "string",
+}
+GENERIC_LINE_PREFIXES = {
+    "sols",
+    "sols incl",
+    "incl",
+    "label",
+    "with",
+}
+
 INSTRUMENT_MAP = {
     "pf": "piano",
+    "fp": "fortepiano",
     "pno": "piano",
     "piano": "piano",
+    "fortepiano": "fortepiano",
     "vn": "violin",
     "violin": "violin",
     "va": "viola",
@@ -141,6 +224,9 @@ INSTRUMENT_MAP = {
     "organ": "organ",
     "hpd": "harpsichord",
     "harpsichord": "harpsichord",
+    "mandolin": "mandolin",
+    "lute": "lute",
+    "cornett": "cornett",
     "gtr": "guitar",
     "guitar": "guitar",
     "perc": "percussion",
@@ -148,7 +234,10 @@ INSTRUMENT_MAP = {
     "sop": "soprano",
     "soprano": "soprano",
     "mez": "mezzo",
+    "mezzo-soprano": "mezzo",
     "mezzo": "mezzo",
+    "counterten": "countertenor",
+    "countertenor": "countertenor",
     "ten": "tenor",
     "tenor": "tenor",
     "bar": "baritone",
@@ -414,7 +503,12 @@ class TidalClient:
 
         resp: Optional[requests.Response] = None
         for attempt in range(retry + 1):
-            resp = self.session.get(url, params=p, headers={"Accept": "application/json"})
+            resp = self.session.get(
+                url,
+                params=p,
+                headers={"Accept": "application/json"},
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
 
             if resp.status_code == 429:
                 sleep_time = int(resp.headers.get("Retry-After", 1)) * (attempt + 1)
@@ -460,7 +554,7 @@ class TidalClient:
 
         resp: Optional[requests.Response] = None
         for attempt in range(retry + 1):
-            resp = self.session.get(url, params=p, headers=headers)
+            resp = self.session.get(url, params=p, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS)
 
             if resp.status_code == 429:
                 sleep_time = int(resp.headers.get("Retry-After", 1)) * (attempt + 1)
@@ -590,7 +684,13 @@ class TidalClient:
 
         resp: Optional[requests.Response] = None
         for attempt in range(retry + 1):
-            resp = self.session.request(method, url, params=p, json=json_data)
+            resp = self.session.request(
+                method,
+                url,
+                params=p,
+                json=json_data,
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
 
             if resp.status_code == 429:
                 sleep_time = int(resp.headers.get("Retry-After", 1)) * (attempt + 1)
@@ -982,11 +1082,40 @@ class TidalClient:
 def normalize(text: str) -> str:
     if not text:
         return ""
-    text = text.replace(".", " ")
+    text = (
+        text.replace(".", " ")
+        .replace("’", " ")
+        .replace("‘", " ")
+        .replace("“", " ")
+        .replace("”", " ")
+        .replace("'", " ")
+        .replace('"', " ")
+        .replace(":", " ")
+        .replace(";", " ")
+        .replace(",", " ")
+        .replace("+", " ")
+        .replace("(", " ")
+        .replace(")", " ")
+    )
     text = unicodedata.normalize("NFKD", text).encode("ASCII", "ignore").decode("ASCII")
     text = text.lower()
     text = re.sub(r"[/\-&—–]", " ", text)
     text = re.sub(r"[^a-z0-9\s]", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def normalize_with_symbols(text: str) -> str:
+    if not text:
+        return ""
+    text = (
+        text.replace("’", "'")
+        .replace("‘", "'")
+        .replace("“", '"')
+        .replace("”", '"')
+    )
+    text = unicodedata.normalize("NFKD", text).encode("ASCII", "ignore").decode("ASCII")
+    text = text.lower()
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
@@ -998,7 +1127,7 @@ def tokenize(text: str) -> set[str]:
 
 def split_tokens(text: str) -> List[str]:
     norm = normalize(text)
-    tokens = [t for t in norm.split() if t and t not in STOPWORDS]
+    tokens = [t for t in norm.split() if len(t) > 1 and t not in STOPWORDS]
     return tokens
 
 
@@ -1009,12 +1138,35 @@ def tokens_from_list(values: Iterable[str]) -> set[str]:
     return tokens
 
 
+def artist_tokens_from_list(values: Iterable[str]) -> set[str]:
+    tokens: set[str] = set()
+    for value in values:
+        for token in tokenize(value):
+            if token not in GENERIC_ARTIST_TOKENS:
+                tokens.add(token)
+    return tokens
+
+
 def normalize_instruments(values: Iterable[str]) -> set[str]:
     tokens: set[str] = set()
     for value in values:
         for raw in normalize(value).split():
+            if raw in GENERIC_LINE_PREFIXES or raw in SKIP_ARTIST_SEGMENTS:
+                continue
             tokens.add(INSTRUMENT_MAP.get(raw, raw))
     return {t for t in tokens if t}
+
+
+def phrase_overlap_score(left_values: Iterable[str], right_values: Iterable[str]) -> float:
+    left_norms = [normalize(value) for value in left_values if normalize(value)]
+    right_norms = [normalize(value) for value in right_values if normalize(value)]
+    if not left_norms:
+        return 0.0
+    matched = 0
+    for left in left_norms:
+        if any(left == right or left in right or right in left for right in right_norms):
+            matched += 1
+    return matched / len(left_norms)
 
 
 def overlap_score(left: set[str], right: set[str]) -> float:
@@ -1028,26 +1180,417 @@ def extract_year(text: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
+def extract_numeric_tokens(values: Iterable[str]) -> set[str]:
+    tokens: set[str] = set()
+    for value in values:
+        tokens.update(re.findall(r"\b\d+\b", normalize_with_symbols(value)))
+    return tokens
+
+
+def merge_unique(values: Iterable[str]) -> List[str]:
+    seen: set[str] = set()
+    merged: List[str] = []
+    for value in values:
+        cleaned = " ".join(str(value or "").split()).strip()
+        if not cleaned:
+            continue
+        key = normalize(cleaned)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(cleaned)
+    return merged
+
+
+def looks_like_ensemble(text: str) -> bool:
+    lowered = normalize(text)
+    if not lowered:
+        return False
+    if any(hint in lowered for hint in ENSEMBLE_HINTS):
+        return True
+    tokens = lowered.split()
+    return any(token in {"rso", "lpo", "rlpo", "bbc"} for token in tokens)
+
+
+def clean_markdown_inline(text: str) -> str:
+    cleaned = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", text or "")
+    cleaned = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", cleaned)
+    cleaned = cleaned.replace("**", "").replace("__", "")
+    cleaned = cleaned.replace("*", "").replace("_", "")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def strip_generic_prefixes(text: str) -> str:
+    cleaned = clean_markdown_inline(text)
+    lowered = normalize(cleaned)
+    for prefix in sorted(GENERIC_LINE_PREFIXES, key=len, reverse=True):
+        prefix_norm = normalize(prefix)
+        if lowered.startswith(prefix_norm):
+            raw_words = cleaned.split()
+            prefix_words = prefix_norm.split()
+            cleaned = " ".join(raw_words[len(prefix_words) :]).strip(" -–—:;,.")
+            lowered = normalize(cleaned)
+    return cleaned
+
+
+def parse_heading_metadata(heading_line: str, fallback_title: str) -> Tuple[List[str], str, str]:
+    cleaned_heading = clean_markdown_inline(re.sub(r"^#{1,6}\s*", "", heading_line or "")).strip()
+    bold_segments = [clean_markdown_inline(seg) for seg in re.findall(r"\*\*(.+?)\*\*", heading_line or "")]
+    composers: List[str] = []
+    for segment in bold_segments:
+        composers.extend(
+            part.strip()
+            for part in re.split(r"\s*[.;/]\s*", segment)
+            if part.strip()
+        )
+    composers = merge_unique(composers)
+
+    remainder = re.sub(r"\*\*.+?\*\*", " ", re.sub(r"^#{1,6}\s*", "", heading_line or ""))
+    remainder = clean_markdown_inline(remainder).strip(" -–—:;,.")
+    if not composers and cleaned_heading:
+        words = cleaned_heading.split()
+        composer_words: List[str] = []
+        for word in words:
+            stripped = re.sub(r"[^A-Za-z.]", "", word)
+            if not stripped:
+                break
+            if stripped.isupper():
+                composer_words.append(word)
+                continue
+            break
+        if composer_words:
+            composers = merge_unique([" ".join(composer_words)])
+            remainder = cleaned_heading[len(" ".join(composer_words)) :].strip(" -–—:;,.")
+    if not remainder:
+        remainder = fallback_title
+
+    return composers, remainder, cleaned_heading or fallback_title
+
+
+def extract_review_slug(subsection: str) -> str:
+    match = re.search(r"/review/([^)\s]+)", subsection or "", flags=re.IGNORECASE)
+    return match.group(1).strip() if match else ""
+
+
+def extract_italicized_phrases(text: str) -> List[str]:
+    phrases: List[str] = []
+    for match in re.findall(r"_([^_]+)_", text or ""):
+        cleaned = clean_markdown_inline(match).strip(" -–—:;,.")
+        if normalize(cleaned) in {"gramophone", "review"}:
+            continue
+        if cleaned and len(cleaned) > 2:
+            phrases.append(cleaned)
+    return merge_unique(phrases)
+
+
+def build_slug_phrases(slug: str, remove_terms: Iterable[str]) -> List[str]:
+    if not slug:
+        return []
+    tokens = [token for token in slug.replace("-", " ").split() if token]
+    remove = tokens_from_list(remove_terms)
+    pruned = [token for token in tokens if normalize(token) not in remove]
+    phrases = [" ".join(tokens).strip()]
+    if pruned and pruned != tokens:
+        phrases.append(" ".join(pruned).strip())
+    return merge_unique(phrases)
+
+
+def extract_detail_lines(subsection: str) -> List[str]:
+    return [line.strip() for line in (subsection or "").splitlines() if line.strip()]
+
+
+def split_artist_segments(text: str) -> List[str]:
+    if not text:
+        return []
+    segments = [text]
+    for splitter in (r"\s+with\s+", r"\s*/\s*", r"\s*;\s*", r"\s*,\s*"):
+        next_segments: List[str] = []
+        for segment in segments:
+            next_segments.extend([part.strip() for part in re.split(splitter, segment) if part.strip()])
+        segments = next_segments
+    return segments
+
+
+def strip_instrument_tokens(text: str, instruments: Iterable[str]) -> str:
+    lowered_instruments = {normalize(value) for value in instruments if value}
+    tokens = []
+    for tok in clean_markdown_inline(text).split():
+        norm = normalize(tok)
+        mapped = normalize(INSTRUMENT_MAP.get(norm, norm))
+        if norm in lowered_instruments or mapped in lowered_instruments:
+            continue
+        tokens.append(tok)
+    return " ".join(tokens).strip(" -–—:;,.")
+
+
+def prune_artist_values(
+    values: Iterable[str],
+    peer_values: Iterable[str],
+    instruments: Iterable[str],
+) -> List[str]:
+    peers = [normalize(value) for value in peer_values if value]
+    instrument_tokens = {normalize(value) for value in instruments if value}
+    kept: List[str] = []
+    for value in merge_unique(values):
+        norm = normalize(value)
+        if not norm:
+            continue
+        if any(token in instrument_tokens for token in norm.split()):
+            if any(peer and peer in norm and peer != norm for peer in peers):
+                continue
+        if any(peer and peer in norm and peer != norm for peer in peers):
+            continue
+        kept.append(value)
+    return merge_unique(kept)
+
+
+def prune_composer_values(values: Iterable[str], title: str, full_title: str) -> List[str]:
+    kept: List[str] = []
+    title_norm = normalize(title)
+    full_title_norm = normalize(full_title)
+    for value in merge_unique(values):
+        norm = normalize(value)
+        if not norm:
+            continue
+        if norm == title_norm:
+            continue
+        if full_title_norm and norm == full_title_norm:
+            continue
+        kept.append(value)
+    return merge_unique(kept)
+
+
+def parse_performer_metadata(
+    performer_line: str,
+    label_line: str,
+) -> Tuple[List[str], List[str], str, List[str], str]:
+    raw_line = performer_line or ""
+    raw_line = raw_line.strip()
+    label = ""
+    match = re.search(r"\(([^)]+)\)\s*$", raw_line or label_line or "")
+    if match:
+        label = match.group(1).strip()
+
+    instruments = normalize_instruments(re.findall(r"_([^_]+)_", raw_line))
+    cleaned_line = raw_line
+    if match and raw_line:
+        cleaned_line = raw_line[: match.start()].strip()
+
+    bold_segments = [strip_generic_prefixes(seg.strip()) for seg in re.findall(r"\*\*(.+?)\*\*", cleaned_line)]
+    bold_segments = [segment for segment in bold_segments if segment]
+
+    performers: List[str] = []
+    ensembles: List[str] = []
+    conductor_parts: List[str] = []
+
+    if len(bold_segments) > 1:
+        candidate_segments = bold_segments
+        for segment in candidate_segments:
+            cleaned_segment = strip_instrument_tokens(segment, instruments)
+            if not cleaned_segment:
+                continue
+            if "/" in cleaned_segment:
+                left_side, right_side = [part.strip() for part in cleaned_segment.split("/", 1)]
+                if left_side:
+                    for idx, part in enumerate(
+                        [item.strip() for item in re.split(r"\s*;\s*", left_side) if item.strip()]
+                    ):
+                        cleaned = strip_instrument_tokens(strip_generic_prefixes(part), instruments)
+                        if not cleaned or normalize(cleaned) in SKIP_ARTIST_SEGMENTS:
+                            continue
+                        if "&" in cleaned and idx == 0:
+                            performers.extend(piece.strip() for piece in cleaned.split("&") if piece.strip())
+                            continue
+                        ensembles.append(cleaned)
+                if right_side:
+                    for part in [item.strip() for item in re.split(r"\s*;\s*|\s*,\s*", right_side) if item.strip()]:
+                        cleaned = strip_instrument_tokens(strip_generic_prefixes(part), instruments)
+                        if cleaned and normalize(cleaned) not in SKIP_ARTIST_SEGMENTS:
+                            conductor_parts.append(cleaned)
+                continue
+
+            cleaned = strip_instrument_tokens(cleaned_segment, instruments)
+            if not cleaned or normalize(cleaned) in SKIP_ARTIST_SEGMENTS:
+                continue
+            if looks_like_ensemble(cleaned):
+                ensembles.append(cleaned)
+            else:
+                performers.append(cleaned)
+    else:
+        plain_line = strip_generic_prefixes(clean_markdown_inline(cleaned_line))
+        left_side = plain_line
+        right_side = ""
+        if "/" in plain_line:
+            left_side, right_side = [part.strip() for part in plain_line.split("/", 1)]
+
+        left_segments = [part.strip() for part in re.split(r"\s*;\s*", left_side) if part.strip()]
+        for idx, segment in enumerate(left_segments):
+            cleaned = strip_instrument_tokens(strip_generic_prefixes(segment), instruments)
+            if not cleaned or normalize(cleaned) in SKIP_ARTIST_SEGMENTS:
+                continue
+            if "&" in cleaned and not looks_like_ensemble(cleaned):
+                performers.extend(part.strip() for part in cleaned.split("&") if part.strip())
+                continue
+            if right_side and (idx > 0 or (len(left_segments) == 1 and len(cleaned.split()) <= 4)):
+                ensembles.append(cleaned)
+                continue
+            if looks_like_ensemble(cleaned):
+                ensembles.append(cleaned)
+            else:
+                performers.append(cleaned)
+
+        if right_side:
+            for segment in [part.strip() for part in re.split(r"\s*,\s*", right_side) if part.strip()]:
+                cleaned = strip_instrument_tokens(strip_generic_prefixes(segment), instruments)
+                if not cleaned or normalize(cleaned) in SKIP_ARTIST_SEGMENTS:
+                    continue
+                conductor_parts.append(cleaned)
+
+    return (
+        merge_unique(performers),
+        merge_unique(ensembles),
+        "; ".join(merge_unique(conductor_parts)),
+        sorted(instruments),
+        label,
+    )
+
+
+def enrich_album_from_source(album: AlbumInput, input_path: Path) -> AlbumInput:
+    source_path = resolve_source_path(album.source_file, input_path)
+    subsection = extract_source_subsection(source_path, album.source_line)
+    if not subsection:
+        return album
+
+    lines = extract_detail_lines(subsection)
+    heading_line = ""
+    performer_line = ""
+    label_line = ""
+    heading_idx = -1
+
+    for idx, line in enumerate(lines):
+        if line.startswith("##") and "![](" not in line:
+            heading_line = line
+            heading_idx = idx
+    if heading_idx >= 0:
+        for line in lines[heading_idx + 1 :]:
+            lowered = line.lower()
+            if "/review/" in lowered:
+                break
+            if not performer_line and ("**" in line or "_" in line):
+                performer_line = line
+                continue
+            if performer_line and (re.fullmatch(r"\([^()]+\)", line) or lowered.startswith("label:")):
+                label_line = line
+                break
+
+    prose_lines: List[str] = []
+    if heading_idx >= 0:
+        for line in lines[heading_idx + 1 :]:
+            lowered = line.lower()
+            if "/review/" in lowered:
+                break
+            if line == performer_line or line == label_line:
+                continue
+            prose_lines.append(line)
+
+    composers, main_title, full_title = parse_heading_metadata(heading_line, album.title)
+    parsed_performers, parsed_ensembles, parsed_conductor, parsed_instruments, parsed_label = (
+        parse_performer_metadata(performer_line, label_line)
+    )
+
+    review_slug = extract_review_slug(subsection)
+    slug_phrases = build_slug_phrases(
+        review_slug,
+        [
+            *album.performers,
+            *album.ensembles,
+            album.conductor,
+            *parsed_performers,
+            *parsed_ensembles,
+            parsed_conductor,
+        ],
+    )
+    prose_work_hints = extract_italicized_phrases("\n".join(prose_lines))
+
+    title = main_title or album.title
+    works = merge_unique(
+        [
+            title,
+            full_title,
+            *album.works,
+            *slug_phrases,
+            *prose_work_hints,
+        ]
+    )
+    merged_composers = prune_composer_values([*composers, *album.composers], title, full_title)
+
+    performer_source = parsed_performers if parsed_performers else album.performers
+    ensemble_source = parsed_ensembles if parsed_ensembles else album.ensembles
+    if not parsed_performers:
+        performer_source = [*performer_source, *album.performers]
+    if not parsed_ensembles:
+        ensemble_source = [*ensemble_source, *album.ensembles]
+
+    merged_performers = prune_artist_values(
+        performer_source,
+        [*parsed_performers, *parsed_ensembles, parsed_conductor, *album.performers, *album.ensembles],
+        [*parsed_instruments, *album.instruments],
+    )
+    merged_ensembles = prune_artist_values(
+        ensemble_source,
+        [*parsed_performers, *parsed_ensembles, parsed_conductor, *album.performers, *album.ensembles],
+        [*parsed_instruments, *album.instruments],
+    )
+
+    return AlbumInput(
+        title=title,
+        composers=merged_composers,
+        performers=merged_performers,
+        ensembles=merged_ensembles,
+        conductor=parsed_conductor or album.conductor,
+        label=(
+            parsed_label
+            or clean_markdown_inline(re.sub(r"^Label:\s*", "", label_line, flags=re.IGNORECASE)).strip("()")
+            or album.label
+        ),
+        year=album.year,
+        works=works,
+        instruments=merge_unique([*parsed_instruments, *album.instruments]),
+        source_file=album.source_file,
+        source_line=album.source_line,
+        source_raw=album.source_raw,
+    )
+
+
 def score_hit(
     album: AlbumInput, hit: AlbumHit, weights: Dict[str, float]
 ) -> Tuple[float, Dict[str, float]]:
-    title_tokens = tokens_from_list([album.title] + album.works)
+    title_values = [album.title] + album.works
+    title_tokens = tokens_from_list(title_values)
+    generic_title = bool(title_tokens) and title_tokens.issubset(GENERIC_TITLE_TOKENS)
     composer_tokens = tokens_from_list(album.composers)
-    performer_tokens = tokens_from_list(album.performers)
-    ensemble_tokens = tokens_from_list(album.ensembles)
-    conductor_tokens = tokenize(album.conductor)
+    performer_tokens = artist_tokens_from_list(album.performers)
+    ensemble_tokens = artist_tokens_from_list(album.ensembles)
+    conductor_tokens = artist_tokens_from_list([album.conductor])
     instrument_tokens = normalize_instruments(album.instruments)
+    requested_numbers = extract_numeric_tokens(title_values)
 
     hit_title_tokens = tokenize(hit.title)
-    hit_artist_tokens = tokens_from_list(hit.artists)
+    hit_artist_tokens = artist_tokens_from_list(hit.artists)
     hit_all_tokens = hit_title_tokens | hit_artist_tokens
+    hit_numbers = extract_numeric_tokens([hit.title])
+    composer_phrase = phrase_overlap_score(album.composers, [hit.title, *hit.artists])
+    performer_phrase = phrase_overlap_score(album.performers, hit.artists)
+    ensemble_phrase = phrase_overlap_score(album.ensembles, hit.artists)
+    conductor_phrase = phrase_overlap_score([album.conductor], hit.artists)
 
     features = {
         "title": overlap_score(title_tokens, hit_title_tokens),
-        "composer": overlap_score(composer_tokens, hit_all_tokens),
-        "performer": overlap_score(performer_tokens, hit_all_tokens),
-        "ensemble": overlap_score(ensemble_tokens, hit_all_tokens),
-        "conductor": overlap_score(conductor_tokens, hit_all_tokens),
+        "composer": max(composer_phrase, overlap_score(composer_tokens, hit_all_tokens) * 0.6),
+        "performer": max(performer_phrase, overlap_score(performer_tokens, hit_all_tokens) * 0.6),
+        "ensemble": max(ensemble_phrase, overlap_score(ensemble_tokens, hit_all_tokens)),
+        "conductor": max(conductor_phrase, overlap_score(conductor_tokens, hit_all_tokens) * 0.6),
         "instrument": overlap_score(instrument_tokens, hit_title_tokens),
         "label": 0.0,
         "year": 0.0,
@@ -1064,7 +1607,34 @@ def score_hit(
     if album_year and hit_year and album_year == hit_year:
         features["year"] = 1.0
 
+    normalized_title = normalize(album.title)
+    normalized_hit_title = normalize(hit.title)
+    if normalized_title and normalized_hit_title:
+        if normalized_title in normalized_hit_title or normalized_hit_title in normalized_title:
+            features["title"] = max(features["title"], 0.95)
+
     score = sum(features[key] * weights.get(key, 0.0) for key in features)
+    artist_support = max(features["performer"], features["ensemble"], features["conductor"])
+    if performer_tokens or ensemble_tokens or conductor_tokens:
+        if artist_support == 0:
+            score *= 0.45
+        elif artist_support < 0.34:
+            score *= 0.7
+
+    if composer_tokens and features["composer"] == 0 and artist_support == 0:
+        score *= 0.8
+    elif composer_tokens and features["composer"] == 0 and generic_title:
+        score *= 0.55
+
+    if label_norm and features["label"] == 0 and artist_support == 0:
+        score *= 0.85
+
+    if requested_numbers and hit_numbers:
+        if not (requested_numbers & hit_numbers):
+            score *= 0.55
+        elif len(requested_numbers) > 1 and not requested_numbers.issubset(hit_numbers):
+            score *= 0.8
+
     return score, features
 
 
@@ -1117,20 +1687,32 @@ def build_query_candidates(
         add_work_variants(work)
 
     for composer in album.composers:
+        add_query("composer", composer)
         short_title = " ".join(split_tokens(album.title)[:4]) if album.title else ""
         if short_title:
             add_query("composer_title", f"{composer} {short_title}")
             add_query("composer_title", f"{short_title} {composer}")
+        if album.title:
+            add_query("composer_title", f"{composer} {album.title}")
+            add_query("composer_title", f"{album.title} {composer}")
         for work in album.works:
             work_short = " ".join(split_tokens(work)[:4]) if work else ""
             if work_short:
                 add_query("composer_work", f"{composer} {work_short}")
                 add_query("composer_work", f"{work_short} {composer}")
+            if work:
+                add_query("composer_work", f"{composer} {work}")
+                add_query("composer_work", f"{work} {composer}")
 
     for performer in album.performers:
+        add_query("performer", performer)
         short_title = " ".join(split_tokens(album.title)[:4]) if album.title else ""
         if short_title:
+            add_query("performer_title", f"{performer} {short_title}")
             add_query("performer_title", f"{short_title} {performer}")
+        if album.title:
+            add_query("performer_title", f"{performer} {album.title}")
+            add_query("performer_title", f"{album.title} {performer}")
         for instrument in album.instruments:
             add_query("performer_instrument", f"{performer} {instrument}")
         for ensemble in album.ensembles:
@@ -1141,16 +1723,32 @@ def build_query_candidates(
             add_query("performer_work", f"{performer} {work}")
 
     for ensemble in album.ensembles:
+        add_query("ensemble", ensemble)
         short_title = " ".join(split_tokens(album.title)[:4]) if album.title else ""
         if short_title:
+            add_query("ensemble_title", f"{ensemble} {short_title}")
             add_query("ensemble_title", f"{short_title} {ensemble}")
+        if album.title:
+            add_query("ensemble_title", f"{ensemble} {album.title}")
+        for composer in album.composers:
+            add_query("ensemble_title", f"{ensemble} {composer}")
+        for work in album.works:
+            add_query("ensemble_title", f"{ensemble} {work}")
 
     if album.conductor:
+        add_query("conductor", album.conductor)
         short_title = " ".join(split_tokens(album.title)[:4]) if album.title else ""
         if short_title:
+            add_query("conductor_title", f"{album.conductor} {short_title}")
             add_query("conductor_title", f"{short_title} {album.conductor}")
+        if album.title:
+            add_query("conductor_title", f"{album.conductor} {album.title}")
         for composer in album.composers:
             add_query("conductor_composer", f"{composer} {album.conductor}")
+        for ensemble in album.ensembles:
+            add_query("conductor_composer", f"{album.conductor} {ensemble}")
+        for work in album.works:
+            add_query("conductor_title", f"{album.conductor} {work}")
 
     for instrument in album.instruments:
         short_title = " ".join(split_tokens(album.title)[:4]) if album.title else ""
@@ -1159,6 +1757,10 @@ def build_query_candidates(
 
     if album.label and album.title:
         add_query("label_title", f"{album.title} {album.label}")
+        for performer in album.performers:
+            add_query("label_title", f"{performer} {album.label}")
+        for ensemble in album.ensembles:
+            add_query("label_title", f"{ensemble} {album.label}")
 
     return candidates
 
@@ -1186,6 +1788,24 @@ def weighted_sample(
     return selected
 
 
+def query_family(template: str) -> str:
+    if template.startswith("performer"):
+        return "performer"
+    if template.startswith("ensemble"):
+        return "ensemble"
+    if template.startswith("composer"):
+        return "composer"
+    if template.startswith("conductor"):
+        return "conductor"
+    if template.startswith("instrument"):
+        return "instrument"
+    if template.startswith("label"):
+        return "label"
+    if template.startswith("work"):
+        return "work"
+    return "title"
+
+
 def select_query_candidates(
     candidates: List[QueryCandidate],
     template_weights: Dict[str, float],
@@ -1195,14 +1815,81 @@ def select_query_candidates(
     if not max_queries or len(candidates) <= max_queries:
         return candidates
 
-    weights: List[float] = []
+    ranked: List[Tuple[float, int, int, QueryCandidate]] = []
     for candidate in candidates:
         base = template_weights.get(candidate.template, 0.5)
         if candidate.template.startswith("performer"):
             base *= PERFORMER_WEIGHT_BOOST
-        weights.append(base)
+        token_count = len(split_tokens(candidate.query))
+        compactness = -abs(token_count - 5)
+        brevity = -len(candidate.query)
+        ranked.append((base, compactness, brevity, candidate))
 
-    return weighted_sample(candidates, weights, max_queries, rng)
+    ranked.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+    selected: List[QueryCandidate] = []
+    seen_queries: set[str] = set()
+    family_limits = {
+        "title": 2,
+        "work": 2,
+        "performer": 4,
+        "ensemble": 2,
+        "composer": 3,
+        "conductor": 2,
+        "label": 1,
+        "instrument": 1,
+    }
+    family_template_limits = {
+        "performer": {
+            "performer": 1,
+            "performer_composer": 1,
+            "performer_ensemble": 1,
+            "performer_title": 2,
+            "performer_work": 1,
+            "performer_instrument": 1,
+        },
+        "composer": {
+            "composer": 1,
+            "composer_title": 1,
+            "composer_work": 2,
+        },
+        "ensemble": {
+            "ensemble": 1,
+            "ensemble_title": 2,
+        },
+        "conductor": {
+            "conductor": 1,
+            "conductor_title": 1,
+            "conductor_composer": 1,
+        },
+    }
+
+    for family, family_limit in family_limits.items():
+        for _, _, _, candidate in ranked:
+            if len(selected) >= max_queries:
+                break
+            if query_family(candidate.template) != family:
+                continue
+            if candidate.query in seen_queries:
+                continue
+            template_limit = family_template_limits.get(family, {}).get(candidate.template)
+            if template_limit is not None:
+                already = sum(1 for item in selected if item.template == candidate.template)
+                if already >= template_limit:
+                    continue
+            selected.append(candidate)
+            seen_queries.add(candidate.query)
+            if sum(1 for item in selected if query_family(item.template) == family) >= family_limit:
+                break
+
+    for _, _, _, candidate in ranked:
+        if len(selected) >= max_queries:
+            break
+        if candidate.query in seen_queries:
+            continue
+        selected.append(candidate)
+        seen_queries.add(candidate.query)
+
+    return selected
 
 
 def parse_list(value) -> List[str]:
@@ -1464,6 +2151,13 @@ def candidate_to_dict(candidate: Candidate) -> Dict:
     }
 
 
+def query_candidate_to_dict(candidate: QueryCandidate) -> Dict:
+    return {
+        "template": candidate.template,
+        "query": candidate.query,
+    }
+
+
 def build_record_id(album: AlbumInput) -> str:
     return "|".join(
         [
@@ -1472,6 +2166,190 @@ def build_record_id(album: AlbumInput) -> str:
             album.title or "",
         ]
     )
+
+
+def is_markdown_separator(line: str) -> bool:
+    return bool(re.fullmatch(r"\*\s+\*\s+\*", line.strip()))
+
+
+def resolve_source_path(source_file: str, input_path: Path) -> Optional[Path]:
+    if not source_file:
+        return None
+
+    raw_path = Path(source_file)
+    candidates: List[Path] = []
+    if raw_path.is_absolute():
+        candidates.append(raw_path)
+    else:
+        candidates.extend(
+            [
+                Path.cwd() / raw_path,
+                input_path.parent / raw_path,
+                input_path.parent.parent / raw_path,
+            ]
+        )
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def extract_source_subsection(source_path: Optional[Path], source_line: Optional[int]) -> str:
+    if not source_path or not source_line or not source_path.exists():
+        return ""
+
+    lines = source_path.read_text(encoding="utf-8").splitlines()
+    idx = max(0, min(len(lines) - 1, int(source_line) - 1))
+
+    start = idx
+    while start > 0 and not is_markdown_separator(lines[start - 1]):
+        start -= 1
+
+    end = idx
+    while end < len(lines) and not is_markdown_separator(lines[end]):
+        end += 1
+
+    return "\n".join(lines[start:end]).strip()
+
+
+def build_source_payload(album: AlbumInput, input_path: Path) -> Dict:
+    source_path = resolve_source_path(album.source_file, input_path)
+    payload = {
+        "file": album.source_file,
+        "line": album.source_line,
+        "raw": album.source_raw,
+        "subsection": extract_source_subsection(source_path, album.source_line),
+    }
+    if source_path:
+        payload["resolved_path"] = str(source_path)
+    return payload
+
+
+def search_candidates_for_album(
+    client: TidalClient,
+    album: AlbumInput,
+    weights: Dict[str, float],
+    selected_queries: List[QueryCandidate],
+    limit: int,
+    sleep_seconds: float,
+) -> List[Candidate]:
+    candidates_map: Dict[str, Candidate] = {}
+
+    for query_candidate in selected_queries:
+        hits = client.search_albums(query_candidate.query, limit=limit)
+        for hit in hits:
+            if hit.id in candidates_map:
+                if query_candidate.query not in candidates_map[hit.id].queries:
+                    candidates_map[hit.id].queries.append(query_candidate.query)
+                continue
+
+            score, features = score_hit(album, hit, weights)
+            candidates_map[hit.id] = Candidate(
+                id=hit.id,
+                title=hit.title,
+                artists=hit.artists,
+                release_date=hit.release_date,
+                copyright=hit.copyright,
+                score=score,
+                features=features,
+                queries=[query_candidate.query],
+            )
+
+        if sleep_seconds:
+            time.sleep(sleep_seconds)
+
+    return sorted(
+        candidates_map.values(),
+        key=lambda c: (c.score, len(c.queries), c.title.lower()),
+        reverse=True,
+    )
+
+
+def choose_auto_candidate(
+    ordered: List[Candidate],
+    score_threshold: float,
+    recent_year: int,
+    recent_threshold: float,
+) -> Tuple[Optional[Candidate], str]:
+    if not ordered:
+        return None, ""
+
+    top = ordered[0]
+    title_signal = top.features.get("title", 0.0)
+    artist_signal = max(
+        top.features.get("performer", 0.0),
+        top.features.get("ensemble", 0.0),
+        top.features.get("conductor", 0.0),
+    )
+    label_signal = top.features.get("label", 0.0)
+    if top.score >= score_threshold:
+        return top, f"score>={score_threshold:.2f}"
+
+    release_year = extract_year(top.release_date) or ""
+    if release_year == str(recent_year) and top.score > recent_threshold:
+        if title_signal >= 0.25:
+            return top, f"release_year=={recent_year} and score>{recent_threshold:.2f}"
+        if artist_signal >= 0.75 and label_signal >= 1.0:
+            return top, (
+                f"release_year=={recent_year} and score>{recent_threshold:.2f} "
+                "with strong artist+label match"
+            )
+
+    return None, ""
+
+
+def build_record(
+    album: AlbumInput,
+    input_path: Path,
+    record_id: str,
+    ordered: List[Candidate],
+    selected_queries: List[QueryCandidate],
+    chosen: Optional[Candidate],
+    choice: Dict[str, object],
+    weights: Dict[str, float],
+    args: argparse.Namespace,
+    auto_reason: str,
+    mode: str,
+) -> Dict:
+    top_candidate = ordered[0] if ordered else None
+    return {
+        "record_id": record_id,
+        "source": build_source_payload(album, input_path),
+        "album": album_to_dict(album),
+        "queries": [candidate.query for candidate in selected_queries],
+        "query_candidates": [query_candidate_to_dict(candidate) for candidate in selected_queries],
+        "candidates": [candidate_to_dict(candidate) for candidate in ordered],
+        "top_candidates": [candidate_to_dict(candidate) for candidate in ordered[: args.top]],
+        "choice": choice,
+        "chosen": candidate_to_dict(chosen) if chosen else None,
+        "review": {
+            "mode": mode,
+            "top_score": round(top_candidate.score, 3) if top_candidate else 0.0,
+            "top_release_year": extract_year(top_candidate.release_date) if top_candidate else "",
+            "candidate_count": len(ordered),
+            "auto_reason": auto_reason,
+            "auto_threshold": args.auto_threshold,
+            "recent_year": args.auto_recent_year,
+            "recent_threshold": args.auto_recent_threshold,
+        },
+        "meta": {
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "weights": weights,
+            "limit": args.limit,
+            "max_queries": args.max_queries,
+        },
+    }
+
+
+def summarize_review_records(records: List[Dict]) -> Dict[str, int]:
+    summary = {"auto_selected": 0, "selected": 0, "needs_review": 0, "none": 0, "skip": 0}
+    for entry in records:
+        choice = entry.get("choice") or {}
+        status = str(choice.get("status") or "")
+        if status in summary:
+            summary[status] += 1
+    return summary
 
 
 def load_existing_output(path: Path) -> Tuple[List[Dict], Dict[str, Dict]]:
@@ -1794,6 +2672,23 @@ def parse_args() -> argparse.Namespace:
         default=0.7,
         help="Auto-select when top score >= threshold",
     )
+    parser.add_argument(
+        "--auto-recent-year",
+        type=int,
+        default=2025,
+        help="Also auto-select when the top release year matches this year and score clears the recent threshold",
+    )
+    parser.add_argument(
+        "--auto-recent-threshold",
+        type=float,
+        default=0.5,
+        help="Secondary auto-select threshold when the top release year matches --auto-recent-year",
+    )
+    parser.add_argument(
+        "--batch-review",
+        action="store_true",
+        help="Collect candidates for every album first and mark unresolved entries as needs_review without prompting",
+    )
     parser.add_argument("--training-in", type=Path, help="Load training model JSON")
     parser.add_argument("--training-out", type=Path, help="Write training model JSON")
     parser.add_argument("--train-coverage", action="store_true", help="Run coverage training")
@@ -1809,7 +2704,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if not args.train_coverage and not sys.stdin.isatty():
+    if not args.train_coverage and not args.batch_review and not sys.stdin.isatty():
         raise SystemExit("Interactive mode requires a TTY.")
     if not args.input_path.exists():
         raise SystemExit(f"Input JSON not found: {args.input_path}")
@@ -1867,18 +2762,23 @@ def main() -> int:
     stop_idx = args.stop if args.stop else total
     stop_idx = min(stop_idx, total)
 
-    for idx, album in enumerate(albums, start=1):
+    for idx, raw_album in enumerate(albums, start=1):
         if idx < start_idx or idx > stop_idx:
             continue
 
-        record_id = build_record_id(album)
+        record_id = build_record_id(raw_album)
         existing = by_id.get(record_id)
         if args.resume and existing:
             status = (existing.get("choice") or {}).get("status", "")
             if status in {"selected", "none", "auto_selected"}:
                 continue
 
-        print_album_header(album, idx, total)
+        album = enrich_album_from_source(raw_album, args.input_path)
+
+        if args.batch_review:
+            print(f"\n[{idx}/{total}] {album.title}")
+        else:
+            print_album_header(album, idx, total)
 
         query_candidates = build_query_candidates(album, rng, shuffle_count=args.shuffle_count)
         selected_queries = select_query_candidates(
@@ -1887,52 +2787,46 @@ def main() -> int:
             max_queries,
             rng,
         )
-        queries = [candidate.query for candidate in selected_queries]
         if args.print_queries:
             for candidate in selected_queries:
                 print(f"  [{candidate.template}] {candidate.query}")
 
-        candidates_map: Dict[str, Candidate] = {}
-        for query in queries:
-            hits = client.search_albums(query, limit=args.limit)
-            for hit in hits:
-                if hit.id in candidates_map:
-                    if query not in candidates_map[hit.id].queries:
-                        candidates_map[hit.id].queries.append(query)
-                    continue
+        ordered = search_candidates_for_album(
+            client=client,
+            album=album,
+            weights=weights,
+            selected_queries=selected_queries,
+            limit=args.limit,
+            sleep_seconds=args.sleep,
+        )
+        candidates_map = {candidate.id: candidate for candidate in ordered}
 
-                score, features = score_hit(album, hit, weights)
-                candidates_map[hit.id] = Candidate(
-                    id=hit.id,
-                    title=hit.title,
-                    artists=hit.artists,
-                    release_date=hit.release_date,
-                    copyright=hit.copyright,
-                    score=score,
-                    features=features,
-                    queries=[query],
-                )
-
-            if args.sleep:
-                time.sleep(args.sleep)
-
-        ordered = sorted(
-            candidates_map.values(),
-            key=lambda c: (c.score, len(c.queries), c.title.lower()),
-            reverse=True,
+        auto_selected, auto_reason = choose_auto_candidate(
+            ordered=ordered,
+            score_threshold=args.auto_threshold,
+            recent_year=args.auto_recent_year,
+            recent_threshold=args.auto_recent_threshold,
         )
 
-        if ordered and ordered[0].score >= args.auto_threshold:
+        if auto_selected:
             ensure_details(client, ordered, 1, args.detail_sleep)
             action = "auto"
-            selected = ordered[0]
+            selected = auto_selected
             print("\nAuto-selected:")
             print(f"  {format_candidate_line(selected, 1)}")
+            print(f"  reason: {auto_reason}")
+        elif args.batch_review:
+            action = "needs_review"
+            selected = None
+            print(
+                "Needs review:"
+                f" top score={ordered[0].score:.3f}" if ordered else "Needs review: no candidates"
+            )
         else:
             action, selected = prompt_for_choice(
                 album,
                 ordered,
-                queries,
+                [candidate.query for candidate in selected_queries],
                 client,
                 args.top,
                 args.detail_sleep,
@@ -1955,6 +2849,8 @@ def main() -> int:
             choice["status"] = "auto_selected"
             choice["tidal_id"] = selected.id
             chosen = selected
+        elif action == "needs_review":
+            choice["status"] = "needs_review"
         elif action == "none":
             choice["status"] = "none"
         elif action == "select" and selected:
@@ -2005,25 +2901,19 @@ def main() -> int:
             )
             chosen = selected
 
-        record = {
-            "record_id": record_id,
-            "source": {
-                "file": album.source_file,
-                "line": album.source_line,
-                "raw": album.source_raw,
-            },
-            "album": album_to_dict(album),
-            "queries": queries,
-            "candidates": [candidate_to_dict(candidate) for candidate in ordered],
-            "choice": choice,
-            "chosen": candidate_to_dict(chosen) if chosen else None,
-            "meta": {
-                "generated_at": datetime.now().isoformat(timespec="seconds"),
-                "weights": weights,
-                "limit": args.limit,
-                "max_queries": args.max_queries,
-            },
-        }
+        record = build_record(
+            album=album,
+            input_path=args.input_path,
+            record_id=record_id,
+            ordered=ordered,
+            selected_queries=selected_queries,
+            chosen=chosen,
+            choice=choice,
+            weights=weights,
+            args=args,
+            auto_reason=auto_reason,
+            mode="batch_review" if args.batch_review else "interactive",
+        )
 
         if existing:
             for i, entry in enumerate(records):
@@ -2036,6 +2926,14 @@ def main() -> int:
 
         save_output(output_path, records)
         print(f"Saved {record_id} -> {output_path}")
+
+    if args.batch_review:
+        summary = summarize_review_records(records)
+        print("\nBatch review summary:")
+        for key in ["auto_selected", "needs_review", "selected", "none", "skip"]:
+            print(f"  {key}: {summary.get(key, 0)}")
+        print(f"Done. Output written to {output_path}")
+        return 0
 
     selected_entries, unmatched = collect_selected_album_ids(records)
     if not selected_entries:
