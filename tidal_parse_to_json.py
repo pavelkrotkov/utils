@@ -13,63 +13,18 @@ import argparse
 import email
 import json
 import re
-import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 from bs4 import BeautifulSoup
-
-
-ENSEMBLE_KEYWORDS = [
-    "orchestra",
-    "philharmonic",
-    "symphony",
-    "ensemble",
-    "quartet",
-    "trio",
-    "quintet",
-    "choir",
-    "chorus",
-    "consort",
-    "players",
-    "sinfonia",
-    "academy",
-    "capella",
-    "coro",
-    "chamber",
-    "opera",
-    "filharmonica",
-    "radio",
-]
-
-INSTRUMENT_ABBREVS = {
-    "pf",
-    "vn",
-    "va",
-    "vc",
-    "db",
-    "fl",
-    "ob",
-    "cl",
-    "bn",
-    "hn",
-    "tpt",
-    "trb",
-    "hp",
-    "org",
-    "hpd",
-    "pno",
-    "gtr",
-    "perc",
-    "sop",
-    "mez",
-    "ten",
-    "bar",
-    "bass",
-}
-
-SKIP_SEGMENTS = {"sols", "sols.", "soloists", "soloist"}
+from tidal_pipeline.models import INSTRUMENT_ABBREVS, SKIP_SEGMENTS
+from tidal_pipeline.normalize import (
+    extract_instruments,
+    is_markdown_separator,
+    looks_like_ensemble,
+    normalize,
+)
 
 
 @dataclass
@@ -82,13 +37,6 @@ class Candidate:
     raw_text: str = ""
     line_number: Optional[int] = None
     source_file: str = ""
-
-
-def normalize(text: str) -> str:
-    if not text:
-        return ""
-    text = unicodedata.normalize("NFKD", text).encode("ASCII", "ignore").decode("ASCII")
-    return text.lower()
 
 
 def should_skip_candidate(work_title: str) -> bool:
@@ -221,10 +169,6 @@ def parse_mhtml(file_path: Path) -> Tuple[str, List[Candidate]]:
     return page_title, candidates
 
 
-def is_separator_line(line: str) -> bool:
-    return bool(re.fullmatch(r"\*\s+\*\s+\*", line.strip()))
-
-
 def is_review_line(line: str) -> bool:
     lowered = line.lower()
     return "/review/" in lowered and "](" in line
@@ -286,7 +230,7 @@ def candidate_from_markdown_block(
             continue
         if not in_detail_section:
             continue
-        if is_review_line(stripped) or is_separator_line(stripped):
+        if is_review_line(stripped) or is_markdown_separator(stripped):
             break
         if stripped.startswith("##"):
             break
@@ -340,7 +284,7 @@ def parse_markdown_blocks(file_path: Path) -> Tuple[str, List[Candidate]]:
         stripped = line.strip()
         if stripped.startswith("## Related Reviews") or stripped.startswith("## Related News"):
             break
-        if is_separator_line(stripped):
+        if is_markdown_separator(stripped):
             if current:
                 blocks.append(current)
                 current = []
@@ -495,20 +439,6 @@ def extract_candidates(file_path: Path) -> Tuple[str, List[Candidate]]:
     raise ValueError(f"Unsupported file extension: {ext}")
 
 
-def extract_instruments(text: str) -> List[str]:
-    instruments: List[str] = []
-    for token in re.split(r"\s+", text):
-        raw = token.strip().strip(",;")
-        if raw and raw.lower() in INSTRUMENT_ABBREVS:
-            instruments.append(raw)
-    return instruments
-
-
-def is_ensemble(segment: str) -> bool:
-    lowered = segment.lower()
-    return any(keyword in lowered for keyword in ENSEMBLE_KEYWORDS)
-
-
 def split_performer_hint(text: str) -> Tuple[List[str], List[str], str, List[str]]:
     if not text:
         return [], [], "", []
@@ -521,7 +451,7 @@ def split_performer_hint(text: str) -> Tuple[List[str], List[str], str, List[str
     if len(parts) > 1:
         candidate = parts[-1]
         left_candidate = " / ".join(parts[:-1]).strip()
-        if candidate and not is_ensemble(candidate):
+        if candidate and not looks_like_ensemble(candidate):
             conductor = candidate
             left = left_candidate
 
@@ -538,7 +468,7 @@ def split_performer_hint(text: str) -> Tuple[List[str], List[str], str, List[str
                     performers.append(" ".join(current))
                     current = []
                 continue
-            if any(keyword in lower for keyword in ENSEMBLE_KEYWORDS):
+            if looks_like_ensemble(token):
                 ensemble_tokens = current + tokens[idx:]
                 ensemble = " ".join(ensemble_tokens).strip()
                 if ensemble:
@@ -560,7 +490,7 @@ def split_performer_hint(text: str) -> Tuple[List[str], List[str], str, List[str
     for segment in segments:
         if segment.lower() in SKIP_SEGMENTS:
             continue
-        if is_ensemble(segment):
+        if looks_like_ensemble(segment):
             ensembles.append(segment)
         else:
             if ensembles and len(segment.split()) <= 2:
