@@ -47,12 +47,7 @@ def normalize(text: str) -> str:
 def normalize_with_symbols(text: str) -> str:
     if not text:
         return ""
-    text = (
-        text.replace("’", "'")
-        .replace("‘", "'")
-        .replace("“", '"')
-        .replace("”", '"')
-    )
+    text = text.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"')
     text = unicodedata.normalize("NFKD", text).encode("ASCII", "ignore").decode("ASCII")
     text = text.lower()
     text = re.sub(r"\s+", " ", text).strip()
@@ -183,4 +178,3 @@ def strip_generic_prefixes(text: str) -> str:
 
 def is_markdown_separator(line: str) -> bool:
     return bool(SEPARATOR_RE.fullmatch((line or "").strip()))
-
