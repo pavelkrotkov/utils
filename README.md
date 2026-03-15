@@ -142,6 +142,26 @@ pipx run ./tidal_eval.py album-debug/best2025.truth.json --min-precision 0.90
 
 Pass `--weights custom.json` to evaluate alternative scoring weights.
 
+#### Improvement workflow
+
+The truth file (`best2025.truth.json`) is a frozen gold set with cached
+candidates and ground-truth labels. What you can improve determines which
+tool to use:
+
+| What you're tuning | Tool | API calls? |
+|---|---|---|
+| Scoring weights / features | `tidal_eval.py` | No |
+| Query generation / candidate recall | `tidal_match_from_json.py --batch-review` | Yes |
+| Truth labels (new albums) | `tidal_match_from_json.py` | Yes |
+
+Re-scoring is deterministic — `tidal_eval.py` re-ranks the cached candidates
+without touching the API. If you improve query generation (surfacing better
+candidates), re-run the matcher to refresh the candidate pool, re-label any
+changed results, then re-eval.
+
+Treat the truth file as read-only unless you deliberately want to extend or
+refresh the ground truth.
+
 #### Formal Matching Pipeline
 
 See [TIDAL_ARCHITECTURE.md](TIDAL_ARCHITECTURE.md) for the current formal
