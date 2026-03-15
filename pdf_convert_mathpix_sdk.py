@@ -6,8 +6,8 @@
 Convert a local PDF to Markdown (with LaTeX math) using Mathpix.
 
 Usage:
-    # Run with pipx (recommended):
-    pipx run ./pdf_convert_mathpix_sdk.py input.pdf
+    # Run with uv (recommended):
+    uv run ./pdf_convert_mathpix_sdk.py input.pdf
 
     # Standard execution:
     ./pdf_convert_mathpix_sdk.py input.pdf -o output.md
