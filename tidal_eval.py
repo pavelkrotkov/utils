@@ -20,7 +20,7 @@ import argparse
 import json
 import statistics
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from tidal_pipeline.client import AlbumHit
 from tidal_pipeline.match import (
@@ -31,12 +31,13 @@ from tidal_pipeline.match import (
     score_candidate,
     summarize_review_records,
 )
-from tidal_pipeline.models import AlbumInput, Candidate, DEFAULT_WEIGHTS
+from tidal_pipeline.models import AlbumInput, Candidate
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def candidate_to_album_hit(c: dict) -> AlbumHit:
     """Reconstruct an AlbumHit from a cached truth-record candidate."""
@@ -62,18 +63,20 @@ def rescore_candidates(
     for c in raw_candidates:
         hit = candidate_to_album_hit(c)
         score, features = score_candidate(album, hit, weights)
-        results.append(Candidate(
-            id=hit.id,
-            title=hit.title,
-            artists=hit.artists,
-            release_date=hit.release_date,
-            copyright=hit.copyright,
-            score=score,
-            features=features,
-            queries=c.get("queries", []),
-            track_count=c.get("track_count"),
-            details_fetched=c.get("details_fetched", False),
-        ))
+        results.append(
+            Candidate(
+                id=hit.id,
+                title=hit.title,
+                artists=hit.artists,
+                release_date=hit.release_date,
+                copyright=hit.copyright,
+                score=score,
+                features=features,
+                queries=c.get("queries", []),
+                track_count=c.get("track_count"),
+                details_fetched=c.get("details_fetched", False),
+            )
+        )
     results.sort(key=lambda x: x.score, reverse=True)
     return results
 
@@ -82,14 +85,25 @@ def rescore_candidates(
 # Per-record evaluation
 # ---------------------------------------------------------------------------
 
+
 class RecordResult:
     """Evaluation outcome for a single truth record."""
 
     __slots__ = (
-        "record_id", "title", "ground_truth_id", "ground_truth_status",
-        "original_score", "new_score", "new_rank", "candidate_count",
-        "top_id", "top_score", "auto_id", "auto_reason",
-        "top1_correct", "auto_correct",
+        "record_id",
+        "title",
+        "ground_truth_id",
+        "ground_truth_status",
+        "original_score",
+        "new_score",
+        "new_rank",
+        "candidate_count",
+        "top_id",
+        "top_score",
+        "auto_id",
+        "auto_reason",
+        "top1_correct",
+        "auto_correct",
     )
 
     def __init__(
@@ -119,7 +133,7 @@ class RecordResult:
         self.top_score = top_score
         self.auto_id = auto_id
         self.auto_reason = auto_reason
-        self.top1_correct = (top_id == ground_truth_id)
+        self.top1_correct = top_id == ground_truth_id
         self.auto_correct = (auto_id == ground_truth_id) if auto_id else False
 
 
@@ -167,7 +181,10 @@ def evaluate_record(
 
     # Auto-selection replay
     auto_candidate, auto_reason = choose_auto_candidate(
-        rescored, score_threshold, recent_year, recent_threshold,
+        rescored,
+        score_threshold,
+        recent_year,
+        recent_threshold,
     )
     auto_id = auto_candidate.id if auto_candidate else None
 
@@ -192,6 +209,7 @@ def evaluate_record(
 # ---------------------------------------------------------------------------
 # Aggregate metrics
 # ---------------------------------------------------------------------------
+
 
 class EvalReport:
     """Aggregate evaluation metrics."""
@@ -268,23 +286,30 @@ class EvalReport:
 # Display
 # ---------------------------------------------------------------------------
 
+
 def print_report(report: EvalReport, verbose: bool = False) -> None:
     stats = report.score_stats()
 
-    print(f"\n{'='*60}")
-    print(f"  TIDAL Matching Evaluation Report")
-    print(f"{'='*60}")
+    print(f"\n{'=' * 60}")
+    print("  TIDAL Matching Evaluation Report")
+    print(f"{'=' * 60}")
     print(f"  Records evaluated:       {report.n}")
-    print(f"  Precision@1:             {report.precision_at_1:.1%}  "
-          f"({sum(1 for r in report.results if r.top1_correct)}/{report.n})")
+    print(
+        f"  Precision@1:             {report.precision_at_1:.1%}  "
+        f"({sum(1 for r in report.results if r.top1_correct)}/{report.n})"
+    )
     print(f"  MRR:                     {report.mrr:.4f}")
-    print(f"  Auto-select coverage:    {report.auto_select_coverage:.1%}  "
-          f"({sum(1 for r in report.results if r.auto_id is not None)}/{report.n})")
+    print(
+        f"  Auto-select coverage:    {report.auto_select_coverage:.1%}  "
+        f"({sum(1 for r in report.results if r.auto_id is not None)}/{report.n})"
+    )
     print(f"  Auto-select accuracy:    {report.auto_select_accuracy:.1%}")
-    print(f"  Auto-select recall:      {report.auto_select_recall:.1%}  "
-          f"({sum(1 for r in report.results if r.auto_correct)}/{report.n})")
-    print(f"{'─'*60}")
-    print(f"  Score distribution (correct candidate):")
+    print(
+        f"  Auto-select recall:      {report.auto_select_recall:.1%}  "
+        f"({sum(1 for r in report.results if r.auto_correct)}/{report.n})"
+    )
+    print(f"{'─' * 60}")
+    print("  Score distribution (correct candidate):")
     print(f"    min:    {stats['min']:.4f}")
     print(f"    median: {stats['median']:.4f}")
     print(f"    mean:   {stats['mean']:.4f}")
@@ -293,28 +318,30 @@ def print_report(report: EvalReport, verbose: bool = False) -> None:
     regressions = report.regressions
     lost = report.lost
     if regressions or lost:
-        print(f"{'─'*60}")
+        print(f"{'─' * 60}")
         print(f"  Regressions:  {len(regressions)}  |  Lost:  {len(lost)}")
         for r in regressions:
             delta = r.new_score - r.original_score
             sign = "+" if delta >= 0 else ""
-            print(f"    rank {r.new_rank:>3}  score {r.new_score:.3f} ({sign}{delta:.3f})  {r.title}")
+            print(
+                f"    rank {r.new_rank:>3}  score {r.new_score:.3f} ({sign}{delta:.3f})  {r.title}"
+            )
         for r in lost:
             print(f"    LOST  (was {r.original_score:.3f})  {r.title}")
     else:
-        print(f"{'─'*60}")
-        print(f"  No regressions.")
+        print(f"{'─' * 60}")
+        print("  No regressions.")
 
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     if verbose:
         print_verbose(report)
 
 
 def print_verbose(report: EvalReport) -> None:
-    print(f"{'─'*80}")
-    print(f"  Per-album detail")
-    print(f"{'─'*80}")
+    print(f"{'─' * 80}")
+    print("  Per-album detail")
+    print(f"{'─' * 80}")
     for r in sorted(report.results, key=lambda x: x.new_rank if x.new_rank > 0 else 9999):
         ok = "ok" if r.top1_correct else "MISS"
         auto = "auto" if r.auto_correct else ("auto-wrong" if r.auto_id else "no-auto")
@@ -371,33 +398,46 @@ def print_json_report(report: EvalReport) -> None:
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Offline evaluation of TIDAL matching quality against a truth file.",
     )
     p.add_argument("truth_file", type=Path, help="Path to truth JSON file")
     p.add_argument(
-        "--weights", type=Path, default=None,
+        "--weights",
+        type=Path,
+        default=None,
         help="Path to scoring weights JSON (uses defaults if omitted)",
     )
     p.add_argument(
-        "--threshold", type=float, default=0.85,
+        "--threshold",
+        type=float,
+        default=0.85,
         help="Auto-select score threshold (default: 0.85)",
     )
     p.add_argument(
-        "--recent-year", type=int, default=2025,
+        "--recent-year",
+        type=int,
+        default=2025,
         help="Recent release year for relaxed threshold (default: 2025)",
     )
     p.add_argument(
-        "--recent-threshold", type=float, default=0.50,
+        "--recent-threshold",
+        type=float,
+        default=0.50,
         help="Relaxed threshold for recent releases (default: 0.50)",
     )
     p.add_argument(
-        "--min-precision", type=float, default=None,
+        "--min-precision",
+        type=float,
+        default=None,
         help="Exit non-zero if precision@1 drops below this value",
     )
     p.add_argument(
-        "--min-recall", type=float, default=None,
+        "--min-recall",
+        type=float,
+        default=None,
         help="Exit non-zero if auto-select recall drops below this value",
     )
     p.add_argument("--verbose", "-v", action="store_true", help="Show per-album detail")
@@ -415,14 +455,17 @@ def main() -> int:
     if not args.json:
         total = sum(summary.values())
         print(f"Loaded {total} truth records from {args.truth_file}")
-        print(f"  auto_selected={summary['auto_selected']}  selected={summary['selected']}  "
-              f"needs_review={summary['needs_review']}  skip={summary['skip']}  none={summary['none']}")
-        print(f"Evaluating records with status in {{selected, auto_selected}}...")
+        print(
+            f"  auto_selected={summary['auto_selected']}  selected={summary['selected']}  "
+            f"needs_review={summary['needs_review']}  skip={summary['skip']}  none={summary['none']}"
+        )
+        print("Evaluating records with status in {selected, auto_selected}...")
 
     results: List[RecordResult] = []
     for record in records:
         result = evaluate_record(
-            record, weights,
+            record,
+            weights,
             score_threshold=args.threshold,
             recent_year=args.recent_year,
             recent_threshold=args.recent_threshold,
@@ -445,7 +488,9 @@ def main() -> int:
         exit_code = 1
     if args.min_recall is not None and report.auto_select_recall < args.min_recall:
         if not args.json:
-            print(f"FAIL: auto-select recall {report.auto_select_recall:.4f} < {args.min_recall:.4f}")
+            print(
+                f"FAIL: auto-select recall {report.auto_select_recall:.4f} < {args.min_recall:.4f}"
+            )
         exit_code = 1
 
     return exit_code

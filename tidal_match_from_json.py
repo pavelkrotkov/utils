@@ -20,7 +20,6 @@ from typing import Dict, List, Optional, Tuple
 from tidal_pipeline.client import (
     AlbumDetail,
     AlbumHit,
-    TIDAL_API_BASE,
     TIDAL_COUNTRY_CODE,
     TOKEN_FILE_DIR,
     TOKEN_FILE_NAME,
@@ -52,7 +51,6 @@ from tidal_pipeline.models import (
     Candidate,
     DEFAULT_TEMPLATE_WEIGHTS,
 )
-from tidal_pipeline.normalize import extract_year
 
 
 def prompt_yes_no(prompt: str, default: bool = False) -> bool:
@@ -485,8 +483,9 @@ def main() -> int:
             action = "needs_review"
             selected = None
             print(
-                "Needs review:"
-                f" top score={ordered[0].score:.3f}" if ordered else "Needs review: no candidates"
+                f"Needs review: top score={ordered[0].score:.3f}"
+                if ordered
+                else "Needs review: no candidates"
             )
         else:
             action, selected = prompt_for_choice(
