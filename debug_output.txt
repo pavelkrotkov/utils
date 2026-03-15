@@ -1,0 +1,88 @@
+% pipx run ./tidal_match_from_json.py /Users/pavel/Downloads/gramophone/The\ Best\ Classical\ Albums\ of\ 2025\ _\ Gramophone.albums.json  \
+  --training-in "/Users/pavel/Downloads/gramophone/The Best Classical Albums of 2025 _ Gramophone.training.json" \
+  --resume \
+  --auto-threshold 0.7
+All entries matched. Create playlist now? [y/N] y
+Create playlist 'The Best Classical Albums of 2025 _ Gramophone.albums.truth (Import)'? [Y/n] 
+Playlist created: c29dc976-f9c8-45b2-9a19-5ba6b4a0a897
+Warning: some albums returned fewer tracks than expected:
+  - Donizetti: Lucia di Lammermoor: 0/39 tracks returned
+  - Elgar & Thomas Adès: Violin Concertos: 0/6 tracks returned
+  - Mahler: Symphony No. 2 in C Minor "Resurrection" (Live): 0/5 tracks returned
+  - Galina Ustvolskaya: Symphonies Nos. 1–5: 0/14 tracks returned
+  - Brahms: String Quartets, Op. 51 Nos. 1 & 2: 2/8 tracks returned
+  - Rachmaninoff: The Bells - Elgar: Falstaff: 0/15 tracks returned
+  - Refound: 0/21 tracks returned
+  - Stravagante pensiero: Gesualdo & Napoli: 0/22 tracks returned
+  - Walton: Cello Concerto, Symphony No. 1 & Scapino: 0/8 tracks returned
+  - Beethoven 5, Vol. 4: 2/4 tracks returned
+  - Dvořák: Slavonic Dances: 15/16 tracks returned
+  - A Vision in a Dream: 10/15 tracks returned
+  - Mahler: Symphony No. 1: 11/16 tracks returned
+  - Track 1: 0/12 tracks returned
+  - Bach: Sonatas and Partitas, Vol. 2: 0/15 tracks returned
+  - Whispers and Thunder: 0/12 tracks returned
+  - Merula: Concerti spirituali: 0/20 tracks returned
+  - Still & Bonds - Symphonies & Variations: 14/15 tracks returned
+  - Mozart: Symphonies Nos. 35 & 36, Violin Concerto No. 3: 4/11 tracks returned
+  - Martinů: String Quartets Nos 2, 3, 5, 7: 0/13 tracks returned
+  - Songs of Passion: 10/27 tracks returned
+  - Lerner & Loewe: My Fair Lady: 3/54 tracks returned
+  - ELEGY: 0/19 tracks returned
+  - Mozart: Idomeneo, K. 366: 16/55 tracks returned
+  - Purcell: Dido and Aeneas, Z. 626: 0/37 tracks returned
+  - Bliss: Cello Concerto, F. 120: 2/3 tracks returned
+  - Nielsen: Clarinet Concerto, Helios & Symphony No. 5: 4/11 tracks returned
+  - J. S. Bach: Sonatas for Violin and Continuo: 6/19 tracks returned
+  - Love and Loss: 0/7 tracks returned
+  - Scarlatti: 9/15 tracks returned
+  - Echoes of Exile: 7/12 tracks returned
+  - Monteverdi: Il sesto libro de madrigali: 13/18 tracks returned
+  - Schubert: Quintette imaginaire: 0/12 tracks returned
+  - Camille Saint-Saëns: L'Ancêtre: 0/38 tracks returned
+  - King of Kings: Bach Orchestral Transcriptions: 6/15 tracks returned
+  - Gabriela Ortiz: Yanga: 2/11 tracks returned
+  - Ginastera: String Quartets: 8/14 tracks returned
+  - Schubert + Beethoven: 7/8 tracks returned
+  - Bach's Horns (Live): 23/25 tracks returned
+  - Alma: Ibero-American Songs: 10/22 tracks returned
+  - The Complete Works for Cello and Piano: 36/37 tracks returned
+  - Ernst Bloch: Schelomo - Hebraic Rhapsody, Suite for Viola and Orchestra: 0/5 tracks returned
+  - Edward Gardner conducts Britten: 9/21 tracks returned
+  - Ligeti: Violin Concerto - Concert Românesc - Piano Concerto: 13/16 tracks returned
+  - Tchaikovsky: Orchestral Works, Vol. 3: 0/10 tracks returned
+  - Schubert: Piano Sonata & Moments musicaux: 8/10 tracks returned
+  - Clérambault: Te Deum & Histoire de la femme adultère: 19/27 tracks returned
+  - Gabriel Jackson: Choral Works: 4/13 tracks returned
+  - Biber: Complete Violin Sonatas — 1681: 6/51 tracks returned
+  - Rachmaninoff: Piano Concerto No. 3 (Live from the 2022 Cliburn Competition): 0/3 tracks returned
+  - Sibelius: Orchestral Works: 1/14 tracks returned
+  - Bizet: Les Mélodies. Enregistrement intégral: 44/63 tracks returned
+  - Puccini: Le villi, SC 60 (Live): 1/16 tracks returned
+  - R. Strauss: Salome, Op. 54, TrV 215: 1/25 tracks returned
+  - Shostakovich: The Piano Concertos; Solo Works: 11/13 tracks returned
+  - Scriabin: Vers la flamme: 19/21 tracks returned
+  - Brahms: Lieder: 0/29 tracks returned
+  - Elgar: The Kingdom, Op. 51: 0/11 tracks returned
+  - Vox Feminae: 19/20 tracks returned
+  - Wagner: Der fliegende Holländer: 0/31 tracks returned
+  - Tchaikovsky: Orchestral Suite No. 3 - Rimsky-Korsakov: Capriccio espagnol - Tcherepnin: La Princesse lointaine: 0/10 tracks returned
+  - Colouring Book: 15/19 tracks returned
+  - J. S. Bach: Mass in B Minor, BWV 232: 26/27 tracks returned
+  - Michael Tippett: New Year: 0/33 tracks returned
+  - Liszt: Via Crucis & Solo Piano Works: 22/23 tracks returned
+  - Simon Boccanegra (1857 Version): 0/42 tracks returned
+  - Dies irae (Liszt · Rachmaninoff): 0/11 tracks returned
+  - Walton: Orchestral Works: 0/8 tracks returned
+  - George: 5/16 tracks returned
+  - Georges Bizet: Djamileh, Vasco de Gama, Cantates, Musique chorale, Mélodies & Musique pour piano (Portraits, Vol. 6): 22/93 tracks returned
+  - Weinberg: The Passenger: 8/47 tracks returned
+  - Schumann: Violin Sonatas: 0/11 tracks returned
+  - The Complete String Quartets: 11/12 tracks returned
+  - Elgar: The Dream of Gerontius, Op.  38: 5/15 tracks returned
+  - Mozart: Horn Concertos: 0/14 tracks returned
+  - Telemann: Ino - Opera Arias for Soprano: 0/25 tracks returned
+  - Lucrezia (Portraits of a Woman): 17/32 tracks returned
+  - Voices of Thunder - Works for Choir & Organ: 10/12 tracks returned
+Proceed with playlist creation anyway? [y/N] n
+Playlist creation cancelled

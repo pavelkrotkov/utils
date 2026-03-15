@@ -1,0 +1,115 @@
+[
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 96,
+      "raw": "Beethoven Piano Sonatas Nos 28-32",
+      "context": {
+        "title_line": "Beethoven Piano Sonatas Nos 28-32",
+        "performer_line": "**Paul Wee** _pf_(BIS)",
+        "label_line": "**Paul Wee** _pf_(BIS)"
+      }
+    },
+    "album": {
+      "title": "Beethoven Piano Sonatas Nos 28-32",
+      "composers": [],
+      "performers": [
+        "Paul Wee"
+      ],
+      "ensembles": [],
+      "conductor": "",
+      "label": "BIS",
+      "year": "",
+      "works": [
+        "Beethoven Piano Sonatas Nos 28-32"
+      ],
+      "instruments": [
+        "pf"
+      ]
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 156,
+      "raw": "Beethoven Piano Concerto No 4 Sciarrino Il Sogno di Stradella",
+      "context": {
+        "title_line": "Beethoven Piano Concerto No 4 Sciarrino Il Sogno di Stradella",
+        "performer_line": "**Jonathan Biss** _pf_ **Swedish RSO / Malin Broman; Omer Meir Wellber**(Orchid)",
+        "label_line": "**Jonathan Biss** _pf_ **Swedish RSO / Malin Broman; Omer Meir Wellber**(Orchid)"
+      }
+    },
+    "album": {
+      "title": "Beethoven Piano Concerto No 4 Sciarrino Il Sogno di Stradella",
+      "composers": [],
+      "performers": [
+        "Jonathan Biss",
+        "Swedish RSO"
+      ],
+      "ensembles": [],
+      "conductor": "Malin Broman; Omer Meir Wellber",
+      "label": "Orchid",
+      "year": "",
+      "works": [
+        "Beethoven Piano Concerto No 4 Sciarrino Il Sogno di Stradella"
+      ],
+      "instruments": [
+        "pf"
+      ]
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 1072,
+      "raw": "JS BACH Mass in B minor",
+      "context": {
+        "title_line": "JS BACH Mass in B minor",
+        "performer_line": "**Pygmalion / Rapha\u00ebl Pichon**",
+        "label_line": "Label: Harmonia Mundi"
+      }
+    },
+    "album": {
+      "title": "JS BACH Mass in B minor",
+      "composers": [],
+      "performers": [
+        "Pygmalion"
+      ],
+      "ensembles": [],
+      "conductor": "Rapha\u00ebl Pichon",
+      "label": "Harmonia Mundi",
+      "year": "",
+      "works": [
+        "JS BACH Mass in B minor"
+      ],
+      "instruments": []
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 1538,
+      "raw": "Mozart Piano Concertos Nos 19 & 23",
+      "context": {
+        "title_line": "Mozart Piano Concertos Nos 19 & 23",
+        "performer_line": "**Kristian Bezuidenhout** _fp_ **Freiburg Baroque Orchestra**(Harmonia Mundi)",
+        "label_line": "**Kristian Bezuidenhout** _fp_ **Freiburg Baroque Orchestra**(Harmonia Mundi)"
+      }
+    },
+    "album": {
+      "title": "Mozart Piano Concertos Nos 19 & 23",
+      "composers": [],
+      "performers": [],
+      "ensembles": [
+        "Kristian Bezuidenhout fp Freiburg Baroque Orchestra"
+      ],
+      "conductor": "",
+      "label": "Harmonia Mundi",
+      "year": "",
+      "works": [
+        "Mozart Piano Concertos Nos 19 & 23"
+      ],
+      "instruments": []
+    }
+  }
+]
