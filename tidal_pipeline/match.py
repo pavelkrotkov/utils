@@ -458,7 +458,9 @@ def load_album_inputs(path: Path) -> List[AlbumInput]:
                 source_line=source.get("line"),
                 source_raw=str(source.get("raw", "") or ""),
                 source_subsection=str(source.get("subsection", "") or ""),
-                source_context=source.get("context", {}) if isinstance(source.get("context"), dict) else {},
+                source_context=source.get("context", {})
+                if isinstance(source.get("context"), dict)
+                else {},
             )
         )
     return albums
@@ -605,7 +607,11 @@ def train_coverage(
             break
         if api_calls >= args.train_max_calls:
             break
-        uncovered = [(record_id, album, tidal_id) for record_id, album, tidal_id in targets if record_id not in covered]
+        uncovered = [
+            (record_id, album, tidal_id)
+            for record_id, album, tidal_id in targets
+            if record_id not in covered
+        ]
         if not uncovered:
             break
 

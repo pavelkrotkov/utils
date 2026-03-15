@@ -10,7 +10,12 @@ from typing import List, Optional, Tuple
 
 from bs4 import BeautifulSoup
 
-from tidal_pipeline.models import INSTRUMENT_ABBREVS, INSTRUMENT_MAP, SKIP_ARTIST_SEGMENTS, SKIP_SEGMENTS
+from tidal_pipeline.models import (
+    INSTRUMENT_ABBREVS,
+    INSTRUMENT_MAP,
+    SKIP_ARTIST_SEGMENTS,
+    SKIP_SEGMENTS,
+)
 from tidal_pipeline.normalize import (
     clean_markdown_inline,
     extract_instruments,
@@ -136,7 +141,9 @@ def parse_mhtml(file_path: Path) -> Tuple[str, List[ParsedCandidate]]:
             if label_text:
                 label_hint = label_text
                 label_line = line_text
-                performer_candidate = line_text[: label_match.start()].strip() if label_match else ""
+                performer_candidate = (
+                    line_text[: label_match.start()].strip() if label_match else ""
+                )
                 if performer_candidate:
                     performer_hint = performer_candidate
                     performer_line = line_text
@@ -165,9 +172,7 @@ def parse_mhtml(file_path: Path) -> Tuple[str, List[ParsedCandidate]]:
                 label_line=label_line,
                 raw_text=text[:200],
                 subsection="\n".join(
-                    segment
-                    for segment in [work_title, performer_line, label_line]
-                    if segment
+                    segment for segment in [work_title, performer_line, label_line] if segment
                 ),
                 source_file=file_path.name,
             ),
@@ -418,9 +423,7 @@ def parse_markdown_legacy(file_path: Path) -> Tuple[str, List[ParsedCandidate]]:
                         label_line=label_line,
                         raw_text=raw_text[:200],
                         subsection="\n".join(
-                            segment
-                            for segment in [raw_text, performer_line, label_line]
-                            if segment
+                            segment for segment in [raw_text, performer_line, label_line] if segment
                         ),
                         line_number=i,
                         source_file=file_path.name,
@@ -511,14 +514,12 @@ def split_performer_hint(text: str) -> Tuple[List[str], List[str], str, List[str
 
 def parse_heading_metadata(heading_line: str, fallback_title: str) -> Tuple[List[str], str, str]:
     cleaned_heading = clean_markdown_inline(re.sub(r"^#{1,6}\s*", "", heading_line or "")).strip()
-    bold_segments = [clean_markdown_inline(seg) for seg in re.findall(r"\*\*(.+?)\*\*", heading_line or "")]
+    bold_segments = [
+        clean_markdown_inline(seg) for seg in re.findall(r"\*\*(.+?)\*\*", heading_line or "")
+    ]
     composers: List[str] = []
     for segment in bold_segments:
-        composers.extend(
-            part.strip()
-            for part in re.split(r"\s*[.;/]\s*", segment)
-            if part.strip()
-        )
+        composers.extend(part.strip() for part in re.split(r"\s*[.;/]\s*", segment) if part.strip())
     composers = merge_unique(composers)
 
     remainder = re.sub(r"\*\*.+?\*\*", " ", re.sub(r"^#{1,6}\s*", "", heading_line or ""))
@@ -635,7 +636,9 @@ def parse_performer_metadata(
     if match and raw_line:
         cleaned_line = raw_line[: match.start()].strip()
 
-    bold_segments = [strip_generic_prefixes(seg.strip()) for seg in re.findall(r"\*\*(.+?)\*\*", cleaned_line)]
+    bold_segments = [
+        strip_generic_prefixes(seg.strip()) for seg in re.findall(r"\*\*(.+?)\*\*", cleaned_line)
+    ]
     bold_segments = [segment for segment in bold_segments if segment]
 
     performers: List[str] = []
@@ -657,11 +660,17 @@ def parse_performer_metadata(
                         if not cleaned or normalize(cleaned) in SKIP_ARTIST_SEGMENTS:
                             continue
                         if "&" in cleaned and idx == 0:
-                            performers.extend(piece.strip() for piece in cleaned.split("&") if piece.strip())
+                            performers.extend(
+                                piece.strip() for piece in cleaned.split("&") if piece.strip()
+                            )
                             continue
                         ensembles.append(cleaned)
                 if right_side:
-                    for part in [item.strip() for item in re.split(r"\s*;\s*|\s*,\s*", right_side) if item.strip()]:
+                    for part in [
+                        item.strip()
+                        for item in re.split(r"\s*;\s*|\s*,\s*", right_side)
+                        if item.strip()
+                    ]:
                         cleaned = strip_instrument_tokens(strip_generic_prefixes(part), instruments)
                         if cleaned and normalize(cleaned) not in SKIP_ARTIST_SEGMENTS:
                             conductor_parts.append(cleaned)
@@ -698,7 +707,9 @@ def parse_performer_metadata(
                 performers.append(cleaned)
 
         if right_side:
-            for segment in [part.strip() for part in re.split(r"\s*,\s*", right_side) if part.strip()]:
+            for segment in [
+                part.strip() for part in re.split(r"\s*,\s*", right_side) if part.strip()
+            ]:
                 cleaned = strip_instrument_tokens(strip_generic_prefixes(segment), instruments)
                 if not cleaned or normalize(cleaned) in SKIP_ARTIST_SEGMENTS:
                     continue
@@ -706,10 +717,16 @@ def parse_performer_metadata(
 
     conductor = "; ".join(merge_unique(conductor_parts))
     if not label and label_line.lower().startswith("label:"):
-        label = clean_markdown_inline(re.sub(r"^label:\s*", "", label_line, flags=re.IGNORECASE)).strip("()")
+        label = clean_markdown_inline(
+            re.sub(r"^label:\s*", "", label_line, flags=re.IGNORECASE)
+        ).strip("()")
 
-    performers = prune_artist_values(performers, ensembles + ([conductor] if conductor else []), instruments)
-    ensembles = prune_artist_values(ensembles, performers + ([conductor] if conductor else []), instruments)
+    performers = prune_artist_values(
+        performers, ensembles + ([conductor] if conductor else []), instruments
+    )
+    ensembles = prune_artist_values(
+        ensembles, performers + ([conductor] if conductor else []), instruments
+    )
     return performers, ensembles, conductor, instruments, label
 
 
@@ -724,7 +741,9 @@ def candidate_to_entry(candidate: ParsedCandidate) -> dict:
         candidate.label_line or (f"({candidate.label_hint})" if candidate.label_hint else ""),
     )
     if not performers and not ensembles and not conductor:
-        performers, ensembles, conductor, fallback_instruments = split_performer_hint(candidate.performer_hint)
+        performers, ensembles, conductor, fallback_instruments = split_performer_hint(
+            candidate.performer_hint
+        )
         if not instruments:
             instruments = fallback_instruments
 
