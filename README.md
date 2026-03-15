@@ -14,12 +14,7 @@ For deeper context, refer to the script headers and inline help.
 
 ## Setup
 
-Python dependencies:
-
-```bash
-pip install mpxpy marker-pdf docling requests torch pyannote.audio beautifulsoup4 lxml numpy pandas
-pip install mpxpy marker-pdf pymupdf4llm[layout] llama-cloud pypdf requests torch pyannote.audio beautifulsoup4 lxml numpy pandas
-```
+Python dependencies are declared inline in each script (PEP 723) and resolved automatically by `uv run`.
 
 System tools (macOS via Homebrew):
 
@@ -45,15 +40,15 @@ Environment variables:
 Mathpix (best for math-heavy PDFs):
 
 ```bash
-pipx run ./pdf_convert_mathpix_sdk.py input.pdf -o output.md
-pipx run ./pdf_convert_mathpix_api.py input.pdf -o output.md
+uv run ./pdf_convert_mathpix_sdk.py input.pdf -o output.md
+uv run ./pdf_convert_mathpix_api.py input.pdf -o output.md
 ```
 
 Docling (local, structured parsing):
 
 ```bash
-pipx run ./pdf_convert_docling.py input.pdf -o output.md
-pipx run ./pdf_convert_docling.py input.pdf --page-range 1-5
+uv run ./pdf_convert_docling.py input.pdf -o output.md
+uv run ./pdf_convert_docling.py input.pdf --page-range 1-5
 ```
 
 Note: If you omit `--page-range`, the script uses Docling defaults. Provide a contiguous range like `1-5` when you want a subset of pages.
@@ -61,9 +56,9 @@ Note: If you omit `--page-range`, the script uses Docling defaults. Provide a co
 LlamaParse (LlamaCloud, hosted):
 
 ```bash
-pipx run ./pdf_convert_llamaparse.py input.pdf -o output.md
-pipx run ./pdf_convert_llamaparse.py input.pdf --page-range 1-5
-pipx run ./pdf_convert_llamaparse.py --fetch-job job_id -o output-3.md
+uv run ./pdf_convert_llamaparse.py input.pdf -o output.md
+uv run ./pdf_convert_llamaparse.py input.pdf --page-range 1-5
+uv run ./pdf_convert_llamaparse.py --fetch-job job_id -o output-3.md
 ```
 
 Create an API key at https://cloud.llamaindex.ai via API Key -> Generate New Key, then set `LLAMA_CLOUD_API_KEY`.
@@ -73,8 +68,8 @@ The script always chunks PDFs, saves `output-<i>.md` partials, and skips existin
 PyMuPDF4LLM (local, fast layout-aware parsing):
 
 ```bash
-pipx run ./pdf_convert_pymupdf4llm.py input.pdf -o output.md
-pipx run ./pdf_convert_pymupdf4llm.py input.pdf --page-range 0-4
+uv run ./pdf_convert_pymupdf4llm.py input.pdf -o output.md
+uv run ./pdf_convert_pymupdf4llm.py input.pdf --page-range 0-4
 ```
 
 Layout mode requires `pymupdf4llm[layout]` (or `pymupdf4llm[ocr,layout]` for OCR support).
@@ -82,7 +77,7 @@ Layout mode requires `pymupdf4llm[layout]` (or `pymupdf4llm[ocr,layout]` for OCR
 Marker (best for simpler PDFs, local):
 
 ```bash
-pipx run ./pdf_convert_marker.py input.pdf -o output.md
+uv run ./pdf_convert_marker.py input.pdf -o output.md
 ```
 
 ## Markdown Tools
@@ -114,14 +109,14 @@ offline evaluation, and weight training.
 Parse a source file into canonical album JSON, then match interactively:
 
 ```bash
-pipx run ./tidal_parse_to_json.py input.md --output albums.json
-pipx run ./tidal_match_from_json.py albums.json --resume
+uv run ./tidal_parse_to_json.py input.md --output albums.json
+uv run ./tidal_match_from_json.py albums.json --resume
 ```
 
 Train scoring weights from labelled truth records:
 
 ```bash
-pipx run ./tidal_match_from_json.py albums.json --train-coverage --training-out tidal_match_training.json
+uv run ./tidal_match_from_json.py albums.json --train-coverage --training-out tidal_match_training.json
 ```
 
 #### Evaluation
@@ -129,15 +124,15 @@ pipx run ./tidal_match_from_json.py albums.json --train-coverage --training-out 
 Measure matching quality offline against a truth file (no API calls):
 
 ```bash
-pipx run ./tidal_eval.py album-debug/best2025.truth.json
-pipx run ./tidal_eval.py album-debug/best2025.truth.json --verbose
-pipx run ./tidal_eval.py album-debug/best2025.truth.json --json
+uv run ./tidal_eval.py album-debug/best2025.truth.json
+uv run ./tidal_eval.py album-debug/best2025.truth.json --verbose
+uv run ./tidal_eval.py album-debug/best2025.truth.json --json
 ```
 
 Use quality gates to catch regressions:
 
 ```bash
-pipx run ./tidal_eval.py album-debug/best2025.truth.json --min-precision 0.90
+uv run ./tidal_eval.py album-debug/best2025.truth.json --min-precision 0.90
 ```
 
 Pass `--weights custom.json` to evaluate alternative scoring weights.
