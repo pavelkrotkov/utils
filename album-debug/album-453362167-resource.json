@@ -1,0 +1,100 @@
+{
+  "data": {
+    "id": "453362167",
+    "type": "albums",
+    "attributes": {
+      "title": "Mahler: Symphony No. 2 in C Minor \"Resurrection\" (Live)",
+      "barcodeId": "5065001341984",
+      "numberOfVolumes": 2,
+      "numberOfItems": 5,
+      "duration": "PT1H25M10S",
+      "explicit": false,
+      "releaseDate": "2025-11-07",
+      "copyright": {
+        "text": "(C) 2025 Hall\u00e9 Concerts Society"
+      },
+      "popularity": 0.10073663783955607,
+      "accessType": "PUBLIC",
+      "availability": [
+        "STREAM",
+        "DJ"
+      ],
+      "mediaTags": [
+        "HIRES_LOSSLESS",
+        "LOSSLESS"
+      ],
+      "externalLinks": [
+        {
+          "href": "https://tidal.com/browse/album/453362167",
+          "meta": {
+            "type": "TIDAL_SHARING"
+          }
+        }
+      ],
+      "type": "ALBUM",
+      "albumType": "ALBUM"
+    },
+    "relationships": {
+      "usageRules": {
+        "links": {
+          "self": "/albums/453362167/relationships/usageRules?countryCode=US"
+        }
+      },
+      "similarAlbums": {
+        "links": {
+          "self": "/albums/453362167/relationships/similarAlbums?countryCode=US"
+        }
+      },
+      "artists": {
+        "links": {
+          "self": "/albums/453362167/relationships/artists?countryCode=US"
+        }
+      },
+      "genres": {
+        "links": {
+          "self": "/albums/453362167/relationships/genres?countryCode=US"
+        }
+      },
+      "suggestedCoverArts": {
+        "links": {
+          "self": "/albums/453362167/relationships/suggestedCoverArts?countryCode=US"
+        }
+      },
+      "priceConfig": {
+        "links": {
+          "self": "/albums/453362167/relationships/priceConfig?countryCode=US"
+        }
+      },
+      "owners": {
+        "links": {
+          "self": "/albums/453362167/relationships/owners?countryCode=US"
+        }
+      },
+      "coverArt": {
+        "links": {
+          "self": "/albums/453362167/relationships/coverArt?countryCode=US"
+        }
+      },
+      "items": {
+        "data": [],
+        "links": {
+          "self": "/albums/453362167/relationships/items?countryCode=US"
+        }
+      },
+      "replacement": {
+        "links": {
+          "self": "/albums/453362167/relationships/replacement?countryCode=US"
+        }
+      },
+      "providers": {
+        "links": {
+          "self": "/albums/453362167/relationships/providers?countryCode=US"
+        }
+      }
+    }
+  },
+  "links": {
+    "self": "/albums/453362167?include=items&countryCode=US"
+  },
+  "included": []
+}

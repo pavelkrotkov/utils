@@ -1,0 +1,284 @@
+[
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 96,
+      "raw": "Beethoven Piano Sonatas Nos 28-32",
+      "context": {
+        "title_line": "Beethoven Piano Sonatas Nos 28-32",
+        "performer_line": "**Paul Wee** _pf_(BIS)",
+        "label_line": "**Paul Wee** _pf_(BIS)"
+      }
+    },
+    "album": {
+      "title": "Beethoven Piano Sonatas Nos 28-32",
+      "composers": [],
+      "performers": [
+        "Paul Wee"
+      ],
+      "ensembles": [],
+      "conductor": "",
+      "label": "BIS",
+      "year": "",
+      "works": [
+        "Beethoven Piano Sonatas Nos 28-32"
+      ],
+      "instruments": [
+        "pf"
+      ]
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 120,
+      "raw": "\u2018Refound\u2019",
+      "context": {
+        "title_line": "\u2018Refound\u2019",
+        "performer_line": "**Hugh Cutting** _counterten_ **Audrey Hyland** _pf_(Linn)",
+        "label_line": "**Hugh Cutting** _counterten_ **Audrey Hyland** _pf_(Linn)"
+      }
+    },
+    "album": {
+      "title": "\u2018Refound\u2019",
+      "composers": [],
+      "performers": [
+        "Hugh Cutting counterten Audrey Hyland"
+      ],
+      "ensembles": [],
+      "conductor": "",
+      "label": "Linn",
+      "year": "",
+      "works": [
+        "\u2018Refound\u2019"
+      ],
+      "instruments": [
+        "pf"
+      ]
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 156,
+      "raw": "Beethoven Piano Concerto No 4 Sciarrino Il Sogno di Stradella",
+      "context": {
+        "title_line": "Beethoven Piano Concerto No 4 Sciarrino Il Sogno di Stradella",
+        "performer_line": "**Jonathan Biss** _pf_ **Swedish RSO / Malin Broman; Omer Meir Wellber**(Orchid)",
+        "label_line": "**Jonathan Biss** _pf_ **Swedish RSO / Malin Broman; Omer Meir Wellber**(Orchid)"
+      }
+    },
+    "album": {
+      "title": "Beethoven Piano Concerto No 4 Sciarrino Il Sogno di Stradella",
+      "composers": [],
+      "performers": [
+        "Jonathan Biss",
+        "Swedish RSO"
+      ],
+      "ensembles": [],
+      "conductor": "Malin Broman; Omer Meir Wellber",
+      "label": "Orchid",
+      "year": "",
+      "works": [
+        "Beethoven Piano Concerto No 4 Sciarrino Il Sogno di Stradella"
+      ],
+      "instruments": [
+        "pf"
+      ]
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 384,
+      "raw": "Purcell Dido and Aeneas",
+      "context": {
+        "title_line": "Purcell Dido and Aeneas",
+        "performer_line": "_Sols incl_ **DiDonato & Spyres; Il Pomo d\u2019Oro / Maxim Emelyanychev**",
+        "label_line": ""
+      }
+    },
+    "album": {
+      "title": "Purcell Dido and Aeneas",
+      "composers": [],
+      "performers": [
+        "Sols incl DiDonato & Spyres",
+        "Il Pomo d\u2019Oro"
+      ],
+      "ensembles": [],
+      "conductor": "Maxim Emelyanychev",
+      "label": "",
+      "year": "",
+      "works": [
+        "Purcell Dido and Aeneas"
+      ],
+      "instruments": []
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 524,
+      "raw": "JS Bach\u2018King of Kings\u2019 \u2013 Orchestral Transcriptions by Andrew Davis",
+      "context": {
+        "title_line": "JS Bach\u2018King of Kings\u2019 \u2013 Orchestral Transcriptions by Andrew Davis",
+        "performer_line": "**BBC Philharmonic Orchestra / Martyn Brabbins, Andrew Davis**(Chandos)",
+        "label_line": "**BBC Philharmonic Orchestra / Martyn Brabbins, Andrew Davis**(Chandos)"
+      }
+    },
+    "album": {
+      "title": "JS Bach\u2018King of Kings\u2019 \u2013 Orchestral Transcriptions by Andrew Davis",
+      "composers": [],
+      "performers": [],
+      "ensembles": [
+        "BBC Philharmonic Orchestra"
+      ],
+      "conductor": "Martyn Brabbins, Andrew Davis",
+      "label": "Chandos",
+      "year": "",
+      "works": [
+        "JS Bach\u2018King of Kings\u2019 \u2013 Orchestral Transcriptions by Andrew Davis"
+      ],
+      "instruments": []
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 930,
+      "raw": "CPE Bach Violin Sonatas",
+      "context": {
+        "title_line": "CPE Bach Violin Sonatas",
+        "performer_line": "**Ryo Terakado** _vn_ **Fabio Bonizzoni** _hpd_(Challenge Classics)",
+        "label_line": "**Ryo Terakado** _vn_ **Fabio Bonizzoni** _hpd_(Challenge Classics)"
+      }
+    },
+    "album": {
+      "title": "CPE Bach Violin Sonatas",
+      "composers": [],
+      "performers": [
+        "Ryo Terakado",
+        "Fabio Bonizzoni"
+      ],
+      "ensembles": [],
+      "conductor": "",
+      "label": "Challenge Classics",
+      "year": "",
+      "works": [
+        "CPE Bach Violin Sonatas"
+      ],
+      "instruments": [
+        "vn",
+        "hpd"
+      ]
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 1072,
+      "raw": "JS BACH Mass in B minor",
+      "context": {
+        "title_line": "JS BACH Mass in B minor",
+        "performer_line": "**Pygmalion / Rapha\u00ebl Pichon**",
+        "label_line": "Label: Harmonia Mundi"
+      }
+    },
+    "album": {
+      "title": "JS BACH Mass in B minor",
+      "composers": [],
+      "performers": [
+        "Pygmalion"
+      ],
+      "ensembles": [],
+      "conductor": "Rapha\u00ebl Pichon",
+      "label": "Harmonia Mundi",
+      "year": "",
+      "works": [
+        "JS BACH Mass in B minor"
+      ],
+      "instruments": []
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 1128,
+      "raw": "VERDI Simon Boccanegra (1857 version)",
+      "context": {
+        "title_line": "VERDI Simon Boccanegra (1857 version)",
+        "performer_line": "**Sols; Hall\u00e9 Orchestra / Sir Mark Elder**",
+        "label_line": "Label: Opera Rara"
+      }
+    },
+    "album": {
+      "title": "VERDI Simon Boccanegra (1857 version)",
+      "composers": [],
+      "performers": [],
+      "ensembles": [
+        "Hall\u00e9 Orchestra"
+      ],
+      "conductor": "Sir Mark Elder",
+      "label": "Opera Rara",
+      "year": "",
+      "works": [
+        "VERDI Simon Boccanegra (1857 version)"
+      ],
+      "instruments": []
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 1382,
+      "raw": "Mahler Symphony No 7",
+      "context": {
+        "title_line": "Mahler Symphony No 7",
+        "performer_line": "**Bavarian Radio Symphony Orchestra / Sir Simon Rattle**(BR Klassik)",
+        "label_line": "**Bavarian Radio Symphony Orchestra / Sir Simon Rattle**(BR Klassik)"
+      }
+    },
+    "album": {
+      "title": "Mahler Symphony No 7",
+      "composers": [],
+      "performers": [],
+      "ensembles": [
+        "Bavarian Radio Symphony Orchestra"
+      ],
+      "conductor": "Sir Simon Rattle",
+      "label": "BR Klassik",
+      "year": "",
+      "works": [
+        "Mahler Symphony No 7"
+      ],
+      "instruments": []
+    }
+  },
+  {
+    "source": {
+      "file": "best2025.md",
+      "line": 1538,
+      "raw": "Mozart Piano Concertos Nos 19 & 23",
+      "context": {
+        "title_line": "Mozart Piano Concertos Nos 19 & 23",
+        "performer_line": "**Kristian Bezuidenhout** _fp_ **Freiburg Baroque Orchestra**(Harmonia Mundi)",
+        "label_line": "**Kristian Bezuidenhout** _fp_ **Freiburg Baroque Orchestra**(Harmonia Mundi)"
+      }
+    },
+    "album": {
+      "title": "Mozart Piano Concertos Nos 19 & 23",
+      "composers": [],
+      "performers": [],
+      "ensembles": [
+        "Kristian Bezuidenhout fp Freiburg Baroque Orchestra"
+      ],
+      "conductor": "",
+      "label": "Harmonia Mundi",
+      "year": "",
+      "works": [
+        "Mozart Piano Concertos Nos 19 & 23"
+      ],
+      "instruments": []
+    }
+  }
+]

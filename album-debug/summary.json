@@ -1,0 +1,18 @@
+[
+  {
+    "album_id": "456502686",
+    "title": "Galina Ustvolskaya: Symphonies Nos. 1\u20135",
+    "expected_tracks": 14,
+    "access_type": "PUBLIC",
+    "availability": [
+      "STREAM",
+      "DJ"
+    ],
+    "relationship_tracks": 0,
+    "album_include_tracks": 0,
+    "relationship_pages": 1,
+    "album_include_types": {},
+    "v1_tracks": 0,
+    "v1_total": null
+  }
+]

@@ -106,64 +106,66 @@ Behavior:
 
 ### TIDAL Import
 
-Import classical album tracklists from Gramophone-style MHTML or Markdown files into TIDAL playlists. Uses OAuth 2.1 with PKCE for secure authentication.
+Match classical album reviews from Gramophone-style Markdown files to TIDAL
+catalog entries. The pipeline parses source files into canonical JSON, searches
+and scores candidates via the TIDAL API, and supports interactive labelling,
+offline evaluation, and weight training.
+
+Parse a source file into canonical album JSON, then match interactively:
 
 ```bash
-# Preview matches (Dry Run)
-pipx run ./tidal_import_page_to_playlist.py test.md --dry-run
-
-# Import to TIDAL (Creates playlist)
-pipx run ./tidal_import_page_to_playlist.py test.mhtml
-```
-
-#### Matching Strategy
-
-The importer uses a multi-stage matching strategy optimized for classical music:
-
-1. **Performer extraction** - Parses complex performer strings (e.g., "Orchestra / Conductor (Label)") to extract conductor and soloist names, stripping instrument abbreviations (pf, vn, vc, hpd, etc.)
-
-2. **Query construction** - Generates multiple search queries combining:
-   - Extracted performer surnames with title tokens
-   - Cleaned performer names with composer
-   - Review slugs and label hints
-   - Fallback composer + work type queries
-
-3. **Scoring** - Matches are scored based on:
-   - Title token overlap (up to 0.5)
-   - Performer match in artists or title (+0.4 if found)
-   - Label match in copyright (+0.2)
-   - Reduced penalty when album likely not in catalog
-
-4. **Fallback** - Track-based search when album search fails
-
-#### Testing Matches
-
-Use the built-in test report to validate and compare matching results:
-
-```bash
-# Quick report on a file
-pipx run ./tidal_import_page_to_playlist.py input.md --dry-run --test-report
-
-# Save baseline and compare after changes
-pipx run ./tidal_import_page_to_playlist.py input.mhtml --dry-run --test-report-save baseline.json
-pipx run ./tidal_import_page_to_playlist.py input.mhtml --dry-run --test-report-compare baseline.json
-```
-
-#### JSON-First Matching (Experimental)
-
-Split parsing and matching for controlled tuning. Use `tidal_parse_prompt.md` to produce structured
-JSON, then interactively label ground-truth matches with `tidal_match_from_json.py`.
-
-```bash
-# Label matches and save a truth file alongside the input JSON
+pipx run ./tidal_parse_to_json.py input.md --output albums.json
 pipx run ./tidal_match_from_json.py albums.json --resume
 ```
 
-Train a query/matching model from the first 80 truth records:
+Train scoring weights from labelled truth records:
 
 ```bash
 pipx run ./tidal_match_from_json.py albums.json --train-coverage --training-out tidal_match_training.json
 ```
+
+#### Evaluation
+
+Measure matching quality offline against a truth file (no API calls):
+
+```bash
+pipx run ./tidal_eval.py album-debug/best2025.truth.json
+pipx run ./tidal_eval.py album-debug/best2025.truth.json --verbose
+pipx run ./tidal_eval.py album-debug/best2025.truth.json --json
+```
+
+Use quality gates to catch regressions:
+
+```bash
+pipx run ./tidal_eval.py album-debug/best2025.truth.json --min-precision 0.90
+```
+
+Pass `--weights custom.json` to evaluate alternative scoring weights.
+
+#### Improvement workflow
+
+The truth file (`best2025.truth.json`) is a frozen gold set with cached
+candidates and ground-truth labels. What you can improve determines which
+tool to use:
+
+| What you're tuning | Tool | API calls? |
+|---|---|---|
+| Scoring weights / features | `tidal_eval.py` | No |
+| Query generation / candidate recall | `tidal_match_from_json.py --batch-review` | Yes |
+| Truth labels (new albums) | `tidal_match_from_json.py` | Yes |
+
+Re-scoring is deterministic — `tidal_eval.py` re-ranks the cached candidates
+without touching the API. If you improve query generation (surfacing better
+candidates), re-run the matcher to refresh the candidate pool, re-label any
+changed results, then re-eval.
+
+Treat the truth file as read-only unless you deliberately want to extend or
+refresh the ground truth.
+
+#### Formal Matching Pipeline
+
+See [TIDAL_ARCHITECTURE.md](TIDAL_ARCHITECTURE.md) for the current formal
+pipeline, module map, and implementation invariants.
 
 ## Audio Transcription
 
