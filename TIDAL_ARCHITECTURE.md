@@ -65,6 +65,11 @@ pipeline in this repository.
 - `tidal_apply_links_to_markdown.py`
   CLI wrapper around `tidal_pipeline.links`.
 
+- `tidal_eval.py`
+  Offline evaluation harness. Re-scores cached candidates from a truth file,
+  replays auto-selection, and reports precision@1, MRR, auto-select
+  coverage/accuracy/recall, score distribution, and regressions.
+
 ## Formal Pipeline
 
 Let $x_i$ be the source review block for album $i$.
@@ -227,6 +232,33 @@ $$
 
 at the end of the corresponding markdown subsection.
 
+## Evaluation
+
+The evaluation harness (`tidal_eval.py`) operates on the persisted truth set $T$
+without making any API calls.
+
+For each $(a_i, C_i, y_i) \in T$, it re-computes the score $s_i(c)$ for every
+$c \in C_i$ using the current feature weights $w_f$, then replays
+auto-selection to obtain a predicted choice $\hat{y}_i$.
+
+Reported metrics:
+
+- **Precision@1** — fraction of albums where the top-ranked candidate matches
+  the ground-truth label $y_i$.
+- **MRR** — mean reciprocal rank of the ground-truth candidate across all
+  albums.
+- **Auto-select accuracy** — fraction of auto-selected albums where
+  $\hat{y}_i = y_i$.
+- **Auto-select coverage** — fraction of albums that pass the auto-select
+  threshold.
+- **Auto-select recall** — fraction of correct albums that are also
+  auto-selected.
+- **Score distribution** and per-album regressions.
+
+Quality gates: passing `--min-precision`, `--min-mrr`, or similar flags causes
+the harness to exit non-zero when metrics breach the specified thresholds,
+suitable for CI or pre-commit checks.
+
 ## Implementation Invariants
 
 - Parsing is single-pass and canonical.
@@ -234,3 +266,5 @@ at the end of the corresponding markdown subsection.
   block for enrichment.
 - Review records and truth persistence live in the shared library.
 - CLI scripts remain stable entrypoints.
+- Evaluation is offline and deterministic — it re-scores cached candidates
+  without API calls.
