@@ -7,8 +7,8 @@ Mathpix PDF to Markdown Converter
 Converts PDF files to markdown using the Mathpix API.
 
 Usage:
-    # Run with pipx (recommended):
-    pipx run ./pdf_convert_mathpix_api.py input.pdf
+    # Run with uv (recommended):
+    uv run ./pdf_convert_mathpix_api.py input.pdf
 
     # Standard execution:
     ./pdf_convert_mathpix_api.py input.pdf -o output.md

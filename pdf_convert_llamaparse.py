@@ -6,14 +6,14 @@
 Convert a local PDF to Markdown using LlamaParse (LlamaCloud).
 
 Usage:
-    # Run with pipx (recommended):
-    pipx run ./pdf_convert_llamaparse.py input.pdf
+    # Run with uv (recommended):
+    uv run ./pdf_convert_llamaparse.py input.pdf
 
     # Standard execution:
     ./pdf_convert_llamaparse.py input.pdf -o output.md
 
     # Fetch results for an existing job:
-    pipx run ./pdf_convert_llamaparse.py --fetch-job job_id -o output-3.md
+    uv run ./pdf_convert_llamaparse.py --fetch-job job_id -o output-3.md
 
 Notes:
     - The script always chunks the PDF and writes per-chunk files like output-1.md.
@@ -319,7 +319,7 @@ def extract_markdown(result: object) -> str:
 
 def manual_fetch_command(job_id: str, output_path: Path) -> str:
     output_arg = shlex.quote(str(output_path))
-    return f"pipx run ./pdf_convert_llamaparse.py --fetch-job {job_id} -o {output_arg}"
+    return f"uv run ./pdf_convert_llamaparse.py --fetch-job {job_id} -o {output_arg}"
 
 
 def write_joined_markdown(chunk_paths: list[Path], output_path: Path) -> None:

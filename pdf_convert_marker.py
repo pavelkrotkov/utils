@@ -6,8 +6,8 @@
 Convert a local PDF to Markdown using marker (best for simpler documents).
 
 Usage:
-    # Run with pipx (recommended):
-    pipx run ./pdf_convert_marker.py input.pdf
+    # Run with uv (recommended):
+    uv run ./pdf_convert_marker.py input.pdf
 
     # Standard execution:
     ./pdf_convert_marker.py input.pdf -o output.md
