@@ -6,8 +6,8 @@
 Convert a local PDF to Markdown using Docling.
 
 Usage:
-    # Run with pipx (recommended):
-    pipx run ./pdf_convert_docling.py input.pdf
+    # Run with uv (recommended):
+    uv run ./pdf_convert_docling.py input.pdf
 
     # Standard execution:
     ./pdf_convert_docling.py input.pdf -o output.md
