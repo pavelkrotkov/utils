@@ -7,7 +7,7 @@ and TIDAL import.
 
 - PDF to Markdown conversion (Mathpix API, Docling, LlamaParse, PyMuPDF4LLM, or local marker).
 - Markdown splitting into per-section or per-subsection files.
-- Audio transcription (OpenAI API) and local diarization (whisper-cpp + pyannote).
+- Audio transcription (OpenAI API or local whisper-cpp, with optional pyannote diarization).
 - TIDAL playlist import from Gramophone-style MHTML/Markdown pages.
 
 For deeper context, refer to the script headers and inline help.
@@ -32,7 +32,7 @@ Environment variables:
 - `TIDAL_REDIRECT_URI` (Optional, defaults to `http://127.0.0.1:8765/callback`).
 - `TIDAL_SCOPES` (Optional, defaults to playlist and search read/write).
 - `TIDAL_COUNTRY_CODE` (Optional, defaults to `US`).
-- `HF_TOKEN` for pyannote diarization.
+- `HF_TOKEN` for optional pyannote diarization.
 - `GGML_METAL_PATH_RESOURCES` optional for whisper-cpp Metal support.
 
 ## PDF Conversion
@@ -170,11 +170,21 @@ OpenAI API (simple transcription):
 ./audio_transcribe_openai.sh recording.m4a output.txt
 ```
 
-Local whisper-cpp + pyannote (with diarization):
+Local whisper-cpp (plain transcript by default):
 
 ```bash
-./audio_transcribe_whisper.py interview.m4a --num-speakers 2
+uv run ./audio_transcribe_whisper.py interview.m4a
 ```
+
+Enable pyannote speaker diarization when speaker labels are needed:
+
+```bash
+uv run ./audio_transcribe_whisper.py interview.m4a --diarization --num-speakers 2
+```
+
+By default, the local script prints progress/ETA reports and writes `<input>.txt`.
+With `--diarization`, it writes `<input>.spk.txt`. Use `--no-progress` to silence
+progress reports or `--progress-interval SECONDS` to adjust their frequency.
 
 ## Notes
 
