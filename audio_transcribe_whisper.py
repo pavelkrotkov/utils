@@ -6,11 +6,11 @@
 # ]
 # ///
 """
-audio_transcribe_whisper.py - Robust speech pipeline combining whisper-cpp ASR and pyannote diarization
+audio_transcribe_whisper.py - Robust whisper-cpp ASR with optional pyannote diarization
 
 Converts input media to mono 16 kHz WAV (via ffmpeg), runs whisper-cpp for ASR (JSON output),
-runs pyannote.audio for speaker diarization, then merges results into a plain-text transcript
-with speaker labels or break markers (no timestamps).
+and writes a plain-text transcript. When requested, runs pyannote.audio for speaker diarization,
+then merges results into a transcript with speaker labels or break markers (no timestamps).
 
 Designed for resilience: handles diverse JSON formats from different whisper-cpp builds,
 gracefully falls back when timestamps/diarization are unavailable, and auto-configures
@@ -22,9 +22,9 @@ Dependencies:
 
 Usage Examples:
   ./audio_transcribe_whisper.py input.m4a
-  ./audio_transcribe_whisper.py input.m4a --speakers "Alice,Bob" --num-speakers 2
-  ./audio_transcribe_whisper.py input.m4a --style breaks
-  ./audio_transcribe_whisper.py input.m4a --no-ffmpeg --pyannote-model pyannote/speaker-diarization-community-1
+  ./audio_transcribe_whisper.py input.m4a --diarization --speakers "Alice,Bob" --num-speakers 2
+  ./audio_transcribe_whisper.py input.m4a --diarization --style breaks
+  ./audio_transcribe_whisper.py input.m4a --diarization --no-ffmpeg --pyannote-model pyannote/speaker-diarization-community-1
 """
 
 import argparse
@@ -32,10 +32,12 @@ import inspect
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -70,6 +72,249 @@ def maybe_set_metal_env() -> None:
             os.environ["GGML_METAL_PATH_RESOURCES"] = str(metal_path)
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Progress reporting
+# ───────────────────────────────────────────────────────────────────────────────
+
+
+def format_duration(seconds: Optional[float]) -> str:
+    """Format a duration in seconds as MM:SS or H:MM:SS."""
+    if seconds is None:
+        return "unknown"
+
+    try:
+        seconds_float = float(seconds)
+    except (TypeError, ValueError):
+        return "unknown"
+
+    if seconds_float < 0:
+        return "unknown"
+
+    seconds_int = int(round(seconds_float))
+    hours, remainder = divmod(seconds_int, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+class ProgressReporter:
+    """Print throttled, line-oriented progress reports to stderr."""
+
+    def __init__(self, enabled: bool = True, interval: float = 10.0):
+        self.enabled = enabled
+        self.interval = max(0.5, interval)
+        self.starts: Dict[str, float] = {}
+        self.last_updates: Dict[str, float] = {}
+
+    def info(self, message: str) -> None:
+        if self.enabled:
+            print(f"INFO: {message}", file=sys.stderr, flush=True)
+
+    def start(self, stage: str, detail: Optional[str] = None) -> None:
+        if not self.enabled:
+            return
+
+        now = time.monotonic()
+        self.starts[stage] = now
+        self.last_updates[stage] = 0.0
+
+        message = f"{stage} started"
+        if detail:
+            message = f"{message} ({detail})"
+        print(f"INFO: {message}", file=sys.stderr, flush=True)
+
+    def update(
+        self,
+        stage: str,
+        completed: Optional[float] = None,
+        total: Optional[float] = None,
+        *,
+        detail: Optional[str] = None,
+        force: bool = False,
+        show_count: bool = True,
+    ) -> None:
+        if not self.enabled:
+            return
+
+        now = time.monotonic()
+        self.starts.setdefault(stage, now)
+        last_update = self.last_updates.get(stage, 0.0)
+        if not force and now - last_update < self.interval:
+            return
+
+        self.last_updates[stage] = now
+        elapsed = now - self.starts[stage]
+        parts: List[str] = []
+
+        if completed is not None and total is not None and total > 0:
+            bounded_completed = min(max(float(completed), 0.0), float(total))
+            percent = 100.0 * bounded_completed / float(total)
+            parts.append(f"{percent:5.1f}%")
+
+            if show_count:
+                parts.append(f"({bounded_completed:g}/{float(total):g})")
+
+            eta = None
+            if bounded_completed > 0 and bounded_completed < total:
+                eta = elapsed * (float(total) - bounded_completed) / bounded_completed
+
+            parts.append(f"elapsed {format_duration(elapsed)}")
+            parts.append(f"ETA {format_duration(eta)}")
+
+        elif completed is not None:
+            parts.append(f"processed {format_duration(completed)}")
+            parts.append(f"elapsed {format_duration(elapsed)}")
+
+        else:
+            parts.append(f"elapsed {format_duration(elapsed)}")
+
+        if detail:
+            parts.append(detail)
+
+        print(f"INFO: {stage}: {', '.join(parts)}", file=sys.stderr, flush=True)
+
+    def finish(self, stage: str, detail: Optional[str] = None) -> None:
+        if not self.enabled:
+            return
+
+        now = time.monotonic()
+        start = self.starts.get(stage, now)
+        message = f"{stage} finished in {format_duration(now - start)}"
+        if detail:
+            message = f"{message} ({detail})"
+        print(f"INFO: {message}", file=sys.stderr, flush=True)
+
+
+class PyannoteProgressHook:
+    """Bridge pyannote pipeline hooks to ProgressReporter."""
+
+    def __init__(self, reporter: ProgressReporter):
+        self.reporter = reporter
+        self.completed_steps: set[str] = set()
+
+    def __enter__(self) -> "PyannoteProgressHook":
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        return None
+
+    def __call__(
+        self,
+        step_name: str,
+        step_artifact: Any,
+        file: Optional[Dict[str, Any]] = None,
+        total: Optional[int] = None,
+        completed: Optional[int] = None,
+    ) -> None:
+        del step_artifact, file
+
+        stage = f"pyannote {step_name.replace('_', ' ')}"
+        if completed is not None and total is not None:
+            self.reporter.update(
+                stage,
+                completed=completed,
+                total=total,
+                force=completed == 0 or completed >= total,
+            )
+            if completed >= total:
+                self.completed_steps.add(step_name)
+            return
+
+        if step_name not in self.completed_steps:
+            self.reporter.update(stage, detail="complete", force=True)
+            self.completed_steps.add(step_name)
+
+
+def parse_ffmpeg_timestamp(value: str) -> Optional[float]:
+    """Parse ffmpeg progress timestamps like HH:MM:SS.microseconds."""
+    if not value or value == "N/A":
+        return None
+
+    parts = value.split(":")
+    if len(parts) != 3:
+        return None
+
+    try:
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        seconds = float(parts[2])
+    except ValueError:
+        return None
+
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def probe_media_duration(
+    input_path: Path,
+    ffprobe_bin: str,
+    verbose: bool = False,
+) -> Optional[float]:
+    """Return media duration in seconds when ffprobe is available."""
+    if not shutil.which(ffprobe_bin) and not Path(ffprobe_bin).exists():
+        if verbose:
+            print(f"WARNING: ffprobe binary not found: {ffprobe_bin}", file=sys.stderr)
+        return None
+
+    cmd = [
+        ffprobe_bin,
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(input_path),
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        if verbose:
+            print(f"WARNING: Could not probe media duration: {input_path}", file=sys.stderr)
+        return None
+
+    try:
+        duration = float(result.stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        return None
+
+    return duration if duration > 0 else None
+
+
+def print_process_tail(lines: List[str], label: str) -> None:
+    """Print a short tail from captured process output after a failure."""
+    if not lines:
+        return
+
+    print(f"ERROR: Last {label} output lines:", file=sys.stderr)
+    for line in lines[-20:]:
+        print(f"  {line}", file=sys.stderr)
+
+
+def validate_nonempty_output(path: Path, label: str) -> None:
+    """Exit when a subprocess claims success but leaves no meaningful output."""
+    if not path.exists():
+        print(f"ERROR: {label} did not create expected output: {path}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        size = path.stat().st_size
+    except OSError as e:
+        print(f"ERROR: Could not inspect {label} output {path}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if size <= 128:
+        print(f"ERROR: {label} output is empty or too small: {path}", file=sys.stderr)
+        sys.exit(1)
 
 
 # ───────────────────────────────────────────────────────────────────────────────
@@ -323,6 +568,7 @@ def run_diarization(
     min_speakers: Optional[int],
     max_speakers: Optional[int],
     verbose: bool = False,
+    progress: Optional[ProgressReporter] = None,
 ) -> Annotation:
     """Run pyannote diarization on audio file. Returns Annotation."""
     kwargs: Dict[str, int] = {}
@@ -336,7 +582,19 @@ def run_diarization(
     if verbose:
         print(f"INFO: Running diarization on {audio_path} with params {kwargs}", file=sys.stderr)
 
-    diarization_output = pipeline(str(audio_path), **kwargs)
+    if progress:
+        params = ", ".join(f"{key}={value}" for key, value in kwargs.items()) or "auto speakers"
+        progress.start("pyannote diarization", detail=params)
+
+    hook = PyannoteProgressHook(progress) if progress else None
+    if hook:
+        with hook:
+            diarization_output = pipeline(str(audio_path), hook=hook, **kwargs)
+    else:
+        diarization_output = pipeline(str(audio_path), **kwargs)
+
+    if progress:
+        progress.finish("pyannote diarization")
 
     # pyannote versions may return either Annotation directly or a DiarizeOutput
     # wrapper containing `.speaker_diarization`.
@@ -517,23 +775,126 @@ def plain_transcript(segments: List[Dict[str, Any]], fallback_text: Optional[str
 # ───────────────────────────────────────────────────────────────────────────────
 
 
-def run_ffmpeg_convert(input_path: Path, output_path: Path, ffmpeg_bin: str, verbose: bool) -> None:
+def run_ffmpeg_convert(
+    input_path: Path,
+    output_path: Path,
+    ffmpeg_bin: str,
+    ffprobe_bin: str,
+    verbose: bool,
+    progress: Optional[ProgressReporter] = None,
+) -> None:
     """Convert input media to mono 16 kHz WAV using ffmpeg."""
+    duration = probe_media_duration(input_path, ffprobe_bin, verbose) if progress else None
+
     cmd = [
         ffmpeg_bin,
+        "-hide_banner",
+        "-nostdin",
         "-y",
-        "-i",
-        str(input_path),
-        "-ar",
-        "16000",
-        "-ac",
-        "1",
-        "-f",
-        "wav",
-        str(output_path),
     ]
+    if not verbose:
+        cmd.extend(["-loglevel", "error"])
+
+    if progress:
+        cmd.extend(["-progress", "pipe:1", "-nostats"])
+
+    cmd.extend(
+        [
+            "-i",
+            str(input_path),
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "-f",
+            "wav",
+            str(output_path),
+        ]
+    )
+
     if verbose:
         print(f"INFO: Running ffmpeg: {' '.join(cmd)}", file=sys.stderr)
+
+    if progress:
+        detail = f"duration {format_duration(duration)}" if duration else "duration unknown"
+        progress.start("ffmpeg conversion", detail=detail)
+        output_tail: List[str] = []
+        saw_ffmpeg_progress = False
+
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+        except FileNotFoundError:
+            print(f"ERROR: ffmpeg binary not found: {ffmpeg_bin}", file=sys.stderr)
+            sys.exit(1)
+
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            if "=" not in line:
+                output_tail.append(line)
+                if verbose:
+                    print(line, file=sys.stderr)
+                continue
+
+            key, value = line.split("=", 1)
+            processed_seconds: Optional[float] = None
+            if key in {"out_time_ms", "out_time_us"}:
+                try:
+                    processed_seconds = int(value) / 1_000_000.0
+                except ValueError:
+                    processed_seconds = None
+            elif key == "out_time":
+                processed_seconds = parse_ffmpeg_timestamp(value)
+            elif key == "progress" and value == "end":
+                if duration and not saw_ffmpeg_progress:
+                    progress.update(
+                        "ffmpeg conversion",
+                        completed=duration,
+                        total=duration,
+                        force=True,
+                        show_count=False,
+                    )
+                continue
+
+            if processed_seconds is not None:
+                saw_ffmpeg_progress = True
+                if duration:
+                    progress.update(
+                        "ffmpeg conversion",
+                        completed=min(processed_seconds, duration),
+                        total=duration,
+                        show_count=False,
+                    )
+                else:
+                    progress.update(
+                        "ffmpeg conversion",
+                        completed=processed_seconds,
+                    )
+
+        returncode = process.wait()
+        if returncode != 0:
+            print_process_tail(output_tail, "ffmpeg")
+            print(f"ERROR: ffmpeg conversion failed with exit code {returncode}", file=sys.stderr)
+            sys.exit(1)
+
+        try:
+            validate_nonempty_output(output_path, "ffmpeg")
+        except SystemExit:
+            print_process_tail(output_tail, "ffmpeg")
+            raise
+
+        progress.finish("ffmpeg conversion", detail=str(output_path))
+        return
+
     try:
         subprocess.run(
             cmd,
@@ -547,6 +908,8 @@ def run_ffmpeg_convert(input_path: Path, output_path: Path, ffmpeg_bin: str, ver
     except subprocess.CalledProcessError as e:
         print(f"ERROR: ffmpeg conversion failed: {e}", file=sys.stderr)
         sys.exit(1)
+
+    validate_nonempty_output(output_path, "ffmpeg")
 
 
 def resolve_whisper_bin(whisper_bin: str, verbose: bool = False) -> str:
@@ -580,6 +943,7 @@ def run_whisper(
     threads: int,
     language: str,
     verbose: bool,
+    progress: Optional[ProgressReporter] = None,
 ) -> None:
     """Run whisper-cpp to produce JSON output."""
     cmd = [
@@ -594,11 +958,79 @@ def run_whisper(
         "-of",
         str(json_path.with_suffix("")),  # whisper-cpp adds .json
     ]
-    if language != "auto":
-        cmd.extend(["-l", language])
+    if progress:
+        cmd.append("-pp")  # print progress
+
+    cmd.extend(["-l", language])
 
     if verbose:
         print(f"INFO: Running whisper-cpp: {' '.join(cmd)}", file=sys.stderr)
+
+    if progress:
+        progress.start("whisper-cpp ASR")
+        output_tail: List[str] = []
+        progress_pattern = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+        last_percent: Optional[float] = None
+
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+        except FileNotFoundError:
+            print(f"ERROR: whisper-cpp binary not found: {whisper_bin}", file=sys.stderr)
+            sys.exit(1)
+
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            progress_match = progress_pattern.search(line) if "progress" in line.lower() else None
+            if progress_match:
+                percent = float(progress_match.group(1))
+                last_percent = percent
+                progress.update(
+                    "whisper-cpp ASR",
+                    completed=percent,
+                    total=100.0,
+                    force=percent >= 100.0,
+                    show_count=False,
+                )
+                continue
+
+            output_tail.append(line)
+            if verbose:
+                print(line, file=sys.stderr)
+
+        returncode = process.wait()
+        if returncode != 0:
+            print_process_tail(output_tail, "whisper-cpp")
+            print(f"ERROR: whisper-cpp failed with exit code {returncode}", file=sys.stderr)
+            sys.exit(1)
+
+        if not json_path.exists():
+            print_process_tail(output_tail, "whisper-cpp")
+            print(
+                f"ERROR: whisper-cpp finished without writing expected JSON: {json_path}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        if last_percent is None or last_percent < 100.0:
+            progress.update(
+                "whisper-cpp ASR",
+                completed=100.0,
+                total=100.0,
+                force=True,
+                show_count=False,
+            )
+        progress.finish("whisper-cpp ASR", detail=str(json_path))
+        return
 
     try:
         subprocess.run(
@@ -614,18 +1046,26 @@ def run_whisper(
         print(f"ERROR: whisper-cpp failed: {e}", file=sys.stderr)
         sys.exit(1)
 
+    if not json_path.exists():
+        print(f"ERROR: whisper-cpp did not create expected JSON: {json_path}", file=sys.stderr)
+        sys.exit(1)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Robust whisper-cpp + pyannote diarization pipeline",
+        description="Robust whisper-cpp transcription with optional pyannote diarization",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
     parser.add_argument("input", type=Path, help="Input media file")
     parser.add_argument(
-        "-o", "--output", type=Path, help="Output transcript path (default: <input>.spk.txt)"
+        "-o",
+        "--output",
+        type=Path,
+        help="Output transcript path (default: <input>.txt, or <input>.spk.txt with --diarization)",
     )
     parser.add_argument("--ffmpeg-bin", default="ffmpeg", help="Path to ffmpeg binary")
+    parser.add_argument("--ffprobe-bin", default="ffprobe", help="Path to ffprobe binary")
     parser.add_argument("--whisper-bin", default="whisper-cpp", help="Path to whisper-cpp binary")
     parser.add_argument(
         "--large-model",
@@ -638,11 +1078,22 @@ def main() -> None:
     )
     parser.add_argument("--language", default="auto", help="Language code (default: auto)")
     parser.add_argument("--no-ffmpeg", action="store_true", help="Skip ffmpeg pre-conversion")
+    parser.add_argument(
+        "--diarization",
+        action="store_true",
+        help="Run pyannote diarization and write speaker-labeled output",
+    )
+    parser.add_argument(
+        "--no-diarization",
+        action="store_false",
+        dest="diarization",
+        help="Skip pyannote diarization and write a plain ASR transcript (default)",
+    )
     parser.add_argument("--hf-token", help="HuggingFace token (or set HF_TOKEN env)")
     parser.add_argument(
         "--pyannote-model",
         default="pyannote/speaker-diarization-3.1",
-        help="Pyannote diarization model",
+        help="Pyannote diarization model (used with --diarization)",
     )
     parser.add_argument("--num-speakers", type=int, help="Number of speakers (exact)")
     parser.add_argument("--min-speakers", type=int, help="Minimum number of speakers")
@@ -657,6 +1108,13 @@ def main() -> None:
         "--speakers", help="Comma-separated speaker names (maps to SPEAKER_00, SPEAKER_01, ...)"
     )
     parser.add_argument("--keep-temp", action="store_true", help="Keep temporary files")
+    parser.add_argument("--no-progress", action="store_true", help="Disable progress/ETA reports")
+    parser.add_argument(
+        "--progress-interval",
+        type=float,
+        default=10.0,
+        help="Seconds between progress reports (default: 10)",
+    )
     parser.add_argument("--verbose", action="store_true", help="Verbose logging")
 
     args = parser.parse_args()
@@ -666,6 +1124,7 @@ def main() -> None:
     hf_token = args.hf_token or os.environ.get("HF_TOKEN")
     speaker_names = [s.strip() for s in args.speakers.split(",")] if args.speakers else None
     args.whisper_bin = resolve_whisper_bin(args.whisper_bin, args.verbose)
+    progress = None if args.no_progress else ProgressReporter(interval=args.progress_interval)
 
     if not args.input.exists():
         print(f"ERROR: Input file not found: {args.input}", file=sys.stderr)
@@ -675,7 +1134,9 @@ def main() -> None:
         print(f"ERROR: Whisper model not found: {args.large_model}", file=sys.stderr)
         sys.exit(1)
 
-    output_path = args.output or args.input.with_suffix(".spk.txt")
+    output_path = args.output or args.input.with_suffix(
+        ".spk.txt" if args.diarization else ".txt"
+    )
 
     # Temporary files
     temp_dir = tempfile.mkdtemp(prefix="whisper_pyannote_")
@@ -687,13 +1148,22 @@ def main() -> None:
         # Step 1: Convert audio (or use original)
         if args.no_ffmpeg:
             audio_for_processing = args.input
-            if args.verbose:
+            if progress:
+                progress.info(f"Skipping ffmpeg conversion; using original file: {args.input}")
+            elif args.verbose:
                 print(
                     f"INFO: Skipping ffmpeg conversion; using original file: {args.input}",
                     file=sys.stderr,
                 )
         else:
-            run_ffmpeg_convert(args.input, wav_path, args.ffmpeg_bin, args.verbose)
+            run_ffmpeg_convert(
+                args.input,
+                wav_path,
+                args.ffmpeg_bin,
+                args.ffprobe_bin,
+                args.verbose,
+                progress,
+            )
             audio_for_processing = wav_path
 
         # Step 2: Run whisper-cpp
@@ -705,10 +1175,15 @@ def main() -> None:
             args.threads,
             args.language,
             args.verbose,
+            progress,
         )
 
         # Step 3: Load ASR results
+        if progress:
+            progress.start("loading whisper output")
         segments, fallback_text = load_whisper_segments(json_path, args.verbose)
+        if progress:
+            progress.finish("loading whisper output")
 
         # Check if segments have timestamps
         has_timestamps = any(_has_time(s) for s in segments)
@@ -717,28 +1192,43 @@ def main() -> None:
             sys.exit(1)
 
         # Step 4: Run diarization
-        pipeline = load_pyannote(args.pyannote_model, hf_token, args.verbose)
-        diarization = run_diarization(
-            pipeline,
-            audio_for_processing,
-            args.num_speakers,
-            args.min_speakers,
-            args.max_speakers,
-            args.verbose,
-        )
-
-        # Step 5: Merge
-        if has_timestamps:
-            merged_lines = merge_asr_with_diar(
-                segments, diarization, args.style, speaker_names, args.verbose
-            )
-        else:
-            if args.verbose:
-                print(
-                    "WARNING: No timestamps in ASR segments; skipping diarization merge.",
-                    file=sys.stderr,
-                )
+        if not args.diarization:
+            if progress:
+                progress.info("Skipping pyannote diarization (default; pass --diarization to enable)")
             merged_lines = []
+        else:
+            if progress:
+                progress.start("pyannote model load", detail=args.pyannote_model)
+            pipeline = load_pyannote(args.pyannote_model, hf_token, args.verbose)
+            if progress:
+                progress.finish("pyannote model load")
+
+            diarization = run_diarization(
+                pipeline,
+                audio_for_processing,
+                args.num_speakers,
+                args.min_speakers,
+                args.max_speakers,
+                args.verbose,
+                progress,
+            )
+
+            # Step 5: Merge
+            if has_timestamps:
+                if progress:
+                    progress.start("merging ASR with diarization")
+                merged_lines = merge_asr_with_diar(
+                    segments, diarization, args.style, speaker_names, args.verbose
+                )
+                if progress:
+                    progress.finish("merging ASR with diarization")
+            else:
+                if args.verbose:
+                    print(
+                        "WARNING: No timestamps in ASR segments; skipping diarization merge.",
+                        file=sys.stderr,
+                    )
+                merged_lines = []
 
         # Step 6: Write output
         if merged_lines:
