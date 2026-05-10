@@ -1134,9 +1134,7 @@ def main() -> None:
         print(f"ERROR: Whisper model not found: {args.large_model}", file=sys.stderr)
         sys.exit(1)
 
-    output_path = args.output or args.input.with_suffix(
-        ".spk.txt" if args.diarization else ".txt"
-    )
+    output_path = args.output or args.input.with_suffix(".spk.txt" if args.diarization else ".txt")
 
     # Temporary files
     temp_dir = tempfile.mkdtemp(prefix="whisper_pyannote_")
@@ -1194,7 +1192,9 @@ def main() -> None:
         # Step 4: Run diarization
         if not args.diarization:
             if progress:
-                progress.info("Skipping pyannote diarization (default; pass --diarization to enable)")
+                progress.info(
+                    "Skipping pyannote diarization (default; pass --diarization to enable)"
+                )
             merged_lines = []
         else:
             if progress:
