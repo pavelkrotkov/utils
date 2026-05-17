@@ -34,26 +34,18 @@ from tidal_pipeline.normalize import (
 )
 
 
-def score_candidate(
-    album: AlbumInput,
-    hit: AlbumHit,
-    weights: Optional[Dict[str, float]] = None,
-) -> Tuple[float, Dict[str, float]]:
-    active_weights = weights or DEFAULT_WEIGHTS
+def extract_features(album: AlbumInput, hit: AlbumHit) -> Dict[str, float]:
     title_values = [album.title] + album.works
     title_tokens = tokens_from_list(title_values)
-    generic_title = bool(title_tokens) and title_tokens.issubset(GENERIC_TITLE_TOKENS)
     composer_tokens = tokens_from_list(album.composers)
     performer_tokens = artist_tokens_from_list(album.performers)
     ensemble_tokens = artist_tokens_from_list(album.ensembles)
     conductor_tokens = artist_tokens_from_list([album.conductor])
     instrument_tokens = normalize_instruments(album.instruments)
-    requested_numbers = extract_numeric_tokens(title_values)
 
     hit_title_tokens = tokenize(hit.title)
     hit_artist_tokens = artist_tokens_from_list(hit.artists)
     hit_all_tokens = hit_title_tokens | hit_artist_tokens
-    hit_numbers = extract_numeric_tokens([hit.title])
     composer_phrase = phrase_overlap_score(album.composers, [hit.title, *hit.artists])
     performer_phrase = phrase_overlap_score(album.performers, hit.artists)
     ensemble_phrase = phrase_overlap_score(album.ensembles, hit.artists)
@@ -87,7 +79,31 @@ def score_candidate(
         if normalized_title in normalized_hit_title or normalized_hit_title in normalized_title:
             features["title"] = max(features["title"], 0.95)
 
-    score = sum(features[key] * active_weights.get(key, 0.0) for key in features)
+    return features
+
+
+def base_score(features: Dict[str, float], weights: Dict[str, float]) -> float:
+    return sum(features[key] * weights.get(key, 0.0) for key in features)
+
+
+def apply_penalties(
+    base: float,
+    album: AlbumInput,
+    features: Dict[str, float],
+    hit: AlbumHit,
+) -> float:
+    score = base
+    title_values = [album.title] + album.works
+    title_tokens = tokens_from_list(title_values)
+    generic_title = bool(title_tokens) and title_tokens.issubset(GENERIC_TITLE_TOKENS)
+    composer_tokens = tokens_from_list(album.composers)
+    performer_tokens = artist_tokens_from_list(album.performers)
+    ensemble_tokens = artist_tokens_from_list(album.ensembles)
+    conductor_tokens = artist_tokens_from_list([album.conductor])
+    label_norm = normalize(album.label)
+    requested_numbers = extract_numeric_tokens(title_values)
+    hit_numbers = extract_numeric_tokens([hit.title])
+
     artist_support = max(features["performer"], features["ensemble"], features["conductor"])
     if performer_tokens or ensemble_tokens or conductor_tokens:
         if artist_support == 0:
@@ -109,6 +125,17 @@ def score_candidate(
         elif len(requested_numbers) > 1 and not requested_numbers.issubset(hit_numbers):
             score *= 0.8
 
+    return score
+
+
+def score_candidate(
+    album: AlbumInput,
+    hit: AlbumHit,
+    weights: Optional[Dict[str, float]] = None,
+) -> Tuple[float, Dict[str, float]]:
+    active_weights = weights or DEFAULT_WEIGHTS
+    features = extract_features(album, hit)
+    score = apply_penalties(base_score(features, active_weights), album, features, hit)
     return score, features
 
 
