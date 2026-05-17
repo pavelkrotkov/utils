@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 import threading
 import time
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Optional
 
 
@@ -131,6 +133,85 @@ def print_process_tail(lines: Sequence[str], label: str) -> None:
         print(f"  {line}", file=sys.stderr)
 
 
+def parse_ffmpeg_timestamp(value: str) -> Optional[float]:
+    """Parse ffmpeg progress timestamps like HH:MM:SS.microseconds."""
+    if not value or value == "N/A":
+        return None
+
+    parts = value.split(":")
+    if len(parts) != 3:
+        return None
+
+    try:
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        seconds = float(parts[2])
+    except ValueError:
+        return None
+
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def probe_media_duration(
+    input_path: Path,
+    ffprobe_bin: str,
+    verbose: bool = False,
+) -> Optional[float]:
+    """Return media duration in seconds when ffprobe is available."""
+    if not shutil.which(ffprobe_bin) and not Path(ffprobe_bin).exists():
+        if verbose:
+            print(f"WARNING: ffprobe binary not found: {ffprobe_bin}", file=sys.stderr)
+        return None
+
+    cmd = [
+        ffprobe_bin,
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(input_path),
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        if verbose:
+            print(f"WARNING: Could not probe media duration: {input_path}", file=sys.stderr)
+        return None
+
+    try:
+        duration = float(result.stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        return None
+
+    return duration if duration > 0 else None
+
+
+def validate_nonempty_output(path: Path, label: str) -> None:
+    """Exit when a subprocess claims success but leaves no meaningful output."""
+    if not path.exists():
+        print(f"ERROR: {label} did not create expected output: {path}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        size = path.stat().st_size
+    except OSError as e:
+        print(f"ERROR: Could not inspect {label} output {path}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if size <= 128:
+        print(f"ERROR: {label} output is empty or too small: {path}", file=sys.stderr)
+        sys.exit(1)
+
+
 def run_with_progress(
     cmd: Sequence[str],
     label: str,
@@ -187,6 +268,10 @@ def run_with_progress(
         if verbose:
             print(line, file=sys.stderr)
 
+    close_stdout = getattr(process.stdout, "close", None)
+    if close_stdout:
+        close_stdout()
+
     returncode = process.wait()
     if returncode != 0:
         print_process_tail(output_tail, label)
@@ -206,6 +291,90 @@ def run_with_progress(
         reporter.finish(label, detail=finish_detail)
 
     return output_tail
+
+
+def convert_to_pcm16k_mono(
+    input_path: Path,
+    output_wav: Path,
+    *,
+    progress: Optional[ProgressReporter] = None,
+    ffmpeg_bin: str = "ffmpeg",
+    ffprobe_bin: str = "ffprobe",
+    verbose: bool = False,
+) -> None:
+    """Convert input media to mono 16 kHz WAV using ffmpeg."""
+    duration = probe_media_duration(input_path, ffprobe_bin, verbose) if progress else None
+    saw_ffmpeg_progress = False
+
+    cmd = [
+        ffmpeg_bin,
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+    ]
+    if not verbose:
+        cmd.extend(["-loglevel", "error"])
+
+    if progress:
+        cmd.extend(["-progress", "pipe:1", "-nostats"])
+
+    cmd.extend(
+        [
+            "-i",
+            str(input_path),
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "-f",
+            "wav",
+            str(output_wav),
+        ]
+    )
+
+    if verbose:
+        print(f"INFO: Running ffmpeg: {' '.join(cmd)}", file=sys.stderr)
+
+    def parse_progress(line: str) -> Optional[float]:
+        nonlocal saw_ffmpeg_progress
+        if "=" not in line:
+            return None
+
+        key, value = line.split("=", 1)
+        processed_seconds: Optional[float] = None
+        if key in {"out_time_ms", "out_time_us"}:
+            try:
+                processed_seconds = int(value) / 1_000_000.0
+            except ValueError:
+                return None
+        elif key == "out_time":
+            processed_seconds = parse_ffmpeg_timestamp(value)
+        elif key == "progress" and value == "end" and duration and not saw_ffmpeg_progress:
+            return 100.0
+
+        if processed_seconds is None or not duration:
+            return None
+
+        saw_ffmpeg_progress = True
+        return 100.0 * min(processed_seconds, duration) / duration
+
+    detail = f"duration {format_duration(duration)}" if duration else "duration unknown"
+    output_tail = run_with_progress(
+        cmd,
+        "ffmpeg conversion",
+        parse_progress,
+        reporter=progress,
+        verbose=verbose,
+        start_detail=detail if progress else None,
+        finish_detail=str(output_wav) if progress else None,
+        missing_binary_label=ffmpeg_bin,
+    )
+
+    try:
+        validate_nonempty_output(output_wav, "ffmpeg")
+    except SystemExit:
+        print_process_tail(output_tail, "ffmpeg conversion")
+        raise
 
 
 def run_threaded_with_periodic_progress(
