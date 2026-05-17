@@ -37,9 +37,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+from audio_common import ProgressReporter, format_duration, print_process_tail, run_with_progress
 
 try:
     from pyannote.audio import Pipeline
@@ -75,117 +76,8 @@ def maybe_set_metal_env() -> None:
 
 
 # ───────────────────────────────────────────────────────────────────────────────
-# Progress reporting
+# Progress parsing
 # ───────────────────────────────────────────────────────────────────────────────
-
-
-def format_duration(seconds: Optional[float]) -> str:
-    """Format a duration in seconds as MM:SS or H:MM:SS."""
-    if seconds is None:
-        return "unknown"
-
-    try:
-        seconds_float = float(seconds)
-    except (TypeError, ValueError):
-        return "unknown"
-
-    if seconds_float < 0:
-        return "unknown"
-
-    seconds_int = int(round(seconds_float))
-    hours, remainder = divmod(seconds_int, 3600)
-    minutes, secs = divmod(remainder, 60)
-    if hours:
-        return f"{hours}:{minutes:02d}:{secs:02d}"
-    return f"{minutes:02d}:{secs:02d}"
-
-
-class ProgressReporter:
-    """Print throttled, line-oriented progress reports to stderr."""
-
-    def __init__(self, enabled: bool = True, interval: float = 10.0):
-        self.enabled = enabled
-        self.interval = max(0.5, interval)
-        self.starts: Dict[str, float] = {}
-        self.last_updates: Dict[str, float] = {}
-
-    def info(self, message: str) -> None:
-        if self.enabled:
-            print(f"INFO: {message}", file=sys.stderr, flush=True)
-
-    def start(self, stage: str, detail: Optional[str] = None) -> None:
-        if not self.enabled:
-            return
-
-        now = time.monotonic()
-        self.starts[stage] = now
-        self.last_updates[stage] = 0.0
-
-        message = f"{stage} started"
-        if detail:
-            message = f"{message} ({detail})"
-        print(f"INFO: {message}", file=sys.stderr, flush=True)
-
-    def update(
-        self,
-        stage: str,
-        completed: Optional[float] = None,
-        total: Optional[float] = None,
-        *,
-        detail: Optional[str] = None,
-        force: bool = False,
-        show_count: bool = True,
-    ) -> None:
-        if not self.enabled:
-            return
-
-        now = time.monotonic()
-        self.starts.setdefault(stage, now)
-        last_update = self.last_updates.get(stage, 0.0)
-        if not force and now - last_update < self.interval:
-            return
-
-        self.last_updates[stage] = now
-        elapsed = now - self.starts[stage]
-        parts: List[str] = []
-
-        if completed is not None and total is not None and total > 0:
-            bounded_completed = min(max(float(completed), 0.0), float(total))
-            percent = 100.0 * bounded_completed / float(total)
-            parts.append(f"{percent:5.1f}%")
-
-            if show_count:
-                parts.append(f"({bounded_completed:g}/{float(total):g})")
-
-            eta = None
-            if bounded_completed > 0 and bounded_completed < total:
-                eta = elapsed * (float(total) - bounded_completed) / bounded_completed
-
-            parts.append(f"elapsed {format_duration(elapsed)}")
-            parts.append(f"ETA {format_duration(eta)}")
-
-        elif completed is not None:
-            parts.append(f"processed {format_duration(completed)}")
-            parts.append(f"elapsed {format_duration(elapsed)}")
-
-        else:
-            parts.append(f"elapsed {format_duration(elapsed)}")
-
-        if detail:
-            parts.append(detail)
-
-        print(f"INFO: {stage}: {', '.join(parts)}", file=sys.stderr, flush=True)
-
-    def finish(self, stage: str, detail: Optional[str] = None) -> None:
-        if not self.enabled:
-            return
-
-        now = time.monotonic()
-        start = self.starts.get(stage, now)
-        message = f"{stage} finished in {format_duration(now - start)}"
-        if detail:
-            message = f"{message} ({detail})"
-        print(f"INFO: {message}", file=sys.stderr, flush=True)
 
 
 class PyannoteProgressHook:
@@ -288,16 +180,6 @@ def probe_media_duration(
         return None
 
     return duration if duration > 0 else None
-
-
-def print_process_tail(lines: List[str], label: str) -> None:
-    """Print a short tail from captured process output after a failure."""
-    if not lines:
-        return
-
-    print(f"ERROR: Last {label} output lines:", file=sys.stderr)
-    for line in lines[-20:]:
-        print(f"  {line}", file=sys.stderr)
 
 
 def validate_nonempty_output(path: Path, label: str) -> None:
@@ -785,6 +667,7 @@ def run_ffmpeg_convert(
 ) -> None:
     """Convert input media to mono 16 kHz WAV using ffmpeg."""
     duration = probe_media_duration(input_path, ffprobe_bin, verbose) if progress else None
+    saw_ffmpeg_progress = False
 
     cmd = [
         ffmpeg_bin,
@@ -815,101 +698,46 @@ def run_ffmpeg_convert(
     if verbose:
         print(f"INFO: Running ffmpeg: {' '.join(cmd)}", file=sys.stderr)
 
-    if progress:
-        detail = f"duration {format_duration(duration)}" if duration else "duration unknown"
-        progress.start("ffmpeg conversion", detail=detail)
-        output_tail: List[str] = []
-        saw_ffmpeg_progress = False
+    def parse_progress(line: str) -> Optional[float]:
+        nonlocal saw_ffmpeg_progress
+        if "=" not in line:
+            return None
 
-        try:
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-        except FileNotFoundError:
-            print(f"ERROR: ffmpeg binary not found: {ffmpeg_bin}", file=sys.stderr)
-            sys.exit(1)
+        key, value = line.split("=", 1)
+        processed_seconds: Optional[float] = None
+        if key in {"out_time_ms", "out_time_us"}:
+            try:
+                processed_seconds = int(value) / 1_000_000.0
+            except ValueError:
+                return None
+        elif key == "out_time":
+            processed_seconds = parse_ffmpeg_timestamp(value)
+        elif key == "progress" and value == "end" and duration and not saw_ffmpeg_progress:
+            return 100.0
 
-        assert process.stdout is not None
-        for raw_line in process.stdout:
-            line = raw_line.strip()
-            if not line:
-                continue
+        if processed_seconds is None or not duration:
+            return None
 
-            if "=" not in line:
-                output_tail.append(line)
-                if verbose:
-                    print(line, file=sys.stderr)
-                continue
+        saw_ffmpeg_progress = True
+        return 100.0 * min(processed_seconds, duration) / duration
 
-            key, value = line.split("=", 1)
-            processed_seconds: Optional[float] = None
-            if key in {"out_time_ms", "out_time_us"}:
-                try:
-                    processed_seconds = int(value) / 1_000_000.0
-                except ValueError:
-                    processed_seconds = None
-            elif key == "out_time":
-                processed_seconds = parse_ffmpeg_timestamp(value)
-            elif key == "progress" and value == "end":
-                if duration and not saw_ffmpeg_progress:
-                    progress.update(
-                        "ffmpeg conversion",
-                        completed=duration,
-                        total=duration,
-                        force=True,
-                        show_count=False,
-                    )
-                continue
-
-            if processed_seconds is not None:
-                saw_ffmpeg_progress = True
-                if duration:
-                    progress.update(
-                        "ffmpeg conversion",
-                        completed=min(processed_seconds, duration),
-                        total=duration,
-                        show_count=False,
-                    )
-                else:
-                    progress.update(
-                        "ffmpeg conversion",
-                        completed=processed_seconds,
-                    )
-
-        returncode = process.wait()
-        if returncode != 0:
-            print_process_tail(output_tail, "ffmpeg")
-            print(f"ERROR: ffmpeg conversion failed with exit code {returncode}", file=sys.stderr)
-            sys.exit(1)
-
-        try:
-            validate_nonempty_output(output_path, "ffmpeg")
-        except SystemExit:
-            print_process_tail(output_tail, "ffmpeg")
-            raise
-
-        progress.finish("ffmpeg conversion", detail=str(output_path))
-        return
+    detail = f"duration {format_duration(duration)}" if duration else "duration unknown"
+    output_tail = run_with_progress(
+        cmd,
+        "ffmpeg conversion",
+        parse_progress,
+        reporter=progress,
+        verbose=verbose,
+        start_detail=detail if progress else None,
+        finish_detail=str(output_path) if progress else None,
+        missing_binary_label=ffmpeg_bin,
+    )
 
     try:
-        subprocess.run(
-            cmd,
-            check=True,
-            stdout=None if verbose else subprocess.DEVNULL,
-            stderr=None if verbose else subprocess.DEVNULL,
-        )
-    except FileNotFoundError:
-        print(f"ERROR: ffmpeg binary not found: {ffmpeg_bin}", file=sys.stderr)
-        sys.exit(1)
-    except subprocess.CalledProcessError as e:
-        print(f"ERROR: ffmpeg conversion failed: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    validate_nonempty_output(output_path, "ffmpeg")
+        validate_nonempty_output(output_path, "ffmpeg")
+    except SystemExit:
+        print_process_tail(output_tail, "ffmpeg conversion")
+        raise
 
 
 def resolve_whisper_bin(whisper_bin: str, verbose: bool = False) -> str:
@@ -966,88 +794,31 @@ def run_whisper(
     if verbose:
         print(f"INFO: Running whisper-cpp: {' '.join(cmd)}", file=sys.stderr)
 
-    if progress:
-        progress.start("whisper-cpp ASR")
-        output_tail: List[str] = []
-        progress_pattern = re.compile(r"(\d+(?:\.\d+)?)\s*%")
-        last_percent: Optional[float] = None
+    progress_pattern = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 
-        try:
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-        except FileNotFoundError:
-            print(f"ERROR: whisper-cpp binary not found: {whisper_bin}", file=sys.stderr)
-            sys.exit(1)
+    def parse_progress(line: str) -> Optional[float]:
+        progress_match = progress_pattern.search(line) if "progress" in line.lower() else None
+        if not progress_match:
+            return None
+        return float(progress_match.group(1))
 
-        assert process.stdout is not None
-        for raw_line in process.stdout:
-            line = raw_line.strip()
-            if not line:
-                continue
-
-            progress_match = progress_pattern.search(line) if "progress" in line.lower() else None
-            if progress_match:
-                percent = float(progress_match.group(1))
-                last_percent = percent
-                progress.update(
-                    "whisper-cpp ASR",
-                    completed=percent,
-                    total=100.0,
-                    force=percent >= 100.0,
-                    show_count=False,
-                )
-                continue
-
-            output_tail.append(line)
-            if verbose:
-                print(line, file=sys.stderr)
-
-        returncode = process.wait()
-        if returncode != 0:
-            print_process_tail(output_tail, "whisper-cpp")
-            print(f"ERROR: whisper-cpp failed with exit code {returncode}", file=sys.stderr)
-            sys.exit(1)
-
-        if not json_path.exists():
-            print_process_tail(output_tail, "whisper-cpp")
-            print(
-                f"ERROR: whisper-cpp finished without writing expected JSON: {json_path}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-        if last_percent is None or last_percent < 100.0:
-            progress.update(
-                "whisper-cpp ASR",
-                completed=100.0,
-                total=100.0,
-                force=True,
-                show_count=False,
-            )
-        progress.finish("whisper-cpp ASR", detail=str(json_path))
-        return
-
-    try:
-        subprocess.run(
-            cmd,
-            check=True,
-            stdout=None if verbose else subprocess.DEVNULL,
-            stderr=None if verbose else subprocess.DEVNULL,
-        )
-    except FileNotFoundError:
-        print(f"ERROR: whisper-cpp binary not found: {whisper_bin}", file=sys.stderr)
-        sys.exit(1)
-    except subprocess.CalledProcessError as e:
-        print(f"ERROR: whisper-cpp failed: {e}", file=sys.stderr)
-        sys.exit(1)
+    output_tail = run_with_progress(
+        cmd,
+        "whisper-cpp ASR",
+        parse_progress,
+        reporter=progress,
+        verbose=verbose,
+        finish_detail=str(json_path) if progress else None,
+        missing_binary_label=whisper_bin,
+        force_final_percent=True,
+    )
 
     if not json_path.exists():
-        print(f"ERROR: whisper-cpp did not create expected JSON: {json_path}", file=sys.stderr)
+        print_process_tail(output_tail, "whisper-cpp ASR")
+        print(
+            f"ERROR: whisper-cpp finished without writing expected JSON: {json_path}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
 
