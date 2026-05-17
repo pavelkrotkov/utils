@@ -11,22 +11,73 @@ Usage:
 
     # Standard execution:
     ./pdf_convert_mathpix_sdk.py input.pdf -o output.md
+
+    # Override credentials and enable table fallback:
+    ./pdf_convert_mathpix_sdk.py input.pdf --app-id YOUR_ID --app-key YOUR_KEY --enable-tables-fallback
 """
 
 import argparse
 import os
 import sys
+from pathlib import Path
 
 from mpxpy.mathpix_client import MathpixClient
 
 
+def log(level: str, message: str) -> None:
+    print(f"{level}: {message}", file=sys.stderr)
+
+
+def resolve_credentials(args: argparse.Namespace) -> tuple[str, str]:
+    app_id = args.app_id or os.environ.get("MATHPIX_APP_ID")
+    app_key = args.app_key or os.environ.get("MATHPIX_APP_KEY") or os.environ.get("MATHPIX_API_KEY")
+
+    if not app_id or not app_key:
+        raise ValueError(
+            "Mathpix credentials not found. Pass --app-id/--app-key or set "
+            "MATHPIX_APP_ID and MATHPIX_APP_KEY. MATHPIX_API_KEY may also be "
+            "used as the app key."
+        )
+
+    return app_id, app_key
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Convert a PDF to Markdown with LaTeX formulas via Mathpix."
+        description="Convert a PDF to Markdown with LaTeX formulas via Mathpix.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s document.pdf
+  %(prog)s document.pdf -o notes.md
+  %(prog)s document.pdf --app-id YOUR_ID --app-key YOUR_KEY
+  %(prog)s document.pdf --rm-spaces --enable-tables-fallback
+
+Environment Variables:
+  MATHPIX_APP_ID     Your Mathpix application ID
+  MATHPIX_APP_KEY    Your Mathpix application key
+  MATHPIX_API_KEY    Alternative fallback for the application key
+        """,
     )
     parser.add_argument("pdf_path", help="Path to the input PDF file")
     parser.add_argument(
         "-o", "--output", help="Output Markdown file path (default: same name as PDF, with .md)"
+    )
+    parser.add_argument("--app-id", help="Mathpix App ID (overrides MATHPIX_APP_ID)")
+    parser.add_argument(
+        "--app-key",
+        help="Mathpix App Key (overrides MATHPIX_APP_KEY and MATHPIX_API_KEY)",
+    )
+    parser.add_argument(
+        "--rm-spaces",
+        action="store_true",
+        default=True,
+        help="Remove extra whitespace from equations in Mathpix text outputs",
+    )
+    parser.add_argument(
+        "--enable-tables-fallback",
+        action="store_true",
+        help="Enable Mathpix's advanced fallback algorithm for large or complex tables",
     )
     parser.add_argument(
         "--timeout",
@@ -36,41 +87,44 @@ def main():
     )
     args = parser.parse_args()
 
-    if not os.path.isfile(args.pdf_path):
-        print(f"Error: '{args.pdf_path}' does not exist or is not a file.", file=sys.stderr)
+    pdf_path = Path(args.pdf_path)
+    if not pdf_path.is_file():
+        log("ERROR", f"'{pdf_path}' does not exist or is not a file.")
         sys.exit(1)
 
-    app_id = os.environ.get("MATHPIX_APP_ID")
-    app_key = os.environ.get("MATHPIX_APP_KEY") or os.environ.get("MATHPIX_API_KEY")
+    try:
+        app_id, app_key = resolve_credentials(args)
+        client = MathpixClient(app_id=app_id, app_key=app_key)
 
-    if not app_id or not app_key:
-        print(
-            "Error: Please set MATHPIX_APP_ID and MATHPIX_APP_KEY (or MATHPIX_API_KEY) "
-            "environment variables.",
-            file=sys.stderr,
+        log("INFO", f"Uploading {pdf_path} to Mathpix.")
+        pdf = client.pdf_new(
+            file_path=str(pdf_path),
+            convert_to_md=True,
+            math_inline_delimiters=["$", "$"],
+            math_display_delimiters=["$$", "$$"],
+            rm_spaces=args.rm_spaces,
+            enable_tables_fallback=args.enable_tables_fallback,
         )
+
+        log("INFO", f"Processing PDF {pdf.pdf_id}.")
+        completed = pdf.wait_until_complete(timeout=args.timeout)
+        if not completed:
+            raise TimeoutError(
+                f"Mathpix processing did not complete within {args.timeout} seconds."
+            )
+
+        if args.output:
+            out_path = Path(args.output)
+        else:
+            out_path = pdf_path.with_suffix(".md")
+
+        pdf.to_md_file(path=str(out_path))
+        log("INFO", f"Wrote Markdown to {out_path}.")
+    except Exception as exc:
+        log("ERROR", str(exc))
         sys.exit(1)
 
-    client = MathpixClient(app_id=app_id, app_key=app_key)
-
-    pdf = client.pdf_new(
-        file_path=args.pdf_path,
-        convert_to_md=True,
-        math_inline_delimiters=["$", "$"],
-        math_display_delimiters=["$$", "$$"],
-    )
-
-    pdf.wait_until_complete(timeout=args.timeout)
-
-    if args.output:
-        out_path = args.output
-    else:
-        base, _ = os.path.splitext(args.pdf_path)
-        out_path = base + ".md"
-
-    pdf.to_md_file(path=out_path)
-
-    print(f"Wrote Markdown to: {out_path}")
+    sys.exit(0)
 
 
 if __name__ == "__main__":
