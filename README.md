@@ -174,6 +174,14 @@ Local whisper-cpp (plain transcript by default):
 
 ```bash
 uv run ./audio_transcribe_whisper.py interview.m4a
+uv run ./audio_transcribe_whisper.py interview.m4a --format srt
+```
+
+Apple Silicon VibeVoice-ASR via MLX:
+
+```bash
+uv run ./audio_transcribe_vibevoice.py interview.m4a
+uv run ./audio_transcribe_vibevoice.py interview.m4a --format vtt -o interview.vtt
 ```
 
 Enable pyannote speaker diarization when speaker labels are needed:
@@ -185,6 +193,10 @@ uv run ./audio_transcribe_whisper.py interview.m4a --diarization --num-speakers 
 By default, the local script prints progress/ETA reports and writes `<input>.txt`.
 With `--diarization`, it writes `<input>.spk.txt`. Use `--no-progress` to silence
 progress reports or `--progress-interval SECONDS` to adjust their frequency.
+
+Whisper and VibeVoice share the same local `txt`, `srt`, and `vtt` transcript
+emitters. Whisper defaults to `diarized-txt` output when `--diarization` is
+enabled.
 
 ## Notes
 
