@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Protocol, Tuple, runtime_checkable
 
 import requests
 
@@ -62,6 +62,70 @@ class AlbumDetail:
     release_date: str
     copyright: str
     track_count: Optional[int] = None
+
+
+@runtime_checkable
+class SearchBackend(Protocol):
+    def search_albums(self, query: str, limit: int = 5) -> List[AlbumHit]: ...
+
+    def get_album_details(self, album_id: str) -> Optional[AlbumDetail]: ...
+
+
+class CachedSearchBackend:
+    """Offline SearchBackend backed by cached truth-record candidates."""
+
+    def __init__(self, truth_records: Iterable[Dict]) -> None:
+        self._hits_by_query: Dict[str, List[AlbumHit]] = {}
+        self._details_by_id: Dict[str, AlbumDetail] = {}
+        self._seen_by_query: Dict[str, set[str]] = {}
+
+        for record in truth_records:
+            if not isinstance(record, dict):
+                continue
+            for raw_candidate in record.get("candidates") or []:
+                if not isinstance(raw_candidate, dict):
+                    continue
+                hit = self._candidate_to_album_hit(raw_candidate)
+                self._details_by_id.setdefault(
+                    hit.id,
+                    AlbumDetail(
+                        id=hit.id,
+                        title=hit.title,
+                        artists=hit.artists,
+                        release_date=hit.release_date,
+                        copyright=hit.copyright,
+                        track_count=raw_candidate.get("track_count"),
+                    ),
+                )
+                for query in raw_candidate.get("queries") or []:
+                    self._add_query_hit(str(query), hit)
+
+    def _add_query_hit(self, query: str, hit: AlbumHit) -> None:
+        if not query:
+            return
+        seen = self._seen_by_query.setdefault(query, set())
+        if hit.id in seen:
+            return
+        seen.add(hit.id)
+        self._hits_by_query.setdefault(query, []).append(hit)
+
+    def _candidate_to_album_hit(self, candidate: Dict) -> AlbumHit:
+        artists = candidate.get("artists") or []
+        if isinstance(artists, str):
+            artists = [artists]
+        return AlbumHit(
+            id=str(candidate.get("id", "")),
+            title=str(candidate.get("title", "")),
+            artists=[str(artist) for artist in artists],
+            release_date=str(candidate.get("release_date", "")),
+            copyright=str(candidate.get("copyright", "")),
+        )
+
+    def search_albums(self, query: str, limit: int = 5) -> List[AlbumHit]:
+        return list(self._hits_by_query.get(query, []))[:limit]
+
+    def get_album_details(self, album_id: str) -> Optional[AlbumDetail]:
+        return self._details_by_id.get(str(album_id))
 
 
 class OAuthHandler:
@@ -239,7 +303,7 @@ def get_valid_token(token_file: Path) -> str:
     return tokens["access_token"]
 
 
-class TidalClient:
+class TidalClient(SearchBackend):
     def __init__(self, token: str, country_code: str) -> None:
         self.token = token
         self.country_code = country_code
