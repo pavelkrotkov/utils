@@ -24,14 +24,13 @@ from typing import Dict, List, Optional
 
 from tidal_pipeline.client import AlbumHit
 from tidal_pipeline.match import (
-    album_from_record,
     choose_auto_candidate,
     load_truth_records,
     load_weights,
     score_candidate,
     summarize_review_records,
 )
-from tidal_pipeline.models import AlbumInput, Candidate
+from tidal_pipeline.models import AlbumInput, Candidate, TruthRecord
 
 
 # ---------------------------------------------------------------------------
@@ -39,23 +38,20 @@ from tidal_pipeline.models import AlbumInput, Candidate
 # ---------------------------------------------------------------------------
 
 
-def candidate_to_album_hit(c: dict) -> AlbumHit:
+def candidate_to_album_hit(candidate: Candidate) -> AlbumHit:
     """Reconstruct an AlbumHit from a cached truth-record candidate."""
-    artists = c.get("artists") or []
-    if isinstance(artists, str):
-        artists = [artists]
     return AlbumHit(
-        id=str(c.get("id", "")),
-        title=str(c.get("title", "")),
-        artists=artists,
-        release_date=str(c.get("release_date", "")),
-        copyright=str(c.get("copyright", "")),
+        id=candidate.id,
+        title=candidate.title,
+        artists=candidate.artists,
+        release_date=candidate.release_date,
+        copyright=candidate.copyright,
     )
 
 
 def rescore_candidates(
     album: AlbumInput,
-    raw_candidates: List[dict],
+    raw_candidates: List[Candidate],
     weights: Dict[str, float],
 ) -> List[Candidate]:
     """Re-score all cached candidates and return sorted descending."""
@@ -72,9 +68,9 @@ def rescore_candidates(
                 copyright=hit.copyright,
                 score=score,
                 features=features,
-                queries=c.get("queries", []),
-                track_count=c.get("track_count"),
-                details_fetched=c.get("details_fetched", False),
+                queries=c.queries,
+                track_count=c.track_count,
+                details_fetched=c.details_fetched,
             )
         )
     results.sort(key=lambda x: x.score, reverse=True)
@@ -138,31 +134,26 @@ class RecordResult:
 
 
 def evaluate_record(
-    record: dict,
+    record: TruthRecord,
     weights: Dict[str, float],
     score_threshold: float,
     recent_year: int,
     recent_threshold: float,
 ) -> Optional[RecordResult]:
     """Evaluate a single truth record. Returns None if not evaluable."""
-    choice = record.get("choice") or {}
-    status = choice.get("status") or ""
+    status = record.choice.status
     if status not in {"selected", "auto_selected"}:
         return None
 
-    ground_truth_id = str(choice.get("tidal_id") or "")
-    if not ground_truth_id:
-        chosen = record.get("chosen") or {}
-        ground_truth_id = str(chosen.get("id") or "")
+    ground_truth_id = record.selected_tidal_id
     if not ground_truth_id:
         return None
 
-    raw_candidates = record.get("candidates") or []
+    raw_candidates = record.candidates
     if not raw_candidates:
         return None
 
-    album = album_from_record(record)
-    rescored = rescore_candidates(album, raw_candidates, weights)
+    rescored = rescore_candidates(record.album, raw_candidates, weights)
 
     # Find the ground-truth candidate in the re-scored ordering
     new_rank = 0
@@ -175,9 +166,8 @@ def evaluate_record(
 
     # Original score from truth record
     original_score = 0.0
-    chosen_data = record.get("chosen") or {}
-    if isinstance(chosen_data.get("score"), (int, float)):
-        original_score = float(chosen_data["score"])
+    if record.chosen:
+        original_score = record.chosen.score
 
     # Auto-selection replay
     auto_candidate, auto_reason = choose_auto_candidate(
@@ -191,8 +181,8 @@ def evaluate_record(
     top = rescored[0] if rescored else None
 
     return RecordResult(
-        record_id=record.get("record_id", ""),
-        title=(record.get("album") or {}).get("title", ""),
+        record_id=record.record_id,
+        title=record.album.title,
         ground_truth_id=ground_truth_id,
         ground_truth_status=status,
         original_score=original_score,
