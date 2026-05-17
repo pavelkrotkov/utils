@@ -19,6 +19,13 @@ import argparse
 import sys
 from pathlib import Path
 
+from pdf_convert_common import (
+    import_or_die,
+    parse_page_range,
+    require_pdf_path,
+    resolve_output_path,
+)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -47,80 +54,15 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def resolve_output_path(
-    input_path: Path,
-    output_path: Path | None,
-    output_dir: Path | None,
-) -> Path:
-    if output_path is not None:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        return output_path
-
-    resolved_dir = output_dir or input_path.parent
-    resolved_dir.mkdir(parents=True, exist_ok=True)
-    return resolved_dir / f"{input_path.stem}.md"
-
-
 def load_pdf_page_count(pdf_path: Path) -> int:
-    try:
-        from pypdf import PdfReader
-    except ImportError as exc:
-        print(f"ERROR: Missing required Python package: {exc}", file=sys.stderr)
-        print("Install with: pip install pypdf", file=sys.stderr)
-        sys.exit(1)
+    pypdf = import_or_die("pypdf", "pypdf")
 
     try:
-        reader = PdfReader(str(pdf_path))
+        reader = pypdf.PdfReader(str(pdf_path))
         return len(reader.pages)
     except Exception as exc:
         print(f"ERROR: Unable to read PDF pages: {exc}", file=sys.stderr)
         sys.exit(1)
-
-
-def parse_page_token(token: str, page_count: int, *, one_based: bool) -> int:
-    if token.lower() == "n":
-        page = page_count
-    else:
-        try:
-            page = int(token)
-        except ValueError as exc:
-            raise ValueError(
-                f"Invalid --page-range value: {token!r} is not a page number."
-            ) from exc
-
-    if page < 1:
-        raise ValueError("Invalid --page-range value: pages are 1-based.")
-    if page > page_count:
-        raise ValueError("Invalid --page-range value: page is outside the document.")
-    return page if one_based else page - 1
-
-
-def parse_page_range(spec: str, page_count: int, *, one_based: bool) -> list[int]:
-    if page_count < 1:
-        raise ValueError("Invalid --page-range value: PDF has no pages.")
-
-    pages: list[int] = []
-    for raw_part in spec.split(","):
-        part = raw_part.strip()
-        if not part:
-            raise ValueError("Invalid --page-range value: empty page range item.")
-        if part.count("-") > 1:
-            raise ValueError("Invalid --page-range value: malformed page range.")
-        if "-" in part:
-            start_raw, end_raw = part.split("-", 1)
-            if not start_raw.strip() or not end_raw.strip():
-                raise ValueError("Invalid --page-range value: malformed page range.")
-            start = parse_page_token(start_raw.strip(), page_count, one_based=one_based)
-            end = parse_page_token(end_raw.strip(), page_count, one_based=one_based)
-            if end < start:
-                raise ValueError("Invalid --page-range value: range end is before start.")
-            pages.extend(range(start, end + 1))
-        else:
-            pages.append(parse_page_token(part, page_count, one_based=one_based))
-
-    if not pages:
-        raise ValueError("Invalid --page-range value: no pages selected.")
-    return sorted(set(pages))
 
 
 def collapse_page_ranges(pages: list[int]) -> list[tuple[int, int]]:
@@ -145,23 +87,17 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    if not args.pdf_path.exists() or not args.pdf_path.is_file():
-        print(f"ERROR: PDF file not found: {args.pdf_path}", file=sys.stderr)
-        sys.exit(1)
+    pdf_path = require_pdf_path(args.pdf_path)
 
-    try:
-        from docling.document_converter import DocumentConverter
-    except ImportError as exc:
-        print(f"ERROR: Missing required Python package: {exc}", file=sys.stderr)
-        print("Install with: pip install docling", file=sys.stderr)
-        sys.exit(1)
+    docling_converter = import_or_die("docling.document_converter", "docling")
+    DocumentConverter = docling_converter.DocumentConverter
 
-    output_path = resolve_output_path(args.pdf_path, args.output, args.output_dir)
+    output_path = resolve_output_path(pdf_path, args.output, args.output_dir)
 
     page_ranges = None
     if args.page_range:
         try:
-            page_count = load_pdf_page_count(args.pdf_path)
+            page_count = load_pdf_page_count(pdf_path)
             pages = parse_page_range(args.page_range, page_count, one_based=True)
             page_ranges = collapse_page_ranges(pages)
         except ValueError as exc:
@@ -171,11 +107,11 @@ def main() -> None:
     converter = DocumentConverter()
     try:
         if page_ranges is None:
-            result = converter.convert(str(args.pdf_path))
+            result = converter.convert(str(pdf_path))
         else:
             markdown_parts = []
             for page_range in page_ranges:
-                result = converter.convert(str(args.pdf_path), page_range=page_range)
+                result = converter.convert(str(pdf_path), page_range=page_range)
                 if result.document is None:
                     print("ERROR: Docling returned no document.", file=sys.stderr)
                     sys.exit(1)

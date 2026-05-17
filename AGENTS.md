@@ -75,7 +75,9 @@ Repository scripts:
 Repository layout:
 - Each script is standalone and intended to be run directly.
 - Outputs are typically written next to the input file unless overridden.
-- No shared modules or packages; avoid introducing cross-script imports.
+- Prefer standalone scripts for simple one-off utilities.
+- Extract a shared module when duplication is producing bugs or divergent semantics;
+  keep shared modules narrow, local to the affected script cluster, and CLI-friendly.
 
 Execution tips:
 - Ensure scripts are executable (`chmod +x <script>` if needed).
@@ -87,7 +89,8 @@ Code Style Guidelines
 -------------------------------------------------------------------------------
 
 General
-- Keep scripts standalone; avoid cross-file imports.
+- Prefer standalone scripts; use focused shared modules when they prevent duplicated
+  behavior from drifting across related scripts.
 - Keep changes minimal and focused; do not add dependencies unless necessary.
 - Favor clarity over cleverness; explicit control flow is preferred.
 - Keep output user-friendly and CLI-oriented; print concise status messages.

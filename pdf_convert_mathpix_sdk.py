@@ -16,8 +16,9 @@ Usage:
 import argparse
 import os
 import sys
+from pathlib import Path
 
-from mpxpy.mathpix_client import MathpixClient
+from pdf_convert_common import import_or_die, require_pdf_path, resolve_output_path
 
 
 def main():
@@ -36,9 +37,7 @@ def main():
     )
     args = parser.parse_args()
 
-    if not os.path.isfile(args.pdf_path):
-        print(f"Error: '{args.pdf_path}' does not exist or is not a file.", file=sys.stderr)
-        sys.exit(1)
+    pdf_path = require_pdf_path(args.pdf_path)
 
     app_id = os.environ.get("MATHPIX_APP_ID")
     app_key = os.environ.get("MATHPIX_APP_KEY") or os.environ.get("MATHPIX_API_KEY")
@@ -51,10 +50,12 @@ def main():
         )
         sys.exit(1)
 
+    mathpix_client = import_or_die("mpxpy.mathpix_client", "mpxpy")
+    MathpixClient = mathpix_client.MathpixClient
     client = MathpixClient(app_id=app_id, app_key=app_key)
 
     pdf = client.pdf_new(
-        file_path=args.pdf_path,
+        file_path=str(pdf_path),
         convert_to_md=True,
         math_inline_delimiters=["$", "$"],
         math_display_delimiters=["$$", "$$"],
@@ -62,13 +63,13 @@ def main():
 
     pdf.wait_until_complete(timeout=args.timeout)
 
-    if args.output:
-        out_path = args.output
-    else:
-        base, _ = os.path.splitext(args.pdf_path)
-        out_path = base + ".md"
+    out_path = resolve_output_path(
+        pdf_path,
+        Path(args.output) if args.output else None,
+        None,
+    )
 
-    pdf.to_md_file(path=out_path)
+    pdf.to_md_file(path=str(out_path))
 
     print(f"Wrote Markdown to: {out_path}")
 

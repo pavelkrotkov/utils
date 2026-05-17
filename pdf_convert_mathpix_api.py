@@ -14,13 +14,16 @@ Usage:
     ./pdf_convert_mathpix_api.py input.pdf -o output.md
 """
 
+import argparse
+import json
 import os
 import sys
 import time
-import json
-import argparse
 from pathlib import Path
-import requests
+
+from pdf_convert_common import import_or_die, require_pdf_path, resolve_output_path
+
+requests = import_or_die("requests", "requests")
 
 
 class MathpixConverter:
@@ -116,19 +119,10 @@ class MathpixConverter:
 
     def convert_pdf(self, pdf_path, output_path=None):
         """Complete PDF to markdown conversion workflow"""
-        pdf_path = Path(pdf_path)
-
-        if not pdf_path.exists():
-            raise FileNotFoundError(f"PDF file not found: {pdf_path}")
-
-        if not pdf_path.suffix.lower() == ".pdf":
-            raise ValueError("Input file must be a PDF")
-
-        # Determine output path
-        if output_path is None:
-            output_path = pdf_path.with_suffix(".md")
-        else:
-            output_path = Path(output_path)
+        pdf_path = require_pdf_path(pdf_path)
+        output_path = resolve_output_path(
+            pdf_path, Path(output_path) if output_path else None, None
+        )
 
         try:
             # Upload PDF

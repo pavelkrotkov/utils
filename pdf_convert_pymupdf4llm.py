@@ -19,6 +19,13 @@ import argparse
 import sys
 from pathlib import Path
 
+from pdf_convert_common import (
+    import_or_die,
+    parse_page_range,
+    require_pdf_path,
+    resolve_output_path,
+)
+
 
 DEFAULT_DPI = 150
 DEFAULT_IMAGE_FORMAT = "png"
@@ -93,73 +100,11 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def resolve_output_path(
-    input_path: Path,
-    output_path: Path | None,
-    output_dir: Path | None,
-) -> Path:
-    if output_path is not None:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        return output_path
-
-    resolved_dir = output_dir or input_path.parent
-    resolved_dir.mkdir(parents=True, exist_ok=True)
-    return resolved_dir / f"{input_path.stem}.md"
-
-
-def parse_page_token(token: str, page_count: int, *, one_based: bool) -> int:
-    if token.lower() == "n":
-        page = page_count
-    else:
-        try:
-            page = int(token)
-        except ValueError as exc:
-            raise ValueError(
-                f"Invalid --page-range value: {token!r} is not a page number."
-            ) from exc
-
-    if page < 1:
-        raise ValueError("Invalid --page-range value: pages are 1-based.")
-    if page > page_count:
-        raise ValueError("Invalid --page-range value: page is outside the document.")
-    return page if one_based else page - 1
-
-
-def parse_page_range(spec: str, page_count: int, *, one_based: bool) -> list[int]:
-    if page_count < 1:
-        raise ValueError("Invalid --page-range value: PDF has no pages.")
-
-    pages: list[int] = []
-    for raw_part in spec.split(","):
-        part = raw_part.strip()
-        if not part:
-            raise ValueError("Invalid --page-range value: empty page range item.")
-        if part.count("-") > 1:
-            raise ValueError("Invalid --page-range value: malformed page range.")
-        if "-" in part:
-            start_raw, end_raw = part.split("-", 1)
-            if not start_raw.strip() or not end_raw.strip():
-                raise ValueError("Invalid --page-range value: malformed page range.")
-            start = parse_page_token(start_raw.strip(), page_count, one_based=one_based)
-            end = parse_page_token(end_raw.strip(), page_count, one_based=one_based)
-            if end < start:
-                raise ValueError("Invalid --page-range value: range end is before start.")
-            pages.extend(range(start, end + 1))
-        else:
-            pages.append(parse_page_token(part, page_count, one_based=one_based))
-
-    if not pages:
-        raise ValueError("Invalid --page-range value: no pages selected.")
-    return sorted(set(pages))
-
-
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    if not args.pdf_path.exists() or not args.pdf_path.is_file():
-        print(f"ERROR: PDF file not found: {args.pdf_path}", file=sys.stderr)
-        sys.exit(1)
+    pdf_path = require_pdf_path(args.pdf_path)
 
     if args.write_images and args.embed_images:
         print(
@@ -168,34 +113,19 @@ def main() -> None:
         )
         sys.exit(1)
 
-    try:
-        import pymupdf
-    except ImportError as exc:
-        print(f"ERROR: Missing required Python package: {exc}", file=sys.stderr)
-        print("Install with: pip install pymupdf4llm", file=sys.stderr)
-        sys.exit(1)
+    pymupdf = import_or_die("pymupdf", "pymupdf4llm")
 
     if args.layout:
-        try:
-            import pymupdf.layout  # noqa: F401
-        except ImportError as exc:
-            print(f"ERROR: Layout mode requires pymupdf4llm[layout]: {exc}", file=sys.stderr)
-            print("Install with: pip install pymupdf4llm[layout]", file=sys.stderr)
-            sys.exit(1)
+        import_or_die("pymupdf.layout", "pymupdf4llm[layout]")
 
-    try:
-        import pymupdf4llm
-    except ImportError as exc:
-        print(f"ERROR: Missing required Python package: {exc}", file=sys.stderr)
-        print("Install with: pip install pymupdf4llm", file=sys.stderr)
-        sys.exit(1)
+    pymupdf4llm = import_or_die("pymupdf4llm", "pymupdf4llm")
 
-    output_path = resolve_output_path(args.pdf_path, args.output, args.output_dir)
+    output_path = resolve_output_path(pdf_path, args.output, args.output_dir)
 
     pages = None
     if args.page_range:
         try:
-            doc = pymupdf.open(str(args.pdf_path))
+            doc = pymupdf.open(str(pdf_path))
         except Exception as exc:
             print(f"ERROR: Unable to open PDF: {exc}", file=sys.stderr)
             sys.exit(1)
@@ -227,7 +157,7 @@ def main() -> None:
         kwargs["force_text"] = False
 
     try:
-        markdown_text = pymupdf4llm.to_markdown(str(args.pdf_path), **kwargs)
+        markdown_text = pymupdf4llm.to_markdown(str(pdf_path), **kwargs)
     except Exception as exc:
         print(f"ERROR: pymupdf4llm failed: {exc}", file=sys.stderr)
         sys.exit(1)

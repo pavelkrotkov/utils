@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for the PDF converter page-range parser copies."""
+"""Regression tests for PDF converter page-range parser imports."""
 
 from __future__ import annotations
 
