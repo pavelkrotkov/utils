@@ -29,6 +29,7 @@ Usage Examples:
 
 import argparse
 import inspect
+import itertools
 import json
 import os
 import platform
@@ -40,14 +41,6 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-
-try:
-    from pyannote.audio import Pipeline
-    from pyannote.core import Annotation
-except ImportError as e:
-    print(f"ERROR: Missing required Python package: {e}", file=sys.stderr)
-    print("Install with: pip install torch pyannote.audio", file=sys.stderr)
-    sys.exit(1)
 
 
 # ───────────────────────────────────────────────────────────────────────────────
@@ -499,11 +492,18 @@ def print_pyannote_access_help() -> None:
     )
 
 
-def load_pyannote(model_name: str, hf_token: Optional[str], verbose: bool = False) -> Pipeline:
+def load_pyannote(model_name: str, hf_token: Optional[str], verbose: bool = False) -> Any:
     """
     Load pyannote pipeline with fallback from 3.1 to community-1 if needed.
     Returns: Pipeline instance or exits on failure.
     """
+    try:
+        from pyannote.audio import Pipeline
+    except ImportError as e:
+        print(f"ERROR: Missing required Python package: {e}", file=sys.stderr)
+        print("Install with: pip install torch pyannote.audio", file=sys.stderr)
+        sys.exit(1)
+
     if verbose:
         print(f"INFO: Loading pyannote model: {model_name}", file=sys.stderr)
 
@@ -562,15 +562,22 @@ def load_pyannote(model_name: str, hf_token: Optional[str], verbose: bool = Fals
 
 
 def run_diarization(
-    pipeline: Pipeline,
+    pipeline: Any,
     audio_path: Path,
     num_speakers: Optional[int],
     min_speakers: Optional[int],
     max_speakers: Optional[int],
     verbose: bool = False,
     progress: Optional[ProgressReporter] = None,
-) -> Annotation:
+) -> Any:
     """Run pyannote diarization on audio file. Returns Annotation."""
+    try:
+        from pyannote.core import Annotation
+    except ImportError as e:
+        print(f"ERROR: Missing required Python package: {e}", file=sys.stderr)
+        print("Install with: pip install torch pyannote.audio", file=sys.stderr)
+        sys.exit(1)
+
     kwargs: Dict[str, int] = {}
     if num_speakers is not None:
         kwargs["num_speakers"] = num_speakers
@@ -632,9 +639,77 @@ def overlap(a0: float, a1: float, b0: float, b1: float) -> float:
     return max(0.0, min(a1, b1) - max(a0, b0))
 
 
+def _display_speaker_label(speaker: Optional[str], speaker_names: Optional[List[str]]) -> str:
+    """Map normalized SPEAKER_nn labels to user-provided names when available."""
+    if not speaker:
+        return ""
+
+    if speaker_names and speaker.startswith("SPEAKER_"):
+        try:
+            idx = int(speaker.split("_")[1])
+        except (IndexError, ValueError):
+            return speaker
+
+        if idx < len(speaker_names):
+            return speaker_names[idx]
+
+    return speaker
+
+
+def merge_asr_turns(
+    asr_segments: List[Tuple[float, float, str]],
+    speaker_turns: List[Tuple[float, float, str]],
+    style: str,
+    speaker_names: Optional[List[str]],
+) -> List[str]:
+    """
+    Merge timed ASR tuples with speaker-turn tuples and return transcript lines.
+
+    ASR input is (start, end, text). Speaker-turn input is (start, end, label).
+    Speaker labels are normalized by first appearance before optional name remapping.
+    """
+    seg_speakers: List[Tuple[Optional[str], str]] = []
+    for s_start, s_end, s_text in asr_segments:
+        best_speaker = None
+        best_overlap = 0.0
+
+        for d_start, d_end, speaker_label in speaker_turns:
+            ovlp = overlap(d_start, d_end, s_start, s_end)
+            if ovlp > best_overlap:
+                best_overlap = ovlp
+                best_speaker = speaker_label
+
+        seg_speakers.append((best_speaker, s_text))
+
+    speaker_map: Dict[str, str] = {}
+    for speaker, _ in seg_speakers:
+        if speaker and speaker not in speaker_map:
+            speaker_map[speaker] = f"SPEAKER_{len(speaker_map):02d}"
+
+    normalized = [(speaker_map.get(spk, spk), txt) for spk, txt in seg_speakers]
+    lines: List[str] = []
+    for speaker, group in itertools.groupby(normalized, key=lambda item: item[0]):
+        texts = [text for _, text in group if text]
+        if not texts or not speaker:
+            continue
+
+        combined = " ".join(texts).strip()
+        if not combined:
+            continue
+
+        if style == "breaks":
+            lines.append("--- speaker change ---")
+            lines.append(combined)
+        else:
+            display_label = _display_speaker_label(speaker, speaker_names)
+            lines.append(f"{display_label}: {combined}")
+
+    return lines
+
+
 def merge_asr_with_diar(
     segments: List[Dict[str, Any]],
-    diarization: Annotation,
+    diarization: Any,
     style: str,
     speaker_names: Optional[List[str]],
     verbose: bool = False,
@@ -665,96 +740,23 @@ def merge_asr_with_diar(
             f"INFO: Merging {len(timed_segs)} timed ASR segments with diarization", file=sys.stderr
         )
 
-    # Assign each ASR segment to the speaker with maximum overlap
-    seg_speakers = []
-    for s_start, s_end, s_text in timed_segs:
-        best_speaker = None
-        best_overlap = 0.0
-
-        for turn, _, speaker_label in diarization.itertracks(yield_label=True):
-            ds, de = turn.start, turn.end
-            ovlp = overlap(ds, de, s_start, s_end)
-            if ovlp > best_overlap:
-                best_overlap = ovlp
-                best_speaker = speaker_label
-
-        seg_speakers.append((best_speaker, s_text))
-
-    # Normalize speaker labels: re-map to sequential SPEAKER_00, SPEAKER_01, etc.
-    # based on order of first appearance
-    unique_speakers = []
-    speaker_map = {}
-    for speaker, _ in seg_speakers:
-        if speaker and speaker not in speaker_map:
-            speaker_map[speaker] = f"SPEAKER_{len(unique_speakers):02d}"
-            unique_speakers.append(speaker)
-
-    # Apply mapping
-    seg_speakers = [(speaker_map.get(spk, spk), txt) for spk, txt in seg_speakers]
-
+    speaker_turns = [
+        (turn.start, turn.end, speaker_label)
+        for turn, _, speaker_label in diarization.itertracks(yield_label=True)
+    ]
     if verbose:
+        unique_speakers = []
+        for _, _, speaker_label in speaker_turns:
+            if speaker_label not in unique_speakers:
+                unique_speakers.append(speaker_label)
         print(
-            f"INFO: Normalized {len(unique_speakers)} unique speakers: {list(speaker_map.values())}",
+            "INFO: Normalized "
+            f"{len(unique_speakers)} unique speakers: "
+            f"{[f'SPEAKER_{idx:02d}' for idx, _ in enumerate(unique_speakers)]}",
             file=sys.stderr,
         )
 
-    # Group consecutive segments with same speaker
-    lines = []
-    if not seg_speakers:
-        return lines
-
-    current_speaker = seg_speakers[0][0]
-    current_texts = [seg_speakers[0][1]] if seg_speakers[0][1] else []
-
-    for speaker, text in seg_speakers[1:]:
-        if speaker == current_speaker:
-            if text:
-                current_texts.append(text)
-        else:
-            # Emit current group
-            if current_texts and current_speaker:
-                combined = " ".join(current_texts).strip()
-                if combined:
-                    # Map speaker label to custom name if provided
-                    display_label = current_speaker
-                    if speaker_names and display_label.startswith("SPEAKER_"):
-                        try:
-                            idx = int(display_label.split("_")[1])
-                            if idx < len(speaker_names):
-                                display_label = speaker_names[idx]
-                        except (IndexError, ValueError):
-                            pass
-
-                    if style == "breaks":
-                        lines.append("--- speaker change ---")
-                        lines.append(combined)
-                    else:  # labels
-                        lines.append(f"{display_label}: {combined}")
-
-            # Start new group
-            current_speaker = speaker
-            current_texts = [text] if text else []
-
-    # Emit final group
-    if current_texts and current_speaker:
-        combined = " ".join(current_texts).strip()
-        if combined:
-            display_label = current_speaker
-            if speaker_names and display_label.startswith("SPEAKER_"):
-                try:
-                    idx = int(display_label.split("_")[1])
-                    if idx < len(speaker_names):
-                        display_label = speaker_names[idx]
-                except (IndexError, ValueError):
-                    pass
-
-            if style == "breaks":
-                lines.append("--- speaker change ---")
-                lines.append(combined)
-            else:  # labels
-                lines.append(f"{display_label}: {combined}")
-
-    return lines
+    return merge_asr_turns(timed_segs, speaker_turns, style, speaker_names)
 
 
 # ───────────────────────────────────────────────────────────────────────────────
