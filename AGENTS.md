@@ -5,7 +5,7 @@ single build system, no automated test suite, and no lint config. Use the notes
 below to run scripts safely and follow the established style.
 
 Project focus areas:
-- PDF to Markdown conversion for scientific papers (Mathpix API).
+- PDF to Markdown conversion for scientific papers (Mathpix SDK).
 - Audio transcription (OpenAI API or local whisper-cpp, with optional pyannote diarization).
 - TIDAL playlist import from classical music review pages (Gramophone-style MHTML/MD).
 
@@ -29,7 +29,6 @@ System dependencies (manual):
 
 Run scripts (examples):
 - `uv run ./pdf_convert_mathpix_sdk.py input.pdf -o output.md`
-- `uv run ./pdf_convert_mathpix_api.py input.pdf -o output.md`
 - `uv run ./pdf_convert_marker.py input.pdf -o output.md`
 - `uv run ./pdf_convert_docling.py input.pdf -o output.md`
 - `uv run ./pdf_convert_llamaparse.py input.pdf -o output.md`
@@ -50,7 +49,7 @@ Operational Notes (from existing docs)
 -------------------------------------------------------------------------------
 
 Environment variables:
-- `MATHPIX_APP_ID`, `MATHPIX_APP_KEY` for Mathpix tools.
+- `MATHPIX_APP_ID`, `MATHPIX_APP_KEY` for Mathpix. `MATHPIX_API_KEY` can be used as an app-key fallback.
 - `LLAMA_CLOUD_API_KEY` for LlamaParse (LlamaCloud).
 - `OPENAI_API_KEY` for OpenAI transcription.
 - `TIDAL_CLIENT_ID`, `TIDAL_CLIENT_SECRET` for TIDAL import.
@@ -62,7 +61,6 @@ LlamaCloud API key setup:
 
 Repository scripts:
 - `pdf_convert_mathpix_sdk.py` uses the `mpxpy` SDK.
-- `pdf_convert_mathpix_api.py` uses direct HTTP requests with `requests`.
 - `pdf_convert_marker.py` uses `marker-pdf` for simpler PDFs (local conversion).
 - `pdf_convert_docling.py` uses Docling for local Markdown conversion.
 - `pdf_convert_llamaparse.py` uses LlamaParse (LlamaCloud) for hosted parsing.
