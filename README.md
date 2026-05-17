@@ -51,7 +51,9 @@ uv run ./pdf_convert_docling.py input.pdf -o output.md
 uv run ./pdf_convert_docling.py input.pdf --page-range 1-5
 ```
 
-Note: If you omit `--page-range`, the script uses Docling defaults. Provide a contiguous range like `1-5` when you want a subset of pages.
+All local/hosted PDF converters that support `--page-range` use the same
+user-facing syntax: 1-based page numbers, comma-separated lists, ranges, and
+`N` for the last page, such as `1-5`, `1,3,5-10`, or `5-N`.
 
 LlamaParse (LlamaCloud, hosted):
 
@@ -69,7 +71,7 @@ PyMuPDF4LLM (local, fast layout-aware parsing):
 
 ```bash
 uv run ./pdf_convert_pymupdf4llm.py input.pdf -o output.md
-uv run ./pdf_convert_pymupdf4llm.py input.pdf --page-range 0-4
+uv run ./pdf_convert_pymupdf4llm.py input.pdf --page-range 1-5
 ```
 
 Layout mode requires `pymupdf4llm[layout]` (or `pymupdf4llm[ocr,layout]` for OCR support).
@@ -78,6 +80,7 @@ Marker (best for simpler PDFs, local):
 
 ```bash
 uv run ./pdf_convert_marker.py input.pdf -o output.md
+uv run ./pdf_convert_marker.py input.pdf --page-range 1,3,5-N
 ```
 
 ## Markdown Tools
