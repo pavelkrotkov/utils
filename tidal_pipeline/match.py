@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from tidal_pipeline.client import AlbumHit, SearchBackend
+from tidal_pipeline.client import AlbumDetail, AlbumHit, SearchBackend
 from tidal_pipeline.models import (
     AlbumInput,
     Candidate,
@@ -377,10 +377,79 @@ def search_candidates_for_album(
         if sleep_seconds:
             time.sleep(sleep_seconds)
 
+    return sort_candidates(list(candidates_map.values()))
+
+
+def sort_candidates(candidates: List[Candidate]) -> List[Candidate]:
     return sorted(
-        candidates_map.values(),
+        candidates,
         key=lambda candidate: (candidate.score, len(candidate.queries), candidate.title.lower()),
         reverse=True,
+    )
+
+
+def apply_details(candidate: Candidate, detail: AlbumDetail) -> None:
+    candidate.title = detail.title or candidate.title
+    candidate.artists = detail.artists or candidate.artists
+    candidate.release_date = detail.release_date or candidate.release_date
+    candidate.copyright = detail.copyright or candidate.copyright
+    candidate.track_count = detail.track_count
+    candidate.details_fetched = True
+
+
+def ensure_details(
+    backend: SearchBackend,
+    ordered: List[Candidate],
+    limit: int,
+    sleep: float,
+) -> None:
+    for candidate in ordered[:limit]:
+        if candidate.details_fetched:
+            continue
+        detail = backend.get_album_details(candidate.id)
+        if detail:
+            apply_details(candidate, detail)
+        if sleep:
+            time.sleep(sleep)
+
+
+def score_manual_candidate(
+    backend: SearchBackend,
+    album: AlbumInput,
+    tidal_id: str,
+    weights: Optional[Dict[str, float]],
+) -> Candidate:
+    detail = backend.get_album_details(tidal_id)
+    if not detail:
+        return Candidate(
+            id=tidal_id,
+            title="",
+            artists=[],
+            release_date="",
+            copyright="",
+            score=0.0,
+            features={},
+            details_fetched=False,
+        )
+
+    hit = AlbumHit(
+        id=detail.id,
+        title=detail.title,
+        artists=detail.artists,
+        release_date=detail.release_date,
+        copyright=detail.copyright,
+    )
+    score, features = score_candidate(album, hit, weights)
+    return Candidate(
+        id=detail.id,
+        title=detail.title,
+        artists=detail.artists,
+        release_date=detail.release_date,
+        copyright=detail.copyright,
+        score=score,
+        features=features,
+        track_count=detail.track_count,
+        details_fetched=True,
     )
 
 

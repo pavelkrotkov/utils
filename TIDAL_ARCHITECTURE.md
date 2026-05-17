@@ -22,7 +22,11 @@ pipeline in this repository.
   - `build_query_candidates()`
   - `select_query_candidates()`
   - `search_candidates_for_album()`
+  - `sort_candidates()`
   - `score_candidate()`
+  - `score_manual_candidate()`
+  - `apply_details()`
+  - `ensure_details()`
   - `choose_auto_candidate()`
   - `build_record()`
   - `load_truth_records()`
