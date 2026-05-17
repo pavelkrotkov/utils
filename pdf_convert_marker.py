@@ -17,6 +17,13 @@ import argparse
 import sys
 from pathlib import Path
 
+from pdf_convert_common import (
+    import_or_die,
+    parse_page_range,
+    require_pdf_path,
+    resolve_output_path,
+)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -79,82 +86,15 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def resolve_output_paths(
-    input_path: Path,
-    output_path: Path | None,
-    output_dir: Path | None,
-) -> tuple[Path, str]:
-    if output_path is not None:
-        resolved_dir = output_path.parent
-        base_name = output_path.stem
-    else:
-        resolved_dir = output_dir or input_path.parent
-        base_name = input_path.stem
-
-    resolved_dir.mkdir(parents=True, exist_ok=True)
-    return resolved_dir, base_name
-
-
 def load_pdf_page_count(pdf_path: Path) -> int:
-    try:
-        from pypdf import PdfReader
-    except ImportError as exc:
-        print(f"ERROR: Missing required Python package: {exc}", file=sys.stderr)
-        print("Install with: pip install pypdf", file=sys.stderr)
-        sys.exit(1)
+    pypdf = import_or_die("pypdf", "pypdf")
 
     try:
-        reader = PdfReader(str(pdf_path))
+        reader = pypdf.PdfReader(str(pdf_path))
         return len(reader.pages)
     except Exception as exc:
         print(f"ERROR: Unable to read PDF pages: {exc}", file=sys.stderr)
         sys.exit(1)
-
-
-def parse_page_token(token: str, page_count: int, *, one_based: bool) -> int:
-    if token.lower() == "n":
-        page = page_count
-    else:
-        try:
-            page = int(token)
-        except ValueError as exc:
-            raise ValueError(
-                f"Invalid --page-range value: {token!r} is not a page number."
-            ) from exc
-
-    if page < 1:
-        raise ValueError("Invalid --page-range value: pages are 1-based.")
-    if page > page_count:
-        raise ValueError("Invalid --page-range value: page is outside the document.")
-    return page if one_based else page - 1
-
-
-def parse_page_range(spec: str, page_count: int, *, one_based: bool) -> list[int]:
-    if page_count < 1:
-        raise ValueError("Invalid --page-range value: PDF has no pages.")
-
-    pages: list[int] = []
-    for raw_part in spec.split(","):
-        part = raw_part.strip()
-        if not part:
-            raise ValueError("Invalid --page-range value: empty page range item.")
-        if part.count("-") > 1:
-            raise ValueError("Invalid --page-range value: malformed page range.")
-        if "-" in part:
-            start_raw, end_raw = part.split("-", 1)
-            if not start_raw.strip() or not end_raw.strip():
-                raise ValueError("Invalid --page-range value: malformed page range.")
-            start = parse_page_token(start_raw.strip(), page_count, one_based=one_based)
-            end = parse_page_token(end_raw.strip(), page_count, one_based=one_based)
-            if end < start:
-                raise ValueError("Invalid --page-range value: range end is before start.")
-            pages.extend(range(start, end + 1))
-        else:
-            pages.append(parse_page_token(part, page_count, one_based=one_based))
-
-    if not pages:
-        raise ValueError("Invalid --page-range value: no pages selected.")
-    return sorted(set(pages))
 
 
 def format_page_range(pages: list[int]) -> str:
@@ -181,20 +121,20 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    if not args.pdf_path.exists() or not args.pdf_path.is_file():
-        print(f"ERROR: PDF file not found: {args.pdf_path}", file=sys.stderr)
-        sys.exit(1)
+    pdf_path = require_pdf_path(args.pdf_path)
 
-    output_dir, base_name = resolve_output_paths(
-        args.pdf_path,
+    output_path = resolve_output_path(
+        pdf_path,
         args.output,
         args.output_dir,
     )
+    output_dir = output_path.parent
+    base_name = output_path.stem
 
     page_range = None
     if args.page_range:
         try:
-            page_count = load_pdf_page_count(args.pdf_path)
+            page_count = load_pdf_page_count(pdf_path)
             page_range = format_page_range(
                 parse_page_range(args.page_range, page_count, one_based=False)
             )
@@ -202,14 +142,12 @@ def main() -> None:
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
 
-    try:
-        from marker.config.parser import ConfigParser
-        from marker.models import create_model_dict
-        from marker.output import save_output
-    except ImportError as exc:
-        print(f"ERROR: Missing required Python package: {exc}", file=sys.stderr)
-        print("Install with: pip install marker-pdf", file=sys.stderr)
-        sys.exit(1)
+    marker_parser = import_or_die("marker.config.parser", "marker-pdf")
+    marker_models = import_or_die("marker.models", "marker-pdf")
+    marker_output = import_or_die("marker.output", "marker-pdf")
+    ConfigParser = marker_parser.ConfigParser
+    create_model_dict = marker_models.create_model_dict
+    save_output = marker_output.save_output
 
     config_options = {
         "output_format": "markdown",
@@ -240,7 +178,7 @@ def main() -> None:
         llm_service=llm_service,
     )
 
-    rendered = converter(str(args.pdf_path))
+    rendered = converter(str(pdf_path))
     save_output(rendered, str(output_dir), base_name)
 
     output_md = output_dir / f"{base_name}.md"
