@@ -29,20 +29,6 @@ import sys
 import time
 from pathlib import Path
 
-try:
-    from llama_cloud import LlamaCloud
-except ImportError as exc:
-    print(f"ERROR: Missing required Python package: {exc}", file=sys.stderr)
-    print("Install with: pip install llama-cloud", file=sys.stderr)
-    sys.exit(1)
-
-try:
-    from pypdf import PdfReader
-except ImportError as exc:
-    print(f"ERROR: Missing required Python package: {exc}", file=sys.stderr)
-    print("Install with: pip install pypdf", file=sys.stderr)
-    sys.exit(1)
-
 
 DEFAULT_TIER = "cost_effective"
 DEFAULT_VERSION = "latest"
@@ -83,7 +69,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--page-range",
-        help="Comma-separated page numbers or ranges (1-based, e.g., 1,3,5-10)",
+        help=(
+            "Comma-separated 1-based page numbers or ranges. "
+            "Examples: 1-5, 1,3,5-10, 5-N (N = last page)."
+        ),
     )
     parser.add_argument(
         "--max-pages",
@@ -156,6 +145,13 @@ def resolve_output_path_for_job(
 
 def load_pdf_page_count(pdf_path: Path) -> int:
     try:
+        from pypdf import PdfReader
+    except ImportError as exc:
+        print(f"ERROR: Missing required Python package: {exc}", file=sys.stderr)
+        print("Install with: pip install pypdf", file=sys.stderr)
+        sys.exit(1)
+
+    try:
         reader = PdfReader(str(pdf_path))
         return len(reader.pages)
     except Exception as exc:
@@ -163,33 +159,49 @@ def load_pdf_page_count(pdf_path: Path) -> int:
         sys.exit(1)
 
 
-def parse_page_range_spec(page_range: str) -> list[int]:
+def parse_page_token(token: str, page_count: int, *, one_based: bool) -> int:
+    if token.lower() == "n":
+        page = page_count
+    else:
+        try:
+            page = int(token)
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid --page-range value: {token!r} is not a page number."
+            ) from exc
+
+    if page < 1:
+        raise ValueError("Invalid --page-range value: pages are 1-based.")
+    if page > page_count:
+        raise ValueError("Invalid --page-range value: page is outside the document.")
+    return page if one_based else page - 1
+
+
+def parse_page_range(spec: str, page_count: int, *, one_based: bool) -> list[int]:
+    if page_count < 1:
+        raise ValueError("Invalid --page-range value: PDF has no pages.")
+
     pages: list[int] = []
-    for raw_part in page_range.split(","):
+    for raw_part in spec.split(","):
         part = raw_part.strip()
         if not part:
-            continue
+            raise ValueError("Invalid --page-range value: empty page range item.")
+        if part.count("-") > 1:
+            raise ValueError("Invalid --page-range value: malformed page range.")
         if "-" in part:
             start_raw, end_raw = part.split("-", 1)
-            try:
-                start = int(start_raw)
-                end = int(end_raw)
-            except ValueError as exc:
-                raise ValueError("Invalid --page-range value.") from exc
-            if start < 1 or end < 1 or end < start:
-                raise ValueError("Invalid --page-range value.")
+            if not start_raw.strip() or not end_raw.strip():
+                raise ValueError("Invalid --page-range value: malformed page range.")
+            start = parse_page_token(start_raw.strip(), page_count, one_based=one_based)
+            end = parse_page_token(end_raw.strip(), page_count, one_based=one_based)
+            if end < start:
+                raise ValueError("Invalid --page-range value: range end is before start.")
             pages.extend(range(start, end + 1))
         else:
-            try:
-                page = int(part)
-            except ValueError as exc:
-                raise ValueError("Invalid --page-range value.") from exc
-            if page < 1:
-                raise ValueError("Invalid --page-range value.")
-            pages.append(page)
+            pages.append(parse_page_token(part, page_count, one_based=one_based))
 
     if not pages:
-        raise ValueError("--page-range produced no pages.")
+        raise ValueError("Invalid --page-range value: no pages selected.")
     return sorted(set(pages))
 
 
@@ -269,7 +281,7 @@ def extract_error_message(result: object) -> str | None:
     return None
 
 
-def wait_for_job(client: LlamaCloud, job_id: str) -> object:
+def wait_for_job(client: object, job_id: str) -> object:
     start_time = time.monotonic()
     while True:
         result = client.parsing.get(job_id=job_id)
@@ -335,6 +347,13 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
+    try:
+        from llama_cloud import LlamaCloud
+    except ImportError as exc:
+        print(f"ERROR: Missing required Python package: {exc}", file=sys.stderr)
+        print("Install with: pip install llama-cloud", file=sys.stderr)
+        sys.exit(1)
+
     if args.fetch_job:
         api_key = args.api_key or os.getenv("LLAMA_CLOUD_API_KEY")
         if not api_key:
@@ -393,16 +412,10 @@ def main() -> None:
 
     if args.page_range:
         try:
-            requested_pages = parse_page_range_spec(args.page_range)
+            pages = parse_page_range(args.page_range, total_pages, one_based=True)
         except ValueError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
-        pages = [page for page in requested_pages if page <= total_pages]
-        if len(pages) != len(requested_pages):
-            print(
-                "WARNING: Some pages were outside the document range and will be ignored.",
-                file=sys.stderr,
-            )
 
     if args.max_pages is not None:
         pages = [page for page in pages if page <= args.max_pages]
