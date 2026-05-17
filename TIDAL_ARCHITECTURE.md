@@ -32,7 +32,9 @@ pipeline in this repository.
 - `tidal_pipeline.client`
   TIDAL OAuth, token caching, and API access.
   Key functions and classes:
+  - `SearchBackend`
   - `TidalClient`
+  - `CachedSearchBackend`
   - `get_valid_token()`
   - `resolve_country_code()`
 
@@ -66,9 +68,10 @@ pipeline in this repository.
   CLI wrapper around `tidal_pipeline.links`.
 
 - `tidal_eval.py`
-  Offline evaluation harness. Re-scores cached candidates from a truth file,
-  replays auto-selection, and reports precision@1, MRR, auto-select
-  coverage/accuracy/recall, score distribution, and regressions.
+  Offline evaluation harness. Replays cached candidates through the shared
+  `search_candidates_for_album()` driver via `CachedSearchBackend`, replays
+  auto-selection, and reports precision@1, MRR, auto-select coverage/accuracy/
+  recall, score distribution, and regressions.
 
 ## Formal Pipeline
 
@@ -136,6 +139,11 @@ small hit list:
 $$
 H_{ik} = \{r_{ikl}\}_{l=1}^{L_{ik}}.
 $$
+
+In code, retrieval is represented by the `SearchBackend` protocol. The live CLI
+uses `TidalClient`, which satisfies the protocol with real TIDAL API calls.
+Offline evaluation uses `CachedSearchBackend`, which satisfies the same
+protocol from truth-record candidate caches.
 
 The raw hit set is
 
@@ -237,9 +245,11 @@ at the end of the corresponding markdown subsection.
 The evaluation harness (`tidal_eval.py`) operates on the persisted truth set $T$
 without making any API calls.
 
-For each $(a_i, C_i, y_i) \in T$, it re-computes the score $s_i(c)$ for every
-$c \in C_i$ using the current feature weights $w_f$, then replays
-auto-selection to obtain a predicted choice $\hat{y}_i$.
+For each $(a_i, C_i, y_i) \in T$, it builds a `CachedSearchBackend` from the
+record's cached candidates, calls `search_candidates_for_album()` with the
+record's persisted selected queries, and replays auto-selection to obtain a
+predicted choice $\hat{y}_i$. This keeps offline evaluation on the same ranking
+key used by live matching: `(score, len(queries), title.lower())`, descending.
 
 Reported metrics:
 
@@ -266,5 +276,6 @@ suitable for CI or pre-commit checks.
   block for enrichment.
 - Review records and truth persistence live in the shared library.
 - CLI scripts remain stable entrypoints.
-- Evaluation is offline and deterministic — it re-scores cached candidates
-  without API calls.
+- Evaluation is offline and deterministic — it uses `CachedSearchBackend` to
+  score cached candidates without API calls through the same driver as live
+  matching.
