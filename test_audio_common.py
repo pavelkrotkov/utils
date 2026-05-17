@@ -3,11 +3,24 @@
 
 from __future__ import annotations
 
+import json
+import math
+import shutil
+import struct
+import subprocess
+import tempfile
 import time
 import unittest
+import wave
+from pathlib import Path
 from typing import Any
 
-from audio_common import ProgressReporter, run_threaded_with_periodic_progress, run_with_progress
+from audio_common import (
+    ProgressReporter,
+    convert_to_pcm16k_mono,
+    run_threaded_with_periodic_progress,
+    run_with_progress,
+)
 
 
 class RecordingReporter(ProgressReporter):
@@ -106,6 +119,61 @@ class RunWithProgressTest(unittest.TestCase):
         )
         self.assertEqual(100.0, reporter.percentages[-1])
         self.assertEqual([("threaded stage", None)], reporter.finished)
+
+
+class ConvertToPcm16kMonoTest(unittest.TestCase):
+    def test_converts_small_fixture_to_mono_16khz_wav(self) -> None:
+        if not shutil.which("ffmpeg"):
+            self.skipTest("ffmpeg is not installed")
+        if not shutil.which("ffprobe"):
+            self.skipTest("ffprobe is not installed")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture_path = Path(temp_dir) / "fixture_8khz_stereo.wav"
+            output_path = Path(temp_dir) / "converted.wav"
+            write_tone_fixture(fixture_path)
+
+            convert_to_pcm16k_mono(fixture_path, output_path)
+
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "a:0",
+                    "-show_entries",
+                    "stream=sample_rate,channels",
+                    "-of",
+                    "json",
+                    str(output_path),
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            stream = json.loads(result.stdout)["streams"][0]
+
+        self.assertEqual("16000", stream["sample_rate"])
+        self.assertEqual(1, stream["channels"])
+
+
+def write_tone_fixture(path: Path) -> None:
+    """Write a tiny stereo WAV file for ffmpeg conversion tests."""
+    sample_rate = 8_000
+    duration_seconds = 0.2
+    frame_count = int(sample_rate * duration_seconds)
+    amplitude = 12_000
+
+    with wave.open(str(path), "wb") as wav_file:
+        wav_file.setnchannels(2)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+
+        for index in range(frame_count):
+            sample = int(amplitude * math.sin(2 * math.pi * 440 * index / sample_rate))
+            wav_file.writeframesraw(struct.pack("<hh", sample, sample))
 
 
 if __name__ == "__main__":
