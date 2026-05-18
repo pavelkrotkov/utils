@@ -19,6 +19,7 @@ Usage:
 import argparse
 import os
 import sys
+import traceback
 from pathlib import Path
 
 from mpxpy.mathpix_client import MathpixClient
@@ -51,7 +52,7 @@ Examples:
   %(prog)s document.pdf
   %(prog)s document.pdf -o notes.md
   %(prog)s document.pdf --app-id YOUR_ID --app-key YOUR_KEY
-  %(prog)s document.pdf --rm-spaces --enable-tables-fallback
+  %(prog)s document.pdf --no-rm-spaces --enable-tables-fallback
 
 Environment Variables:
   MATHPIX_APP_ID     Your Mathpix application ID
@@ -70,9 +71,9 @@ Environment Variables:
     )
     parser.add_argument(
         "--rm-spaces",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=True,
-        help="Remove extra whitespace from equations in Mathpix text outputs",
+        help="Remove extra whitespace from equations in Mathpix text outputs (default: enabled)",
     )
     parser.add_argument(
         "--enable-tables-fallback",
@@ -85,6 +86,7 @@ Environment Variables:
         default=300,
         help="Seconds to wait for Mathpix processing (default: 300)",
     )
+    parser.add_argument("--verbose", action="store_true", help="Show traceback details on errors")
     args = parser.parse_args()
 
     pdf_path = Path(args.pdf_path)
@@ -122,9 +124,9 @@ Environment Variables:
         log("INFO", f"Wrote Markdown to {out_path}.")
     except Exception as exc:
         log("ERROR", str(exc))
+        if args.verbose:
+            traceback.print_exc()
         sys.exit(1)
-
-    sys.exit(0)
 
 
 if __name__ == "__main__":
