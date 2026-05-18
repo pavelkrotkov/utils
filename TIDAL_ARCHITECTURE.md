@@ -16,7 +16,8 @@ pipeline in this repository.
 
 - `tidal_pipeline.match`
   Structured-input loading, query generation, candidate retrieval, scoring,
-  review/truth record construction, and coverage training.
+  match-scoring weights, review/truth record construction, and coverage
+  training.
   Key functions:
   - `load_album_inputs()`
   - `build_query_candidates()`
@@ -28,6 +29,20 @@ pipeline in this repository.
   - `load_truth_records()`
   - `save_truth_records()`
   - `train_coverage()`
+
+- `tidal_pipeline.albums`
+  Album and match-candidate dataclasses shared by parsing, matching, and
+  evaluation.
+  Key objects:
+  - `AlbumInput`
+  - `Candidate`
+  - `QueryCandidate`
+
+- `tidal_pipeline.truth`
+  Persisted truth/review record dataclasses and JSON round-trip behavior.
+  Key objects:
+  - `Choice`
+  - `TruthRecord`
 
 - `tidal_pipeline.client`
   TIDAL OAuth, token caching, and API access.
@@ -42,18 +57,8 @@ pipeline in this repository.
   - `load_updates()`
   - `apply_updates()`
 
-- `tidal_pipeline.models`
-  Shared dataclasses and constants.
-  Key objects:
-  - `AlbumInput`
-  - `Candidate`
-  - `QueryCandidate`
-  - `Choice`
-  - `TruthRecord`
-  - weight/template constants
-
 - `tidal_pipeline.normalize`
-  Shared normalization, tokenization, and low-level text helpers.
+  Normalization lexicons, tokenization, and low-level text helpers.
 
 ## Script Wrappers
 
