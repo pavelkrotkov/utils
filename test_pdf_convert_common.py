@@ -10,6 +10,8 @@ import unittest
 from pathlib import Path
 
 from pdf_convert_common import (
+    collapse_consecutive,
+    format_page_ranges,
     import_or_die,
     parse_page_range,
     require_pdf_path,
@@ -71,6 +73,18 @@ class PdfConvertCommonTest(unittest.TestCase):
                 import_or_die("_definitely_missing_pdf_backend_", "missing-package")
 
         self.assertIn("pip install missing-package", stderr.getvalue())
+
+    def test_collapse_consecutive_returns_sorted_inclusive_ranges(self) -> None:
+        self.assertEqual(
+            collapse_consecutive([5, 1, 2, 4, 4, 7]),
+            [(1, 2), (4, 5), (7, 7)],
+        )
+
+    def test_format_page_ranges_uses_singletons_and_ranges(self) -> None:
+        self.assertEqual(
+            format_page_ranges([(1, 3), (5, 5), (7, 9)]),
+            "1-3,5,7-9",
+        )
 
     def test_parse_page_range_accepts_ranges_n_sentinel_and_zero_based_output(self) -> None:
         self.assertEqual(parse_page_range("1,3,5-N", 7, one_based=True), [1, 3, 5, 6, 7])

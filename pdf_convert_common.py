@@ -46,6 +46,33 @@ def import_or_die(module_name: str, install_package: str) -> ModuleType:
         sys.exit(1)
 
 
+def collapse_consecutive(pages: list[int]) -> list[tuple[int, int]]:
+    """Collapse page numbers into inclusive consecutive ranges."""
+    if not pages:
+        return []
+
+    sorted_pages = sorted(set(pages))
+    ranges: list[tuple[int, int]] = []
+    start = sorted_pages[0]
+    previous = sorted_pages[0]
+
+    for page in sorted_pages[1:]:
+        if page == previous + 1:
+            previous = page
+            continue
+        ranges.append((start, previous))
+        start = page
+        previous = page
+
+    ranges.append((start, previous))
+    return ranges
+
+
+def format_page_ranges(ranges: list[tuple[int, int]]) -> str:
+    """Format inclusive page ranges as a comma-separated API page spec."""
+    return ",".join(f"{start}-{end}" if start != end else str(start) for start, end in ranges)
+
+
 def parse_page_token(token: str, page_count: int, *, one_based: bool) -> int:
     if token.lower() == "n":
         page = page_count

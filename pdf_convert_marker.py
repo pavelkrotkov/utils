@@ -18,6 +18,8 @@ import sys
 from pathlib import Path
 
 from pdf_convert_common import (
+    collapse_consecutive,
+    format_page_ranges,
     import_or_die,
     parse_page_range,
     require_pdf_path,
@@ -97,26 +99,6 @@ def load_pdf_page_count(pdf_path: Path) -> int:
         sys.exit(1)
 
 
-def format_page_range(pages: list[int]) -> str:
-    if not pages:
-        return ""
-
-    ranges: list[tuple[int, int]] = []
-    start = pages[0]
-    previous = pages[0]
-    for page in pages[1:]:
-        if page == previous + 1:
-            previous = page
-            continue
-        ranges.append((start, previous))
-        start = page
-        previous = page
-    ranges.append((start, previous))
-
-    parts = [f"{begin}-{end}" if begin != end else str(begin) for begin, end in ranges]
-    return ",".join(parts)
-
-
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -135,9 +117,8 @@ def main() -> None:
     if args.page_range:
         try:
             page_count = load_pdf_page_count(pdf_path)
-            page_range = format_page_range(
-                parse_page_range(args.page_range, page_count, one_based=False)
-            )
+            pages = parse_page_range(args.page_range, page_count, one_based=False)
+            page_range = format_page_ranges(collapse_consecutive(pages))
         except ValueError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)

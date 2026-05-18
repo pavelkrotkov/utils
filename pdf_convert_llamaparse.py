@@ -30,6 +30,8 @@ import time
 from pathlib import Path
 
 from pdf_convert_common import (
+    collapse_consecutive,
+    format_page_ranges,
     import_or_die,
     parse_page_range,
     require_pdf_path,
@@ -145,28 +147,6 @@ def load_pdf_page_count(pdf_path: Path) -> int:
     except Exception as exc:
         print(f"ERROR: Unable to read PDF pages: {exc}", file=sys.stderr)
         sys.exit(1)
-
-
-def format_page_range(pages: list[int]) -> str:
-    if not pages:
-        return ""
-
-    sorted_pages = sorted(set(pages))
-    ranges: list[tuple[int, int]] = []
-    start = sorted_pages[0]
-    prev = sorted_pages[0]
-
-    for page in sorted_pages[1:]:
-        if page == prev + 1:
-            prev = page
-            continue
-        ranges.append((start, prev))
-        start = page
-        prev = page
-    ranges.append((start, prev))
-
-    parts = [f"{begin}-{end}" if begin != end else str(begin) for begin, end in ranges]
-    return ",".join(parts)
 
 
 def chunk_pages(pages: list[int], chunk_size: int) -> list[list[int]]:
@@ -417,7 +397,7 @@ def main() -> None:
                 file=sys.stderr,
             )
 
-        target_pages = format_page_range(chunk_pages_list)
+        target_pages = format_page_ranges(collapse_consecutive(chunk_pages_list))
         print(f"INFO: Chunk {index}/{len(chunks)} pages {target_pages} -> {chunk_path}")
 
         try:
