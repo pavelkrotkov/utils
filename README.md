@@ -41,7 +41,7 @@ Mathpix (best for math-heavy PDFs):
 
 ```bash
 uv run ./pdf_convert_mathpix_sdk.py input.pdf -o output.md
-uv run ./pdf_convert_mathpix_sdk.py input.pdf --rm-spaces --enable-tables-fallback
+uv run ./pdf_convert_mathpix_sdk.py input.pdf --no-rm-spaces --enable-tables-fallback
 uv run ./pdf_convert_mathpix_sdk.py input.pdf --app-id YOUR_ID --app-key YOUR_KEY --timeout 300
 ```
 
