@@ -381,6 +381,7 @@ def search_candidates_for_album(
 
 
 def sort_candidates(candidates: List[Candidate]) -> List[Candidate]:
+    """Sort by score, query count, then lowercased title, all descending."""
     return sorted(
         candidates,
         key=lambda candidate: (candidate.score, len(candidate.queries), candidate.title.lower()),
@@ -418,19 +419,10 @@ def score_manual_candidate(
     album: AlbumInput,
     tidal_id: str,
     weights: Optional[Dict[str, float]],
-) -> Candidate:
+) -> Optional[Candidate]:
     detail = backend.get_album_details(tidal_id)
     if not detail:
-        return Candidate(
-            id=tidal_id,
-            title="",
-            artists=[],
-            release_date="",
-            copyright="",
-            score=0.0,
-            features={},
-            details_fetched=False,
-        )
+        return None
 
     hit = AlbumHit(
         id=detail.id,

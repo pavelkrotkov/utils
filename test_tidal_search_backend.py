@@ -124,6 +124,14 @@ class SearchBackendTest(unittest.TestCase):
         self.assertGreater(candidate.score, 0.0)
         self.assertGreater(candidate.features["title"], 0.0)
 
+    def test_score_manual_candidate_returns_none_when_details_lookup_fails(self) -> None:
+        backend = HandBuiltBackend({}, {})
+        album = AlbumInput(title="Missing Album")
+
+        candidate = score_manual_candidate(backend, album, "missing", None)
+
+        self.assertIsNone(candidate)
+
     def test_cached_search_backend_returns_hits_from_cached_candidate_queries(self) -> None:
         backend = CachedSearchBackend(
             [
