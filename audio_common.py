@@ -51,6 +51,7 @@ class ProgressReporter:
 
         now = time.monotonic()
         self.starts[stage] = now
+        # Force the first update through throttling after a stage starts.
         self.last_updates[stage] = 0.0
 
         message = f"{stage} started"
