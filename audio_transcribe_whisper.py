@@ -498,6 +498,7 @@ def load_pyannote(model_name: str, hf_token: Optional[str], verbose: bool = Fals
     Returns: Pipeline instance or exits on failure.
     """
     try:
+        # Keep pyannote optional unless diarization is explicitly requested.
         from pyannote.audio import Pipeline
     except ImportError as e:
         print(f"ERROR: Missing required Python package: {e}", file=sys.stderr)
@@ -639,28 +640,12 @@ def overlap(a0: float, a1: float, b0: float, b1: float) -> float:
     return max(0.0, min(a1, b1) - max(a0, b0))
 
 
-def _display_speaker_label(speaker: Optional[str], speaker_names: Optional[List[str]]) -> str:
-    """Map normalized SPEAKER_nn labels to user-provided names when available."""
-    if not speaker:
-        return ""
-
-    if speaker_names and speaker.startswith("SPEAKER_"):
-        try:
-            idx = int(speaker.split("_")[1])
-        except (IndexError, ValueError):
-            return speaker
-
-        if idx < len(speaker_names):
-            return speaker_names[idx]
-
-    return speaker
-
-
 def merge_asr_turns(
     asr_segments: List[Tuple[float, float, str]],
     speaker_turns: List[Tuple[float, float, str]],
     style: str,
     speaker_names: Optional[List[str]],
+    verbose: bool = False,
 ) -> List[str]:
     """
     Merge timed ASR tuples with speaker-turn tuples and return transcript lines.
@@ -668,6 +653,23 @@ def merge_asr_turns(
     ASR input is (start, end, text). Speaker-turn input is (start, end, label).
     Speaker labels are normalized by first appearance before optional name remapping.
     """
+
+    def display_speaker_label(speaker: Optional[str]) -> str:
+        """Map normalized SPEAKER_nn labels to user-provided names when available."""
+        if not speaker:
+            return ""
+
+        if speaker_names and speaker.startswith("SPEAKER_"):
+            try:
+                idx = int(speaker.split("_")[1])
+            except (IndexError, ValueError):
+                return speaker
+
+            if idx < len(speaker_names):
+                return speaker_names[idx]
+
+        return speaker
+
     seg_speakers: List[Tuple[Optional[str], str]] = []
     for s_start, s_end, s_text in asr_segments:
         best_speaker = None
@@ -686,6 +688,14 @@ def merge_asr_turns(
         if speaker and speaker not in speaker_map:
             speaker_map[speaker] = f"SPEAKER_{len(speaker_map):02d}"
 
+    if verbose:
+        print(
+            "INFO: Normalized "
+            f"{len(speaker_map)} unique speakers: "
+            f"{list(speaker_map.values())}",
+            file=sys.stderr,
+        )
+
     normalized = [(speaker_map.get(spk, spk), txt) for spk, txt in seg_speakers]
     lines: List[str] = []
     for speaker, group in itertools.groupby(normalized, key=lambda item: item[0]):
@@ -701,7 +711,7 @@ def merge_asr_turns(
             lines.append("--- speaker change ---")
             lines.append(combined)
         else:
-            display_label = _display_speaker_label(speaker, speaker_names)
+            display_label = display_speaker_label(speaker)
             lines.append(f"{display_label}: {combined}")
 
     return lines
@@ -744,19 +754,7 @@ def merge_asr_with_diar(
         (turn.start, turn.end, speaker_label)
         for turn, _, speaker_label in diarization.itertracks(yield_label=True)
     ]
-    if verbose:
-        unique_speakers = []
-        for _, _, speaker_label in speaker_turns:
-            if speaker_label not in unique_speakers:
-                unique_speakers.append(speaker_label)
-        print(
-            "INFO: Normalized "
-            f"{len(unique_speakers)} unique speakers: "
-            f"{[f'SPEAKER_{idx:02d}' for idx, _ in enumerate(unique_speakers)]}",
-            file=sys.stderr,
-        )
-
-    return merge_asr_turns(timed_segs, speaker_turns, style, speaker_names)
+    return merge_asr_turns(timed_segs, speaker_turns, style, speaker_names, verbose)
 
 
 # ───────────────────────────────────────────────────────────────────────────────
