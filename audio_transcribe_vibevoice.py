@@ -128,20 +128,53 @@ def load_vibevoice_segments(json_path: Path) -> list[TranscriptSegment]:
 
 def _extract_raw_segments(data: Any) -> list[Any]:
     if isinstance(data, list):
-        return data
+        return data if _looks_like_segment_list(data) else []
     if not isinstance(data, dict):
         return []
 
     for key in ("segments", "chunks", "transcription", "results"):
         value = data.get(key)
         if isinstance(value, list):
-            return value
+            if _looks_like_segment_list(value):
+                return value
+            continue
         if isinstance(value, dict):
             nested = _extract_raw_segments(value)
             if nested:
                 return nested
 
     return []
+
+
+def _looks_like_segment_list(value: list[Any]) -> bool:
+    return any(isinstance(item, str) or _looks_like_segment(item) for item in value)
+
+
+def _looks_like_segment(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+
+    segment_keys = {
+        "text",
+        "content",
+        "utterance",
+        "transcript",
+        "start",
+        "start_time",
+        "begin",
+        "ts",
+        "t0",
+        "end",
+        "end_time",
+        "finish",
+        "te",
+        "t1",
+        "offsets",
+        "speaker",
+        "speaker_id",
+        "speaker_label",
+    }
+    return any(key in value for key in segment_keys)
 
 
 def _segment_from_raw(raw: Any) -> TranscriptSegment:

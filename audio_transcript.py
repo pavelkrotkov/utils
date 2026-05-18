@@ -46,7 +46,11 @@ def emit_srt(segments: Sequence[TranscriptSegment]) -> str:
 
 
 def emit_vtt(segments: Sequence[TranscriptSegment]) -> str:
-    """Emit WebVTT subtitle text."""
+    """Emit WebVTT subtitle text.
+
+    Empty input still emits the required WEBVTT file header, unlike plain text
+    and SRT where an empty transcript can be represented by an empty file.
+    """
     cues = ["WEBVTT"]
     for segment in segments:
         text = segment.text.strip()
