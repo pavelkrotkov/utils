@@ -3,10 +3,11 @@
 
 from __future__ import annotations
 
+import time
 import unittest
 from typing import Any
 
-from audio_common import ProgressReporter, run_with_progress
+from audio_common import ProgressReporter, run_threaded_with_periodic_progress, run_with_progress
 
 
 class RecordingReporter(ProgressReporter):
@@ -15,6 +16,7 @@ class RecordingReporter(ProgressReporter):
         self.started: list[tuple[str, str | None]] = []
         self.finished: list[tuple[str, str | None]] = []
         self.percentages: list[float] = []
+        self.updates: list[tuple[str, float | None, float | None, str | None]] = []
 
     def start(self, stage: str, detail: str | None = None) -> None:
         self.started.append((stage, detail))
@@ -29,7 +31,8 @@ class RecordingReporter(ProgressReporter):
         force: bool = False,
         show_count: bool = True,
     ) -> None:
-        del stage, detail, force, show_count
+        del force, show_count
+        self.updates.append((stage, completed, total, detail))
         if completed is not None and total:
             self.percentages.append(100.0 * completed / total)
 
@@ -82,6 +85,27 @@ class RunWithProgressTest(unittest.TestCase):
         self.assertEqual([("fake stage", "input.wav")], reporter.started)
         self.assertEqual([12.5, 87.5], reporter.percentages)
         self.assertEqual([("fake stage", "output.json")], reporter.finished)
+
+    def test_threaded_progress_reports_start_still_running_and_finish(self) -> None:
+        reporter = RecordingReporter()
+
+        def delayed_noop() -> None:
+            time.sleep(0.55)
+
+        run_threaded_with_periodic_progress(
+            delayed_noop,
+            reporter=reporter,
+            label="threaded stage",
+            interval=0.01,
+        )
+
+        self.assertEqual([("threaded stage", None)], reporter.started)
+        self.assertIn(
+            ("threaded stage", 7.5, 100.0, "still running"),
+            reporter.updates,
+        )
+        self.assertEqual(100.0, reporter.percentages[-1])
+        self.assertEqual([("threaded stage", None)], reporter.finished)
 
 
 if __name__ == "__main__":
