@@ -501,13 +501,20 @@ def main() -> int:
             choice["tidal_id"] = selected.id
             chosen = selected
         elif action == "id" and selected:
-            choice["status"] = "selected"
             choice["tidal_id"] = selected.id
             choice["manual"] = True
-            selected = score_manual_candidate(client, album, selected.id, weights)
-            candidates_map[selected.id] = selected
-            ordered = sort_candidates(list(candidates_map.values()))
-            chosen = selected
+            scored = score_manual_candidate(client, album, selected.id, weights)
+            if scored:
+                choice["status"] = "selected"
+                candidates_map[scored.id] = scored
+                ordered = sort_candidates(list(candidates_map.values()))
+                chosen = scored
+            else:
+                choice["status"] = "needs_review"
+                print(
+                    f"Warning: TIDAL album details lookup failed for manual id {selected.id}; "
+                    "leaving entry marked needs_review."
+                )
 
         record = build_record(
             album=album,
