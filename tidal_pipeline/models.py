@@ -417,6 +417,8 @@ class TruthRecord:
         selected_queries: List[QueryCandidate],
         chosen: Optional[Candidate],
         choice: Choice,
+        *,
+        top: Optional[int] = None,
         review: Dict[str, Any],
         meta: Dict[str, Any],
     ) -> "TruthRecord":
@@ -433,10 +435,10 @@ class TruthRecord:
             queries=[candidate.query for candidate in selected_queries],
             query_candidates=selected_queries,
             candidates=ordered,
-            top_candidates=ordered[: int(review.get("top", 0) or len(ordered))],
+            top_candidates=ordered[: int(top or len(ordered))],
             choice=choice,
             chosen=chosen,
-            review={key: value for key, value in review.items() if key != "top"},
+            review=review,
             meta=meta,
         )
 
@@ -486,5 +488,8 @@ def _parse_float_dict(value: Any) -> Dict[str, float]:
         return {}
     parsed: Dict[str, float] = {}
     for key, item in value.items():
-        parsed[str(key)] = float(item)
+        try:
+            parsed[str(key)] = float(item)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"features[{key!r}] must be a number, got {item!r}") from exc
     return parsed
