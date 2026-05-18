@@ -71,6 +71,17 @@ class TranscriptEmitterTests(unittest.TestCase):
             "Alice: Hello\nBob: Hi",
         )
 
+    def test_diarized_txt_maps_speaker_names_without_pre_remap(self) -> None:
+        segments = [
+            TranscriptSegment(0.0, 1.0, "Hello", "SPEAKER_00"),
+            TranscriptSegment(1.0, 2.0, "Hi", "SPEAKER_01"),
+        ]
+
+        self.assertEqual(
+            emit_transcript(segments, "diarized-txt", ["Alice", "Bob"]),
+            "Alice: Hello\nBob: Hi",
+        )
+
     def test_all_scripts_share_srt_vtt_emitters(self) -> None:
         segments = [TranscriptSegment(0.0, 1.0, "Same text")]
 

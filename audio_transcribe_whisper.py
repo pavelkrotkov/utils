@@ -42,7 +42,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from audio_transcript import TranscriptSegment, emit_transcript, remap_speakers
+from audio_transcript import TranscriptSegment, emit_transcript
 
 try:
     from pyannote.audio import Pipeline
@@ -1215,7 +1215,7 @@ def main() -> None:
                     progress.start("merging ASR with diarization")
                 diarized_segments = merge_asr_with_diar(segments, diarization, args.verbose)
                 if diarized_segments:
-                    transcript_segments = remap_speakers(diarized_segments, speaker_names)
+                    transcript_segments = diarized_segments
                 if progress:
                     progress.finish("merging ASR with diarization")
             else:
