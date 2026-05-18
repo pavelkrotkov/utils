@@ -7,7 +7,7 @@ import json
 import unittest
 from pathlib import Path
 
-from tidal_pipeline.models import Choice, TruthRecord
+from tidal_pipeline.models import AlbumInput, Candidate, Choice, QueryCandidate, TruthRecord
 
 
 class TruthRecordTests(unittest.TestCase):
@@ -121,6 +121,58 @@ class TruthRecordTests(unittest.TestCase):
         )
 
         self.assertEqual(rendered, original)
+
+    def test_from_match_result_uses_explicit_top_keyword(self) -> None:
+        album = AlbumInput(title="Example Album")
+        candidates = [
+            Candidate(
+                id=str(index),
+                title=f"Candidate {index}",
+                artists=[],
+                release_date="",
+                copyright="",
+                score=1.0 - index / 10,
+                features={},
+            )
+            for index in range(3)
+        ]
+
+        record = TruthRecord.from_match_result(
+            album=album,
+            record_id="record",
+            ordered=candidates,
+            selected_queries=[QueryCandidate(template="title", query="Example Album")],
+            chosen=candidates[0],
+            choice=Choice(status="selected", tidal_id="0"),
+            top=2,
+            review={"mode": "test"},
+            meta={},
+        )
+
+        self.assertEqual([candidate.id for candidate in record.top_candidates], ["0", "1"])
+        self.assertEqual(record.review, {"mode": "test"})
+
+    def test_feature_parse_error_names_bad_key(self) -> None:
+        sample = {
+            "record_id": "sample",
+            "candidates": [
+                {
+                    "id": "123",
+                    "title": "Example Album",
+                    "artists": [],
+                    "release_date": "",
+                    "copyright": "",
+                    "score": 0.5,
+                    "features": {"title": "not-a-number"},
+                }
+            ],
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            r"features\['title'\] must be a number, got 'not-a-number'",
+        ):
+            TruthRecord.from_dict(sample)
 
 
 if __name__ == "__main__":

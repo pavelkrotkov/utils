@@ -709,6 +709,7 @@ def build_record(
         selected_queries=selected_queries,
         chosen=chosen,
         choice=choice_model,
+        top=args.top,
         review={
             "mode": mode,
             "top_score": round(top_candidate.score, 3) if top_candidate else 0.0,
@@ -718,7 +719,6 @@ def build_record(
             "auto_threshold": args.auto_threshold,
             "recent_year": args.auto_recent_year,
             "recent_threshold": args.auto_recent_threshold,
-            "top": args.top,
         },
         meta={
             "generated_at": datetime.now().isoformat(timespec="seconds"),
