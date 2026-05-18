@@ -6,16 +6,167 @@ import re
 import unicodedata
 from typing import Iterable, List, Optional
 
-from tidal_pipeline.models import (
-    ENSEMBLE_HINTS,
-    GENERIC_ARTIST_TOKENS,
-    GENERIC_LINE_PREFIXES,
-    INSTRUMENT_ABBREVS,
-    INSTRUMENT_MAP,
-    SEPARATOR_RE,
-    SKIP_ARTIST_SEGMENTS,
-    STOPWORDS,
-)
+STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "from",
+    "vol",
+    "volume",
+    "edition",
+    "series",
+    "part",
+    "no",
+    "op",
+    "major",
+    "minor",
+}
+
+ENSEMBLE_HINTS = {
+    "orchestra",
+    "philharmonic",
+    "symphony",
+    "ensemble",
+    "quartet",
+    "quartett",
+    "trio",
+    "quintet",
+    "choir",
+    "chorus",
+    "consort",
+    "players",
+    "sinfonia",
+    "academy",
+    "capella",
+    "coro",
+    "chamber",
+    "opera",
+    "filharmonica",
+    "radio",
+    "baroque",
+    "knot",
+    "jupiter",
+    "inalto",
+    "psophos",
+    "rso",
+    "lpo",
+    "rlpo",
+    "bbc",
+}
+
+SKIP_SEGMENTS = {"sols", "sols.", "soloists", "soloist"}
+SKIP_ARTIST_SEGMENTS = SKIP_SEGMENTS | {"with"}
+
+GENERIC_ARTIST_TOKENS = {
+    "orchestra",
+    "philharmonic",
+    "symphony",
+    "ensemble",
+    "quartet",
+    "quartett",
+    "trio",
+    "quintet",
+    "choir",
+    "chorus",
+    "consort",
+    "players",
+    "sinfonia",
+    "academy",
+    "capella",
+    "coro",
+    "chamber",
+    "opera",
+    "baroque",
+}
+
+GENERIC_TITLE_TOKENS = {
+    "chamber",
+    "works",
+    "work",
+    "symphonies",
+    "symphony",
+    "sonatas",
+    "sonata",
+    "concertos",
+    "concerto",
+    "quartets",
+    "quartet",
+    "lieder",
+    "orchestral",
+    "solo",
+    "piano",
+    "violin",
+    "string",
+}
+
+GENERIC_LINE_PREFIXES = {
+    "sols",
+    "sols incl",
+    "incl",
+    "label",
+    "with",
+}
+
+INSTRUMENT_MAP = {
+    "pf": "piano",
+    "fp": "fortepiano",
+    "pno": "piano",
+    "piano": "piano",
+    "fortepiano": "fortepiano",
+    "vn": "violin",
+    "violin": "violin",
+    "va": "viola",
+    "viola": "viola",
+    "vc": "cello",
+    "cello": "cello",
+    "db": "double bass",
+    "double": "double",
+    "bass": "bass",
+    "fl": "flute",
+    "flute": "flute",
+    "ob": "oboe",
+    "oboe": "oboe",
+    "cl": "clarinet",
+    "clarinet": "clarinet",
+    "bn": "bassoon",
+    "bassoon": "bassoon",
+    "hn": "horn",
+    "horn": "horn",
+    "tpt": "trumpet",
+    "trumpet": "trumpet",
+    "trb": "trombone",
+    "trombone": "trombone",
+    "hp": "harp",
+    "harp": "harp",
+    "org": "organ",
+    "organ": "organ",
+    "hpd": "harpsichord",
+    "harpsichord": "harpsichord",
+    "mandolin": "mandolin",
+    "lute": "lute",
+    "cornett": "cornett",
+    "gtr": "guitar",
+    "guitar": "guitar",
+    "perc": "percussion",
+    "percussion": "percussion",
+    "sop": "soprano",
+    "soprano": "soprano",
+    "mez": "mezzo",
+    "mezzo-soprano": "mezzo",
+    "mezzo": "mezzo",
+    "counterten": "countertenor",
+    "countertenor": "countertenor",
+    "ten": "tenor",
+    "tenor": "tenor",
+    "bar": "baritone",
+    "baritone": "baritone",
+    "cond": "conductor",
+    "conductor": "conductor",
+}
+
+INSTRUMENT_ABBREVS = set(INSTRUMENT_MAP.keys())
+SEPARATOR_RE = re.compile(r"^\*\s+\*\s+\*$")
 
 
 def normalize(text: str) -> str:
@@ -148,10 +299,10 @@ def looks_like_ensemble(text: str) -> bool:
     lowered = normalize(text)
     if not lowered:
         return False
-    if any(hint in lowered for hint in ENSEMBLE_HINTS):
+    if any(len(hint) > 3 and hint in lowered for hint in ENSEMBLE_HINTS):
         return True
     tokens = lowered.split()
-    return any(token in {"rso", "lpo", "rlpo", "bbc"} for token in tokens)
+    return any(token in ENSEMBLE_HINTS for token in tokens)
 
 
 def clean_markdown_inline(text: str) -> str:
