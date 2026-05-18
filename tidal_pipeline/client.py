@@ -101,6 +101,7 @@ class CachedSearchBackend:
                     self._add_query_hit(str(query), hit)
 
     def _add_query_hit(self, query: str, hit: AlbumHit) -> None:
+        """Add a cached hit once per query, keeping metadata from the first occurrence."""
         if not query:
             return
         seen = self._seen_by_query.setdefault(query, set())

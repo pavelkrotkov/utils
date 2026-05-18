@@ -52,18 +52,22 @@ def cached_query_candidates(record: dict) -> List[QueryCandidate]:
             if isinstance(candidate, dict) and candidate.get("query")
         ]
 
-    queries = record.get("queries") or []
-    if not queries:
+    stored_queries = record.get("queries") or []
+    fallback_queries: List[str] = []
+    if stored_queries:
+        fallback_queries = [str(query) for query in stored_queries if query]
+    else:
         seen: set[str] = set()
         for candidate in record.get("candidates") or []:
             if not isinstance(candidate, dict):
                 continue
             for query in candidate.get("queries") or []:
-                if query not in seen:
-                    seen.add(str(query))
-                    queries.append(str(query))
+                query_text = str(query)
+                if query_text not in seen:
+                    seen.add(query_text)
+                    fallback_queries.append(query_text)
 
-    return [QueryCandidate(template="cached", query=str(query)) for query in queries if query]
+    return [QueryCandidate(template="cached", query=query) for query in fallback_queries]
 
 
 # ---------------------------------------------------------------------------
