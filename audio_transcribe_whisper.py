@@ -698,7 +698,7 @@ def merge_asr_turns(
     lines: List[str] = []
     for speaker, group in itertools.groupby(normalized, key=lambda item: item[0]):
         texts = [text for _, text in group if text]
-        if not texts or not speaker:
+        if not texts:
             continue
 
         combined = " ".join(texts).strip()
@@ -710,7 +710,10 @@ def merge_asr_turns(
             lines.append(combined)
         else:
             display_label = display_speaker_label(speaker)
-            lines.append(f"{display_label}: {combined}")
+            if display_label:
+                lines.append(f"{display_label}: {combined}")
+            else:
+                lines.append(combined)
 
     return lines
 
