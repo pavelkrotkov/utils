@@ -11,19 +11,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+from tidal_pipeline.albums import AlbumInput, Candidate, QueryCandidate
 from tidal_pipeline.client import AlbumDetail, AlbumHit, SearchBackend
-from tidal_pipeline.models import (
-    AlbumInput,
-    Candidate,
-    Choice,
-    DEFAULT_TEMPLATE_WEIGHTS,
-    DEFAULT_WEIGHTS,
-    GENERIC_TITLE_TOKENS,
-    PERFORMER_WEIGHT_BOOST,
-    QueryCandidate,
-    TruthRecord,
-)
 from tidal_pipeline.normalize import (
+    GENERIC_TITLE_TOKENS,
     artist_tokens_from_list,
     extract_numeric_tokens,
     extract_year,
@@ -35,6 +26,47 @@ from tidal_pipeline.normalize import (
     tokenize,
     tokens_from_list,
 )
+from tidal_pipeline.truth import Choice, TruthRecord
+
+DEFAULT_WEIGHTS = {
+    "title": 0.35,
+    "composer": 0.1,
+    "performer": 0.25,
+    "ensemble": 0.15,
+    "conductor": 0.1,
+    "instrument": 0.05,
+    "label": 0.1,
+    "year": 0.05,
+}
+
+DEFAULT_TEMPLATE_WEIGHTS = {
+    "title": 1.0,
+    "title_short": 1.0,
+    "title_sorted": 0.7,
+    "title_reversed": 0.7,
+    "title_ngrams": 0.8,
+    "title_shuffle": 0.6,
+    "work": 0.9,
+    "work_ngrams": 0.8,
+    "composer": 1.4,
+    "composer_title": 1.2,
+    "composer_work": 1.2,
+    "performer": 1.7,
+    "performer_title": 2.3,
+    "performer_instrument": 0.9,
+    "performer_ensemble": 2.2,
+    "performer_composer": 2.1,
+    "performer_work": 2.0,
+    "ensemble": 1.8,
+    "ensemble_title": 1.5,
+    "conductor": 1.1,
+    "conductor_title": 1.4,
+    "conductor_composer": 1.0,
+    "instrument_title": 1.1,
+    "label_title": 0.8,
+}
+
+PERFORMER_WEIGHT_BOOST = 1.5
 
 
 @dataclass(frozen=True)

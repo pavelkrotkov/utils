@@ -30,7 +30,8 @@ from tidal_pipeline.match import (
     search_candidates_for_album,
     summarize_review_records,
 )
-from tidal_pipeline.models import QueryCandidate, TruthRecord
+from tidal_pipeline.albums import QueryCandidate
+from tidal_pipeline.truth import TruthRecord
 
 
 # ---------------------------------------------------------------------------
