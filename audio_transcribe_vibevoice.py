@@ -7,29 +7,33 @@
 """
 Transcribe audio locally with VibeVoice-ASR through mlx-audio.
 
-Defaults to mlx-community/VibeVoice-ASR-4bit and writes native mlx-audio JSON,
-including speaker IDs and timestamps when the model returns them.
+Defaults to mlx-community/VibeVoice-ASR-4bit. mlx-audio is asked for raw JSON,
+then this script normalizes that JSON into shared TranscriptSegment objects and
+emits json, txt, srt, or vtt locally.
 
 Usage:
     uv run ./audio_transcribe_vibevoice.py interview.m4a
     uv run ./audio_transcribe_vibevoice.py interview.m4a --context "Pavel, Mathpix, pyannote"
-    uv run ./audio_transcribe_vibevoice.py interview.m4a --format txt -o interview.txt
+    uv run ./audio_transcribe_vibevoice.py interview.m4a --format srt -o interview.srt
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import platform
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from audio_common import (
     ProgressReporter,
     convert_to_pcm16k_mono,
     run_threaded_with_periodic_progress,
 )
+from audio_transcript import TranscriptSegment, emit_transcript
 
 
 DEFAULT_MODEL = "mlx-community/VibeVoice-ASR-4bit"
@@ -107,19 +111,151 @@ def resolve_output_paths(
     final_path.parent.mkdir(parents=True, exist_ok=True)
     suffix = f".{output_format}"
     if final_path.name.lower().endswith(suffix):
-        mlx_stem = final_path.with_suffix("")
-        generated_path = final_path
+        mlx_stem = Path(str(final_path)[: -len(suffix)])
     else:
         mlx_stem = final_path.with_name(f"{final_path.name}.mlx-audio")
-        generated_path = Path(f"{mlx_stem}.{output_format}")
 
-    return final_path, mlx_stem, generated_path
+    return final_path, mlx_stem, Path(f"{mlx_stem}.json")
 
 
 def validate_output(path: Path) -> None:
     if not path.is_file() or path.stat().st_size == 0:
         print(f"ERROR: mlx-audio did not create a non-empty output file: {path}", file=sys.stderr)
         sys.exit(1)
+
+
+def load_vibevoice_segments(json_path: Path) -> list[TranscriptSegment]:
+    with open(json_path, "r", encoding="utf-8") as file:
+        try:
+            data = json.load(file)
+        except json.JSONDecodeError as exc:
+            print(f"ERROR: Invalid VibeVoice JSON in {json_path}: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+    raw_segments = _extract_raw_segments(data)
+    segments = [_segment_from_raw(item) for item in raw_segments]
+    segments = [segment for segment in segments if segment.text.strip()]
+
+    if segments:
+        return segments
+
+    fallback_text = _extract_text(data)
+    if fallback_text:
+        return [TranscriptSegment(start=0.0, end=0.0, text=fallback_text)]
+
+    print(f"ERROR: VibeVoice JSON contained no transcript text: {json_path}", file=sys.stderr)
+    sys.exit(1)
+
+
+def _extract_raw_segments(data: Any) -> list[Any]:
+    if isinstance(data, list):
+        return data if _looks_like_segment_list(data) else []
+    if not isinstance(data, dict):
+        return []
+
+    for key in ("segments", "chunks", "transcription", "results"):
+        value = data.get(key)
+        if isinstance(value, list):
+            if _looks_like_segment_list(value):
+                return value
+            continue
+        if isinstance(value, dict):
+            nested = _extract_raw_segments(value)
+            if nested:
+                return nested
+
+    return []
+
+
+def _looks_like_segment_list(value: list[Any]) -> bool:
+    return any(isinstance(item, str) or _looks_like_segment(item) for item in value)
+
+
+def _looks_like_segment(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+
+    segment_keys = {
+        "text",
+        "content",
+        "utterance",
+        "transcript",
+        "start",
+        "start_time",
+        "begin",
+        "ts",
+        "t0",
+        "end",
+        "end_time",
+        "finish",
+        "te",
+        "t1",
+        "offsets",
+        "speaker",
+        "speaker_id",
+        "speaker_label",
+    }
+    return any(key in value for key in segment_keys)
+
+
+def _segment_from_raw(raw: Any) -> TranscriptSegment:
+    if isinstance(raw, str):
+        return TranscriptSegment(start=0.0, end=0.0, text=raw)
+
+    if not isinstance(raw, dict):
+        return TranscriptSegment(start=0.0, end=0.0, text=str(raw))
+
+    text = _extract_text(raw)
+    start = _extract_time(raw, "start", "start_time", "begin", "ts", "t0")
+    end = _extract_time(raw, "end", "end_time", "finish", "te", "t1")
+    offsets = raw.get("offsets")
+    if isinstance(offsets, dict):
+        if start is None and "from" in offsets:
+            start = _coerce_seconds(offsets["from"], milliseconds=True)
+        if end is None and "to" in offsets:
+            end = _coerce_seconds(offsets["to"], milliseconds=True)
+
+    start = 0.0 if start is None else start
+    end = start if end is None or end < start else end
+    speaker = raw.get("speaker") or raw.get("speaker_id") or raw.get("speaker_label")
+    return TranscriptSegment(
+        start=start, end=end, text=text, speaker=str(speaker) if speaker else None
+    )
+
+
+def _extract_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if not isinstance(value, dict):
+        return ""
+    for key in ("text", "content", "utterance", "transcript"):
+        if key in value:
+            return str(value[key]).strip()
+    return ""
+
+
+def _extract_time(value: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        if key in value:
+            return _coerce_seconds(value[key], centiseconds=key in {"t0", "t1"})
+    return None
+
+
+def _coerce_seconds(
+    value: Any,
+    *,
+    centiseconds: bool = False,
+    milliseconds: bool = False,
+) -> float | None:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    if centiseconds:
+        return seconds * 0.01
+    if milliseconds:
+        return seconds * 0.001
+    return seconds
 
 
 def _bool_env(name: str) -> bool:
@@ -178,7 +314,7 @@ def main() -> None:
                 model=args.model,
                 audio=str(audio_for_transcription),
                 output_path=str(mlx_stem),
-                format=args.format,
+                format="json",
                 verbose=args.verbose,
                 context=args.context,
             )
@@ -202,8 +338,15 @@ def main() -> None:
         print(f"ERROR: mlx-audio did not update output file: {generated_path}", file=sys.stderr)
         sys.exit(1)
 
-    if generated_path != final_path:
-        generated_path.replace(final_path)
+    if args.format == "json":
+        if generated_path != final_path:
+            generated_path.replace(final_path)
+    else:
+        try:
+            segments = load_vibevoice_segments(generated_path)
+            final_path.write_text(emit_transcript(segments, args.format) + "\n", encoding="utf-8")
+        finally:
+            generated_path.unlink(missing_ok=True)
 
     validate_output(final_path)
     print(f"Transcript written to: {final_path}")
