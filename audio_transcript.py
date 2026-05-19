@@ -103,6 +103,40 @@ def emit_diarized_txt(
     return "\n".join(lines)
 
 
+def emit_diarized_breaks(segments: Sequence[TranscriptSegment]) -> str:
+    """Emit speaker-grouped text separated by `--- speaker change ---` markers."""
+    lines: list[str] = []
+    current_speaker: object = _NO_SPEAKER
+    current_text: list[str] = []
+
+    def flush() -> None:
+        if not current_text:
+            return
+        text = " ".join(part for part in current_text if part).strip()
+        if not text:
+            return
+        if lines:
+            lines.append("--- speaker change ---")
+        lines.append(text)
+
+    for segment in segments:
+        text = segment.text.strip()
+        if not text:
+            continue
+        if segment.speaker != current_speaker:
+            flush()
+            current_speaker = segment.speaker
+            current_text = [text]
+        else:
+            current_text.append(text)
+
+    flush()
+    return "\n".join(lines)
+
+
+_NO_SPEAKER = object()
+
+
 def emit_transcript(
     segments: Sequence[TranscriptSegment],
     output_format: str,
@@ -117,6 +151,8 @@ def emit_transcript(
         return emit_vtt(segments)
     if output_format == "diarized-txt":
         return emit_diarized_txt(segments, speaker_names)
+    if output_format == "diarized-breaks":
+        return emit_diarized_breaks(segments)
     raise ValueError(f"Unsupported transcript format: {output_format}")
 
 

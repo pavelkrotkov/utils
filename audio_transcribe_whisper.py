@@ -459,7 +459,9 @@ def merge_asr_turn_segments(
     Merge timed ASR tuples with speaker-turn tuples and return transcript segments.
 
     ASR input is (start, end, text). Speaker-turn input is (start, end, label).
-    Speaker labels are normalized by first appearance.
+    Output segments carry normalized speaker labels (`SPEAKER_NN` by order of
+    first appearance), which `emit_diarized_txt` later maps to user-supplied
+    names by index.
     """
     seg_speakers: List[Tuple[float, float, str, Optional[str]]] = []
     for s_start, s_end, s_text in asr_segments:
@@ -524,8 +526,10 @@ def merge_asr_with_diar(
     verbose: bool = False,
 ) -> List[TranscriptSegment]:
     """
-    Merge ASR segments with diarization by assigning each ASR segment to best-matching speaker,
-    normalizing speaker labels by order of first appearance.
+    Merge ASR segments with diarization by assigning each ASR segment to best-matching speaker.
+
+    Returns segments tagged with normalized `SPEAKER_NN` labels (by order of
+    first appearance); user-supplied names are applied later at emit time.
     """
     # Build index of timed segments
     timed_segs = []
@@ -721,8 +725,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--format",
-        choices=["txt", "srt", "vtt", "diarized-txt"],
-        help="Output format (default: txt, or diarized-txt with --diarization)",
+        choices=["txt", "srt", "vtt", "diarized-txt", "diarized-breaks"],
+        help=(
+            "Output format (default: txt, or diarized-txt with --diarization; "
+            "--style breaks is shorthand for --format diarized-breaks)"
+        ),
     )
     parser.add_argument("--ffmpeg-bin", default="ffmpeg", help="Path to ffmpeg binary")
     parser.add_argument("--ffprobe-bin", default="ffprobe", help="Path to ffprobe binary")
@@ -785,10 +792,11 @@ def main() -> None:
     speaker_names = [s.strip() for s in args.speakers.split(",")] if args.speakers else None
     args.whisper_bin = resolve_whisper_bin(args.whisper_bin, args.verbose)
     progress = None if args.no_progress else ProgressReporter(interval=args.progress_interval)
-    output_format = args.format or ("diarized-txt" if args.diarization else "txt")
+    diarized_default = "diarized-breaks" if args.style == "breaks" else "diarized-txt"
+    output_format = args.format or (diarized_default if args.diarization else "txt")
 
-    if output_format == "diarized-txt" and not args.diarization:
-        print("ERROR: --format diarized-txt requires --diarization.", file=sys.stderr)
+    if output_format in {"diarized-txt", "diarized-breaks"} and not args.diarization:
+        print(f"ERROR: --format {output_format} requires --diarization.", file=sys.stderr)
         sys.exit(1)
 
     if not args.input.exists():
@@ -801,7 +809,7 @@ def main() -> None:
 
     if args.output:
         output_path = args.output
-    elif output_format == "diarized-txt":
+    elif output_format in {"diarized-txt", "diarized-breaks"}:
         output_path = args.input.with_suffix(".spk.txt")
     else:
         output_path = args.input.with_suffix(f".{output_format}")
