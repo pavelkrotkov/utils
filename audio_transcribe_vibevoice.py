@@ -288,8 +288,11 @@ def main() -> None:
         if generated_path != final_path:
             generated_path.replace(final_path)
     else:
-        segments = load_vibevoice_segments(generated_path)
-        final_path.write_text(emit_transcript(segments, args.format) + "\n", encoding="utf-8")
+        try:
+            segments = load_vibevoice_segments(generated_path)
+            final_path.write_text(emit_transcript(segments, args.format) + "\n", encoding="utf-8")
+        finally:
+            generated_path.unlink(missing_ok=True)
 
     validate_output(final_path)
     print(f"Transcript written to: {final_path}")
