@@ -2,6 +2,7 @@ import unittest
 
 from audio_transcript import (
     TranscriptSegment,
+    emit_diarized_breaks,
     emit_diarized_txt,
     emit_srt,
     emit_transcript,
@@ -87,6 +88,23 @@ class TranscriptEmitterTests(unittest.TestCase):
 
         self.assertEqual(emit_transcript(segments, "srt"), emit_srt(segments))
         self.assertEqual(emit_transcript(segments, "vtt"), emit_vtt(segments))
+
+    def test_diarized_breaks_separates_consecutive_speakers(self) -> None:
+        segments = [
+            TranscriptSegment(0.0, 1.0, "Hello", "SPEAKER_00"),
+            TranscriptSegment(1.0, 2.0, "again", "SPEAKER_00"),
+            TranscriptSegment(2.0, 3.0, "Hi there", "SPEAKER_01"),
+            TranscriptSegment(3.0, 4.0, "Back", "SPEAKER_00"),
+        ]
+
+        self.assertEqual(
+            emit_diarized_breaks(segments),
+            "Hello again\n--- speaker change ---\nHi there\n--- speaker change ---\nBack",
+        )
+        self.assertEqual(
+            emit_transcript(segments, "diarized-breaks"),
+            emit_diarized_breaks(segments),
+        )
 
 
 if __name__ == "__main__":
