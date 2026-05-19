@@ -16,23 +16,44 @@ pipeline in this repository.
 
 - `tidal_pipeline.match`
   Structured-input loading, query generation, candidate retrieval, scoring,
-  review/truth record construction, and coverage training.
+  match-scoring weights, review/truth record construction, and coverage
+  training.
   Key functions:
   - `load_album_inputs()`
   - `build_query_candidates()`
   - `select_query_candidates()`
   - `search_candidates_for_album()`
+  - `sort_candidates()`
   - `score_candidate()`
+  - `score_manual_candidate()`
+  - `apply_details()`
+  - `ensure_details()`
   - `choose_auto_candidate()`
   - `build_record()`
   - `load_truth_records()`
   - `save_truth_records()`
   - `train_coverage()`
 
+- `tidal_pipeline.albums`
+  Album and match-candidate dataclasses shared by parsing, matching, and
+  evaluation.
+  Key objects:
+  - `AlbumInput`
+  - `Candidate`
+  - `QueryCandidate`
+
+- `tidal_pipeline.truth`
+  Persisted truth/review record dataclasses and JSON round-trip behavior.
+  Key objects:
+  - `Choice`
+  - `TruthRecord`
+
 - `tidal_pipeline.client`
   TIDAL OAuth, token caching, and API access.
   Key functions and classes:
+  - `SearchBackend`
   - `TidalClient`
+  - `CachedSearchBackend`
   - `get_valid_token()`
   - `resolve_country_code()`
 
@@ -42,16 +63,8 @@ pipeline in this repository.
   - `load_updates()`
   - `apply_updates()`
 
-- `tidal_pipeline.models`
-  Shared dataclasses and constants.
-  Key objects:
-  - `AlbumInput`
-  - `Candidate`
-  - `QueryCandidate`
-  - weight/template constants
-
 - `tidal_pipeline.normalize`
-  Shared normalization, tokenization, and low-level text helpers.
+  Normalization lexicons, tokenization, and low-level text helpers.
 
 ## Script Wrappers
 
@@ -66,9 +79,10 @@ pipeline in this repository.
   CLI wrapper around `tidal_pipeline.links`.
 
 - `tidal_eval.py`
-  Offline evaluation harness. Re-scores cached candidates from a truth file,
-  replays auto-selection, and reports precision@1, MRR, auto-select
-  coverage/accuracy/recall, score distribution, and regressions.
+  Offline evaluation harness. Replays cached candidates through the shared
+  `search_candidates_for_album()` driver via `CachedSearchBackend`, replays
+  auto-selection, and reports precision@1, MRR, auto-select coverage/accuracy/
+  recall, score distribution, and regressions.
 
 ## Formal Pipeline
 
@@ -136,6 +150,11 @@ small hit list:
 $$
 H_{ik} = \{r_{ikl}\}_{l=1}^{L_{ik}}.
 $$
+
+In code, retrieval is represented by the `SearchBackend` protocol. The live CLI
+uses `TidalClient`, which satisfies the protocol with real TIDAL API calls.
+Offline evaluation uses `CachedSearchBackend`, which satisfies the same
+protocol from truth-record candidate caches.
 
 The raw hit set is
 
@@ -218,6 +237,11 @@ $$
 T = \{(a_i, \widetilde{Q}_i, C_i, y_i)\}_{i=1}^{N}.
 $$
 
+In memory, each persisted item is represented by `TruthRecord`, with its label
+represented by `Choice`. `TruthRecord.from_dict()` and `TruthRecord.to_dict()`
+mirror the on-disk JSON schema, including the existing field order, so
+round-tripping a truth file does not rewrite the persisted format.
+
 If desired, `--train-coverage` uses a prefix of $T$ to update both the feature
 weights $w_f$ and the query-template weights used by $S$.
 
@@ -237,9 +261,11 @@ at the end of the corresponding markdown subsection.
 The evaluation harness (`tidal_eval.py`) operates on the persisted truth set $T$
 without making any API calls.
 
-For each $(a_i, C_i, y_i) \in T$, it re-computes the score $s_i(c)$ for every
-$c \in C_i$ using the current feature weights $w_f$, then replays
-auto-selection to obtain a predicted choice $\hat{y}_i$.
+For each $(a_i, C_i, y_i) \in T$, it builds a `CachedSearchBackend` from the
+record's cached candidates, calls `search_candidates_for_album()` with the
+record's persisted selected queries, and replays auto-selection to obtain a
+predicted choice $\hat{y}_i$. This keeps offline evaluation on the same ranking
+key used by live matching: `(score, len(queries), title.lower())`, descending.
 
 Reported metrics:
 
@@ -266,5 +292,6 @@ suitable for CI or pre-commit checks.
   block for enrichment.
 - Review records and truth persistence live in the shared library.
 - CLI scripts remain stable entrypoints.
-- Evaluation is offline and deterministic — it re-scores cached candidates
-  without API calls.
+- Evaluation is offline and deterministic — it uses `CachedSearchBackend` to
+  score cached candidates without API calls through the same driver as live
+  matching.

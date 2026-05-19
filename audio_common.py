@@ -26,7 +26,10 @@ def format_duration(seconds: Optional[float]) -> str:
     if seconds_float < 0:
         return "unknown"
 
-    seconds_int = int(round(seconds_float))
+    try:
+        seconds_int = int(round(seconds_float))
+    except (OverflowError, ValueError):
+        return "unknown"
     hours, remainder = divmod(seconds_int, 3600)
     minutes, secs = divmod(remainder, 60)
     if hours:
