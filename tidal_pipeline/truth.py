@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from tidal_pipeline.albums import AlbumInput, Candidate, QueryCandidate, _parse_list
+from tidal_pipeline.albums import AlbumInput, Candidate, QueryCandidate
+from tidal_pipeline.serde import parse_dict, parse_list, parse_string
 
 
 @dataclass
@@ -20,9 +21,9 @@ class Choice:
     def from_dict(cls, data: Dict[str, Any]) -> "Choice":
         known = {"status", "tidal_id", "selected_at", "manual"}
         return cls(
-            status=str(data.get("status", "") or ""),
-            tidal_id=str(data.get("tidal_id", "") or ""),
-            selected_at=str(data.get("selected_at", "") or ""),
+            status=parse_string(data.get("status")),
+            tidal_id=parse_string(data.get("tidal_id")),
+            selected_at=parse_string(data.get("selected_at")),
             manual=bool(data.get("manual", False)),
             extra={key: value for key, value in data.items() if key not in known},
         )
@@ -54,15 +55,15 @@ class TruthRecord:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "TruthRecord":
-        source = data.get("source", {}) if isinstance(data.get("source"), dict) else {}
-        album_data = data.get("album", {}) if isinstance(data.get("album"), dict) else data
-        choice_data = data.get("choice", {}) if isinstance(data.get("choice"), dict) else {}
+        source = parse_dict(data.get("source"))
+        album_data = parse_dict(data.get("album")) or data
+        choice_data = parse_dict(data.get("choice"))
         chosen_data = data.get("chosen") if isinstance(data.get("chosen"), dict) else None
         return cls(
-            record_id=str(data.get("record_id", "") or ""),
+            record_id=parse_string(data.get("record_id")),
             source=dict(source),
             album=AlbumInput.from_dict(album_data, source=source),
-            queries=_parse_list(data.get("queries")),
+            queries=parse_list(data.get("queries")),
             query_candidates=[
                 QueryCandidate.from_dict(item)
                 for item in data.get("query_candidates", [])
@@ -80,8 +81,8 @@ class TruthRecord:
             ],
             choice=Choice.from_dict(choice_data),
             chosen=Candidate.from_dict(chosen_data) if chosen_data else None,
-            review=data.get("review", {}) if isinstance(data.get("review"), dict) else {},
-            meta=data.get("meta", {}) if isinstance(data.get("meta"), dict) else {},
+            review=parse_dict(data.get("review")),
+            meta=parse_dict(data.get("meta")),
         )
 
     @classmethod
@@ -93,6 +94,8 @@ class TruthRecord:
         selected_queries: List[QueryCandidate],
         chosen: Optional[Candidate],
         choice: Choice,
+        *,
+        top: Optional[int] = None,
         review: Dict[str, Any],
         meta: Dict[str, Any],
     ) -> "TruthRecord":
@@ -109,10 +112,10 @@ class TruthRecord:
             queries=[candidate.query for candidate in selected_queries],
             query_candidates=selected_queries,
             candidates=ordered,
-            top_candidates=ordered[: int(review.get("top", 0) or len(ordered))],
+            top_candidates=ordered[: int(top or len(ordered))],
             choice=choice,
             chosen=chosen,
-            review={key: value for key, value in review.items() if key != "top"},
+            review=review,
             meta=meta,
         )
 

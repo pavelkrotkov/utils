@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from tidal_pipeline.serde import parse_float_dict, parse_list, parse_string
+
 
 @dataclass
 class AlbumInput:
@@ -30,19 +32,19 @@ class AlbumInput:
         source = source or {}
         context = source.get("context", {})
         return cls(
-            title=str(data.get("title", "") or ""),
-            composers=_parse_list(data.get("composers")),
-            performers=_parse_list(data.get("performers")),
-            ensembles=_parse_list(data.get("ensembles")),
-            conductor=str(data.get("conductor", "") or ""),
-            label=str(data.get("label", "") or ""),
-            year=str(data.get("year", "") or ""),
-            works=_parse_list(data.get("works")),
-            instruments=_parse_list(data.get("instruments")),
-            source_file=str(source.get("file", "") or ""),
+            title=parse_string(data.get("title")),
+            composers=parse_list(data.get("composers")),
+            performers=parse_list(data.get("performers")),
+            ensembles=parse_list(data.get("ensembles")),
+            conductor=parse_string(data.get("conductor")),
+            label=parse_string(data.get("label")),
+            year=parse_string(data.get("year")),
+            works=parse_list(data.get("works")),
+            instruments=parse_list(data.get("instruments")),
+            source_file=parse_string(source.get("file")),
             source_line=source.get("line"),
-            source_raw=str(source.get("raw", "") or ""),
-            source_subsection=str(source.get("subsection", "") or ""),
+            source_raw=parse_string(source.get("raw")),
+            source_subsection=parse_string(source.get("subsection")),
             source_context=context if isinstance(context, dict) else {},
         )
 
@@ -79,15 +81,15 @@ class Candidate:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Candidate":
         return cls(
-            id=str(data.get("id", "") or ""),
-            title=str(data.get("title", "") or ""),
-            artists=_parse_list(data.get("artists")),
-            release_date=str(data.get("release_date", "") or ""),
-            copyright=str(data.get("copyright", "") or ""),
+            id=parse_string(data.get("id")),
+            title=parse_string(data.get("title")),
+            artists=parse_list(data.get("artists")),
+            release_date=parse_string(data.get("release_date")),
+            copyright=parse_string(data.get("copyright")),
             track_count=data.get("track_count"),
             score=float(data.get("score", 0.0) or 0.0),
-            features=_parse_float_dict(data.get("features")),
-            queries=_parse_list(data.get("queries")),
+            features=parse_float_dict(data.get("features")),
+            queries=parse_list(data.get("queries")),
             details_fetched=bool(data.get("details_fetched", False)),
             has_track_count="track_count" in data,
             has_queries="queries" in data,
@@ -121,8 +123,8 @@ class QueryCandidate:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "QueryCandidate":
         return cls(
-            template=str(data.get("template", "") or ""),
-            query=str(data.get("query", "") or ""),
+            template=parse_string(data.get("template")),
+            query=parse_string(data.get("query")),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -130,20 +132,3 @@ class QueryCandidate:
             "template": self.template,
             "query": self.query,
         }
-
-
-def _parse_list(value: Any) -> List[str]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [str(item) for item in value if item is not None]
-    return [str(value)]
-
-
-def _parse_float_dict(value: Any) -> Dict[str, float]:
-    if not isinstance(value, dict):
-        return {}
-    parsed: Dict[str, float] = {}
-    for key, item in value.items():
-        parsed[str(key)] = float(item)
-    return parsed
