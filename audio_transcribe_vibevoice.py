@@ -24,6 +24,8 @@ import platform
 import sys
 from pathlib import Path
 
+from audio_common import ProgressReporter, run_threaded_with_periodic_progress
+
 
 DEFAULT_MODEL = "mlx-community/VibeVoice-ASR-4bit"
 SUPPORTED_FORMATS = ("json", "txt", "srt", "vtt")
@@ -56,6 +58,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--context",
         help="Optional hotwords or domain context to guide transcription",
+    )
+    parser.add_argument("--no-progress", action="store_true", help="Disable progress reports")
+    parser.add_argument(
+        "--progress-interval",
+        type=float,
+        default=10.0,
+        help="Seconds between progress reports (default: 10)",
     )
     parser.add_argument("--verbose", action="store_true", help="Show mlx-audio details")
     return parser
@@ -126,10 +135,15 @@ def main() -> None:
     )
     old_mtime_ns = generated_path.stat().st_mtime_ns if generated_path.exists() else None
 
-    print(f"INFO: Transcribing with {args.model}", file=sys.stderr)
-    print(f"INFO: Writing {args.format.upper()} to {final_path}", file=sys.stderr)
+    progress = None if args.no_progress else ProgressReporter(interval=args.progress_interval)
+    if progress:
+        progress.info(f"Transcribing with {args.model}")
+        progress.info(f"Writing {args.format.upper()} to {final_path}")
+    else:
+        print(f"INFO: Transcribing with {args.model}", file=sys.stderr)
+        print(f"INFO: Writing {args.format.upper()} to {final_path}", file=sys.stderr)
 
-    try:
+    def transcribe() -> None:
         generate_transcription(
             model=args.model,
             audio=str(args.input),
@@ -138,6 +152,17 @@ def main() -> None:
             verbose=args.verbose,
             context=args.context,
         )
+
+    try:
+        if progress:
+            run_threaded_with_periodic_progress(
+                transcribe,
+                reporter=progress,
+                label="VibeVoice ASR",
+                interval=args.progress_interval,
+            )
+        else:
+            transcribe()
     except Exception as exc:
         print(f"ERROR: VibeVoice transcription failed: {exc}", file=sys.stderr)
         sys.exit(1)
