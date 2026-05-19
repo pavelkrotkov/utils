@@ -18,8 +18,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from tidal_pipeline.client import (
-    AlbumDetail,
-    AlbumHit,
     TIDAL_COUNTRY_CODE,
     TOKEN_FILE_DIR,
     TOKEN_FILE_NAME,
@@ -28,11 +26,13 @@ from tidal_pipeline.client import (
     resolve_country_code,
 )
 from tidal_pipeline.match import (
+    DEFAULT_TEMPLATE_WEIGHTS,
     build_record,
     build_record_id,
     build_query_candidates,
     choose_auto_candidate,
     collect_selected_album_ids,
+    ensure_details,
     load_album_inputs,
     load_existing_output,
     load_training_model,
@@ -40,17 +40,14 @@ from tidal_pipeline.match import (
     load_weights,
     save_training_model,
     save_truth_records,
-    score_candidate,
+    score_manual_candidate,
     search_candidates_for_album,
     select_query_candidates,
+    sort_candidates,
     summarize_review_records,
     train_coverage,
 )
-from tidal_pipeline.models import (
-    AlbumInput,
-    Candidate,
-    DEFAULT_TEMPLATE_WEIGHTS,
-)
+from tidal_pipeline.albums import AlbumInput, Candidate
 
 
 def prompt_yes_no(prompt: str, default: bool = False) -> bool:
@@ -144,26 +141,6 @@ def format_candidate_line(candidate: Candidate, index: int) -> str:
     )
 
 
-def apply_details(candidate: Candidate, detail: AlbumDetail) -> None:
-    candidate.title = detail.title or candidate.title
-    candidate.artists = detail.artists or candidate.artists
-    candidate.release_date = detail.release_date or candidate.release_date
-    candidate.copyright = detail.copyright or candidate.copyright
-    candidate.track_count = detail.track_count
-    candidate.details_fetched = True
-
-
-def ensure_details(client: TidalClient, ordered: List[Candidate], limit: int, sleep: float) -> None:
-    for candidate in ordered[:limit]:
-        if candidate.details_fetched:
-            continue
-        detail = client.get_album_details(candidate.id)
-        if detail:
-            apply_details(candidate, detail)
-        if sleep:
-            time.sleep(sleep)
-
-
 def print_album_header(album: AlbumInput, index: int, total: int) -> None:
     print("\n" + "=" * 80)
     print(f"Album {index}/{total}")
@@ -248,9 +225,7 @@ def prompt_for_choice(
                 continue
             candidate = ordered[idx - 1]
             if not candidate.details_fetched:
-                detail = client.get_album_details(candidate.id)
-                if detail:
-                    apply_details(candidate, detail)
+                ensure_details(client, [candidate], 1, detail_sleep)
             print("\nCandidate details:")
             print(f"ID: {candidate.id}")
             print(f"Title: {candidate.title}")
@@ -433,7 +408,7 @@ def main() -> int:
         record_id = build_record_id(raw_album)
         existing = by_id.get(record_id)
         if args.resume and existing:
-            status = (existing.get("choice") or {}).get("status", "")
+            status = existing.choice.status
             if status in {"selected", "none", "auto_selected"}:
                 continue
 
@@ -523,48 +498,20 @@ def main() -> int:
             choice["tidal_id"] = selected.id
             chosen = selected
         elif action == "id" and selected:
-            choice["status"] = "selected"
             choice["tidal_id"] = selected.id
             choice["manual"] = True
-            detail = client.get_album_details(selected.id)
-            if detail:
-                hit = AlbumHit(
-                    id=detail.id,
-                    title=detail.title,
-                    artists=detail.artists,
-                    release_date=detail.release_date,
-                    copyright=detail.copyright,
-                )
-                score, features = score_candidate(album, hit, weights)
-                selected = Candidate(
-                    id=detail.id,
-                    title=detail.title,
-                    artists=detail.artists,
-                    release_date=detail.release_date,
-                    copyright=detail.copyright,
-                    score=score,
-                    features=features,
-                    track_count=detail.track_count,
-                    details_fetched=True,
-                )
+            scored = score_manual_candidate(client, album, selected.id, weights)
+            if scored:
+                choice["status"] = "selected"
+                candidates_map[scored.id] = scored
+                ordered = sort_candidates(list(candidates_map.values()))
+                chosen = scored
             else:
-                selected = Candidate(
-                    id=selected.id,
-                    title="",
-                    artists=[],
-                    release_date="",
-                    copyright="",
-                    score=0.0,
-                    features={},
-                    details_fetched=False,
+                choice["status"] = "needs_review"
+                print(
+                    f"Warning: TIDAL album details lookup failed for manual id {selected.id}; "
+                    "leaving entry marked needs_review."
                 )
-            candidates_map[selected.id] = selected
-            ordered = sorted(
-                candidates_map.values(),
-                key=lambda c: (c.score, len(c.queries), c.title.lower()),
-                reverse=True,
-            )
-            chosen = selected
 
         record = build_record(
             album=album,
@@ -581,7 +528,7 @@ def main() -> int:
 
         if existing:
             for i, entry in enumerate(records):
-                if entry.get("record_id") == record_id:
+                if entry.record_id == record_id:
                     records[i] = record
                     break
         else:

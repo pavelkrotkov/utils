@@ -6,21 +6,15 @@ import argparse
 import json
 import random
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
-from tidal_pipeline.client import AlbumHit, TidalClient
-from tidal_pipeline.models import (
-    AlbumInput,
-    Candidate,
-    DEFAULT_TEMPLATE_WEIGHTS,
-    DEFAULT_WEIGHTS,
-    GENERIC_TITLE_TOKENS,
-    PERFORMER_WEIGHT_BOOST,
-    QueryCandidate,
-)
+from tidal_pipeline.albums import AlbumInput, Candidate, QueryCandidate
+from tidal_pipeline.client import AlbumDetail, AlbumHit, SearchBackend
 from tidal_pipeline.normalize import (
+    GENERIC_TITLE_TOKENS,
     artist_tokens_from_list,
     extract_numeric_tokens,
     extract_year,
@@ -32,6 +26,214 @@ from tidal_pipeline.normalize import (
     tokenize,
     tokens_from_list,
 )
+from tidal_pipeline.truth import Choice, TruthRecord
+
+DEFAULT_WEIGHTS = {
+    "title": 0.35,
+    "composer": 0.1,
+    "performer": 0.25,
+    "ensemble": 0.15,
+    "conductor": 0.1,
+    "instrument": 0.05,
+    "label": 0.1,
+    "year": 0.05,
+}
+
+DEFAULT_TEMPLATE_WEIGHTS = {
+    "title": 1.0,
+    "title_short": 1.0,
+    "title_sorted": 0.7,
+    "title_reversed": 0.7,
+    "title_ngrams": 0.8,
+    "title_shuffle": 0.6,
+    "work": 0.9,
+    "work_ngrams": 0.8,
+    "composer": 1.4,
+    "composer_title": 1.2,
+    "composer_work": 1.2,
+    "performer": 1.7,
+    "performer_title": 2.3,
+    "performer_instrument": 0.9,
+    "performer_ensemble": 2.2,
+    "performer_composer": 2.1,
+    "performer_work": 2.0,
+    "ensemble": 1.8,
+    "ensemble_title": 1.5,
+    "conductor": 1.1,
+    "conductor_title": 1.4,
+    "conductor_composer": 1.0,
+    "instrument_title": 1.1,
+    "label_title": 0.8,
+}
+
+PERFORMER_WEIGHT_BOOST = 1.5
+
+
+@dataclass(frozen=True)
+class _FeatureContext:
+    title_values: List[str]
+    title_tokens: Set[str]
+    composer_tokens: Set[str]
+    performer_tokens: Set[str]
+    ensemble_tokens: Set[str]
+    conductor_tokens: Set[str]
+    instrument_tokens: Set[str]
+    hit_title_tokens: Set[str]
+    hit_artist_tokens: Set[str]
+    hit_all_tokens: Set[str]
+    label_norm: str
+    requested_numbers: Set[str]
+    hit_numbers: Set[str]
+    composers: List[str]
+    performers: List[str]
+    ensembles: List[str]
+    conductor_list: List[str]
+    hit_artists: List[str]
+    hit_title_raw: str
+    album_year: Optional[int]
+    hit_year: Optional[int]
+    hit_copyright: str
+    album_title_norm: str
+    hit_title_norm: str
+    generic_title: bool
+
+
+def _build_feature_context(album: AlbumInput, hit: AlbumHit) -> _FeatureContext:
+    title_values = [album.title] + album.works
+    hit_title_tokens = tokenize(hit.title)
+    hit_artist_tokens = artist_tokens_from_list(hit.artists)
+    title_tokens = tokens_from_list(title_values)
+    return _FeatureContext(
+        title_values=title_values,
+        title_tokens=title_tokens,
+        composer_tokens=tokens_from_list(album.composers),
+        performer_tokens=artist_tokens_from_list(album.performers),
+        ensemble_tokens=artist_tokens_from_list(album.ensembles),
+        conductor_tokens=artist_tokens_from_list([album.conductor]),
+        instrument_tokens=normalize_instruments(album.instruments),
+        hit_title_tokens=hit_title_tokens,
+        hit_artist_tokens=hit_artist_tokens,
+        hit_all_tokens=hit_title_tokens | hit_artist_tokens,
+        label_norm=normalize(album.label),
+        requested_numbers=extract_numeric_tokens(title_values),
+        hit_numbers=extract_numeric_tokens([hit.title]),
+        composers=album.composers,
+        performers=album.performers,
+        ensembles=album.ensembles,
+        conductor_list=[album.conductor],
+        hit_artists=hit.artists,
+        hit_title_raw=hit.title,
+        album_year=extract_year(album.year),
+        hit_year=extract_year(hit.release_date),
+        hit_copyright=hit.copyright,
+        album_title_norm=normalize(album.title),
+        hit_title_norm=normalize(hit.title),
+        generic_title=bool(title_tokens) and title_tokens.issubset(GENERIC_TITLE_TOKENS),
+    )
+
+
+def _extract_features_from_context(context: _FeatureContext) -> Dict[str, float]:
+    composer_phrase = phrase_overlap_score(
+        context.composers, [context.hit_title_raw, *context.hit_artists]
+    )
+    performer_phrase = phrase_overlap_score(context.performers, context.hit_artists)
+    ensemble_phrase = phrase_overlap_score(context.ensembles, context.hit_artists)
+    conductor_phrase = phrase_overlap_score(context.conductor_list, context.hit_artists)
+
+    features = {
+        "title": overlap_score(context.title_tokens, context.hit_title_tokens),
+        "composer": max(
+            composer_phrase,
+            overlap_score(context.composer_tokens, context.hit_all_tokens) * 0.6,
+        ),
+        "performer": max(
+            performer_phrase,
+            overlap_score(context.performer_tokens, context.hit_all_tokens) * 0.6,
+        ),
+        "ensemble": max(
+            ensemble_phrase, overlap_score(context.ensemble_tokens, context.hit_all_tokens)
+        ),
+        "conductor": max(
+            conductor_phrase,
+            overlap_score(context.conductor_tokens, context.hit_all_tokens) * 0.6,
+        ),
+        "instrument": overlap_score(context.instrument_tokens, context.hit_title_tokens),
+        "label": 0.0,
+        "year": 0.0,
+    }
+
+    if context.label_norm and len(context.label_norm) > 2:
+        copy_norm = normalize(context.hit_copyright)
+        if context.label_norm in copy_norm:
+            features["label"] = 1.0
+
+    if context.album_year and context.hit_year and context.album_year == context.hit_year:
+        features["year"] = 1.0
+
+    if context.album_title_norm and context.hit_title_norm:
+        if (
+            context.album_title_norm in context.hit_title_norm
+            or context.hit_title_norm in context.album_title_norm
+        ):
+            features["title"] = max(features["title"], 0.95)
+
+    return features
+
+
+def extract_features(album: AlbumInput, hit: AlbumHit) -> Dict[str, float]:
+    return _extract_features_from_context(_build_feature_context(album, hit))
+
+
+def base_score(features: Dict[str, float], weights: Dict[str, float]) -> float:
+    return sum(features[key] * weights.get(key, 0.0) for key in features)
+
+
+def _apply_penalties_with_context(
+    base: float,
+    features: Dict[str, float],
+    context: _FeatureContext,
+) -> float:
+    score = base
+    generic_title = context.generic_title
+
+    artist_support = max(
+        features.get("performer", 0.0),
+        features.get("ensemble", 0.0),
+        features.get("conductor", 0.0),
+    )
+    if context.performer_tokens or context.ensemble_tokens or context.conductor_tokens:
+        if artist_support == 0:
+            score *= 0.45
+        elif artist_support < 0.34:
+            score *= 0.7
+
+    composer_score = features.get("composer", 0.0)
+    if context.composer_tokens and composer_score == 0 and artist_support == 0:
+        score *= 0.8
+    elif context.composer_tokens and composer_score == 0 and generic_title:
+        score *= 0.55
+
+    if context.label_norm and features.get("label", 0.0) == 0 and artist_support == 0:
+        score *= 0.85
+
+    if context.requested_numbers and context.hit_numbers:
+        if not (context.requested_numbers & context.hit_numbers):
+            score *= 0.55
+        elif len(context.requested_numbers) > 1 and not context.requested_numbers.issubset(
+            context.hit_numbers
+        ):
+            score *= 0.8
+
+    return score
+
+
+def apply_penalties(
+    base: float,
+    album: AlbumInput,
+    features: Dict[str, float],
+    hit: AlbumHit,
+) -> float:
+    return _apply_penalties_with_context(base, features, _build_feature_context(album, hit))
 
 
 def score_candidate(
@@ -40,75 +242,9 @@ def score_candidate(
     weights: Optional[Dict[str, float]] = None,
 ) -> Tuple[float, Dict[str, float]]:
     active_weights = weights or DEFAULT_WEIGHTS
-    title_values = [album.title] + album.works
-    title_tokens = tokens_from_list(title_values)
-    generic_title = bool(title_tokens) and title_tokens.issubset(GENERIC_TITLE_TOKENS)
-    composer_tokens = tokens_from_list(album.composers)
-    performer_tokens = artist_tokens_from_list(album.performers)
-    ensemble_tokens = artist_tokens_from_list(album.ensembles)
-    conductor_tokens = artist_tokens_from_list([album.conductor])
-    instrument_tokens = normalize_instruments(album.instruments)
-    requested_numbers = extract_numeric_tokens(title_values)
-
-    hit_title_tokens = tokenize(hit.title)
-    hit_artist_tokens = artist_tokens_from_list(hit.artists)
-    hit_all_tokens = hit_title_tokens | hit_artist_tokens
-    hit_numbers = extract_numeric_tokens([hit.title])
-    composer_phrase = phrase_overlap_score(album.composers, [hit.title, *hit.artists])
-    performer_phrase = phrase_overlap_score(album.performers, hit.artists)
-    ensemble_phrase = phrase_overlap_score(album.ensembles, hit.artists)
-    conductor_phrase = phrase_overlap_score([album.conductor], hit.artists)
-
-    features = {
-        "title": overlap_score(title_tokens, hit_title_tokens),
-        "composer": max(composer_phrase, overlap_score(composer_tokens, hit_all_tokens) * 0.6),
-        "performer": max(performer_phrase, overlap_score(performer_tokens, hit_all_tokens) * 0.6),
-        "ensemble": max(ensemble_phrase, overlap_score(ensemble_tokens, hit_all_tokens)),
-        "conductor": max(conductor_phrase, overlap_score(conductor_tokens, hit_all_tokens) * 0.6),
-        "instrument": overlap_score(instrument_tokens, hit_title_tokens),
-        "label": 0.0,
-        "year": 0.0,
-    }
-
-    label_norm = normalize(album.label)
-    if label_norm and len(label_norm) > 2:
-        copy_norm = normalize(hit.copyright)
-        if label_norm in copy_norm:
-            features["label"] = 1.0
-
-    album_year = extract_year(album.year)
-    hit_year = extract_year(hit.release_date)
-    if album_year and hit_year and album_year == hit_year:
-        features["year"] = 1.0
-
-    normalized_title = normalize(album.title)
-    normalized_hit_title = normalize(hit.title)
-    if normalized_title and normalized_hit_title:
-        if normalized_title in normalized_hit_title or normalized_hit_title in normalized_title:
-            features["title"] = max(features["title"], 0.95)
-
-    score = sum(features[key] * active_weights.get(key, 0.0) for key in features)
-    artist_support = max(features["performer"], features["ensemble"], features["conductor"])
-    if performer_tokens or ensemble_tokens or conductor_tokens:
-        if artist_support == 0:
-            score *= 0.45
-        elif artist_support < 0.34:
-            score *= 0.7
-
-    if composer_tokens and features["composer"] == 0 and artist_support == 0:
-        score *= 0.8
-    elif composer_tokens and features["composer"] == 0 and generic_title:
-        score *= 0.55
-
-    if label_norm and features["label"] == 0 and artist_support == 0:
-        score *= 0.85
-
-    if requested_numbers and hit_numbers:
-        if not (requested_numbers & hit_numbers):
-            score *= 0.55
-        elif len(requested_numbers) > 1 and not requested_numbers.issubset(hit_numbers):
-            score *= 0.8
-
+    context = _build_feature_context(album, hit)
+    features = _extract_features_from_context(context)
+    score = _apply_penalties_with_context(base_score(features, active_weights), features, context)
     return score, features
 
 
@@ -345,7 +481,7 @@ def select_query_candidates(
 
 
 def search_candidates_for_album(
-    client: TidalClient,
+    client: SearchBackend,
     album: AlbumInput,
     weights: Optional[Dict[str, float]],
     selected_queries: List[QueryCandidate],
@@ -377,10 +513,71 @@ def search_candidates_for_album(
         if sleep_seconds:
             time.sleep(sleep_seconds)
 
+    return sort_candidates(list(candidates_map.values()))
+
+
+def sort_candidates(candidates: List[Candidate]) -> List[Candidate]:
+    """Sort by score, query count, then lowercased title, all descending."""
     return sorted(
-        candidates_map.values(),
+        candidates,
         key=lambda candidate: (candidate.score, len(candidate.queries), candidate.title.lower()),
         reverse=True,
+    )
+
+
+def apply_details(candidate: Candidate, detail: AlbumDetail) -> None:
+    candidate.title = detail.title or candidate.title
+    candidate.artists = detail.artists or candidate.artists
+    candidate.release_date = detail.release_date or candidate.release_date
+    candidate.copyright = detail.copyright or candidate.copyright
+    candidate.track_count = detail.track_count
+    candidate.details_fetched = True
+
+
+def ensure_details(
+    backend: SearchBackend,
+    ordered: List[Candidate],
+    limit: int,
+    sleep: float,
+) -> None:
+    for candidate in ordered[:limit]:
+        if candidate.details_fetched:
+            continue
+        detail = backend.get_album_details(candidate.id)
+        if detail:
+            apply_details(candidate, detail)
+        if sleep:
+            time.sleep(sleep)
+
+
+def score_manual_candidate(
+    backend: SearchBackend,
+    album: AlbumInput,
+    tidal_id: str,
+    weights: Optional[Dict[str, float]],
+) -> Optional[Candidate]:
+    detail = backend.get_album_details(tidal_id)
+    if not detail:
+        return None
+
+    hit = AlbumHit(
+        id=detail.id,
+        title=detail.title,
+        artists=detail.artists,
+        release_date=detail.release_date,
+        copyright=detail.copyright,
+    )
+    score, features = score_candidate(album, hit, weights)
+    return Candidate(
+        id=detail.id,
+        title=detail.title,
+        artists=detail.artists,
+        release_date=detail.release_date,
+        copyright=detail.copyright,
+        score=score,
+        features=features,
+        track_count=detail.track_count,
+        details_fetched=True,
     )
 
 
@@ -496,27 +693,31 @@ def save_training_model(path: Path, model: Dict) -> None:
     path.write_text(json.dumps(model, indent=2), encoding="utf-8")
 
 
-def load_truth_records(path: Path) -> List[Dict]:
+def load_truth_records(path: Path) -> List[TruthRecord]:
     if not path.exists():
         raise RuntimeError(f"Truth file not found: {path}")
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, list):
         raise RuntimeError("Truth file must be a JSON array.")
-    return [entry for entry in data if isinstance(entry, dict)]
+    return [TruthRecord.from_dict(entry) for entry in data if isinstance(entry, dict)]
 
 
-def save_truth_records(path: Path, records: List[Dict]) -> None:
-    path.write_text(json.dumps(records, indent=2), encoding="utf-8")
+def save_truth_records(path: Path, records: List[TruthRecord]) -> None:
+    path.write_text(
+        json.dumps([record.to_dict() for record in records], indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
 
 
-def load_existing_output(path: Path) -> Tuple[List[Dict], Dict[str, Dict]]:
+def load_existing_output(path: Path) -> Tuple[List[TruthRecord], Dict[str, TruthRecord]]:
     if not path.exists():
         return [], {}
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, list):
         raise ValueError("Output file must be a JSON array.")
-    by_id = {entry.get("record_id", ""): entry for entry in data if isinstance(entry, dict)}
-    return data, by_id
+    records = [TruthRecord.from_dict(entry) for entry in data if isinstance(entry, dict)]
+    by_id = {entry.record_id: entry for entry in records}
+    return records, by_id
 
 
 def update_scoring_weights(
@@ -549,25 +750,8 @@ def update_template_weights(
     return updated
 
 
-def album_from_record(record: Dict) -> AlbumInput:
-    source = record.get("source", {}) if isinstance(record.get("source"), dict) else {}
-    album = record.get("album", {}) if isinstance(record.get("album"), dict) else record
-    return AlbumInput(
-        title=str(album.get("title", "") or ""),
-        composers=parse_list(album.get("composers")),
-        performers=parse_list(album.get("performers")),
-        ensembles=parse_list(album.get("ensembles")),
-        conductor=str(album.get("conductor", "") or ""),
-        label=str(album.get("label", "") or ""),
-        year=str(album.get("year", "") or ""),
-        works=parse_list(album.get("works")),
-        instruments=parse_list(album.get("instruments")),
-        source_file=str(source.get("file", "") or ""),
-        source_line=source.get("line"),
-        source_raw=str(source.get("raw", "") or ""),
-        source_subsection=str(source.get("subsection", "") or ""),
-        source_context=source.get("context", {}) if isinstance(source.get("context"), dict) else {},
-    )
+def album_from_record(record: TruthRecord) -> AlbumInput:
+    return record.album
 
 
 def build_record_id(album: AlbumInput) -> str:
@@ -575,8 +759,8 @@ def build_record_id(album: AlbumInput) -> str:
 
 
 def train_coverage(
-    client: TidalClient,
-    truth_records: List[Dict],
+    client: SearchBackend,
+    truth_records: List[TruthRecord],
     weights: Dict[str, float],
     template_weights: Dict[str, float],
     args: argparse.Namespace,
@@ -590,12 +774,11 @@ def train_coverage(
     train_records = truth_records[: args.train_limit]
     targets: List[Tuple[str, AlbumInput, str]] = []
     for record in train_records:
-        choice = record.get("choice") or {}
-        tidal_id = choice.get("tidal_id") or ""
+        tidal_id = record.choice.tidal_id
         if not tidal_id:
             continue
         album = album_from_record(record)
-        record_id = record.get("record_id") or build_record_id(album)
+        record_id = record.record_id or build_record_id(album)
         targets.append((record_id, album, tidal_id))
 
     covered: set[str] = set()
@@ -679,39 +862,15 @@ def train_coverage(
 
 
 def album_to_dict(album: AlbumInput) -> Dict:
-    return {
-        "title": album.title,
-        "composers": album.composers,
-        "performers": album.performers,
-        "ensembles": album.ensembles,
-        "conductor": album.conductor,
-        "label": album.label,
-        "year": album.year,
-        "works": album.works,
-        "instruments": album.instruments,
-    }
+    return album.to_dict()
 
 
 def candidate_to_dict(candidate: Candidate) -> Dict:
-    return {
-        "id": candidate.id,
-        "title": candidate.title,
-        "artists": candidate.artists,
-        "release_date": candidate.release_date,
-        "copyright": candidate.copyright,
-        "track_count": candidate.track_count,
-        "score": candidate.score,
-        "features": candidate.features,
-        "queries": candidate.queries,
-        "details_fetched": candidate.details_fetched,
-    }
+    return candidate.to_dict()
 
 
 def query_candidate_to_dict(candidate: QueryCandidate) -> Dict:
-    return {
-        "template": candidate.template,
-        "query": candidate.query,
-    }
+    return candidate.to_dict()
 
 
 def build_source_payload(album: AlbumInput) -> Dict:
@@ -730,24 +889,23 @@ def build_record(
     ordered: List[Candidate],
     selected_queries: List[QueryCandidate],
     chosen: Optional[Candidate],
-    choice: Dict[str, object],
+    choice: Dict[str, object] | Choice,
     weights: Dict[str, float],
     args: argparse.Namespace,
     auto_reason: str,
     mode: str,
-) -> Dict:
+) -> TruthRecord:
     top_candidate = ordered[0] if ordered else None
-    return {
-        "record_id": record_id,
-        "source": build_source_payload(album),
-        "album": album_to_dict(album),
-        "queries": [candidate.query for candidate in selected_queries],
-        "query_candidates": [query_candidate_to_dict(candidate) for candidate in selected_queries],
-        "candidates": [candidate_to_dict(candidate) for candidate in ordered],
-        "top_candidates": [candidate_to_dict(candidate) for candidate in ordered[: args.top]],
-        "choice": choice,
-        "chosen": candidate_to_dict(chosen) if chosen else None,
-        "review": {
+    choice_model = choice if isinstance(choice, Choice) else Choice.from_dict(choice)
+    return TruthRecord.from_match_result(
+        album=album,
+        record_id=record_id,
+        ordered=ordered,
+        selected_queries=selected_queries,
+        chosen=chosen,
+        choice=choice_model,
+        top=args.top,
+        review={
             "mode": mode,
             "top_score": round(top_candidate.score, 3) if top_candidate else 0.0,
             "top_release_year": extract_year(top_candidate.release_date) if top_candidate else "",
@@ -757,36 +915,33 @@ def build_record(
             "recent_year": args.auto_recent_year,
             "recent_threshold": args.auto_recent_threshold,
         },
-        "meta": {
+        meta={
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "weights": weights,
             "limit": args.limit,
             "max_queries": args.max_queries,
         },
-    }
+    )
 
 
-def summarize_review_records(records: List[Dict]) -> Dict[str, int]:
+def summarize_review_records(records: List[TruthRecord]) -> Dict[str, int]:
     summary = {"auto_selected": 0, "selected": 0, "needs_review": 0, "none": 0, "skip": 0}
     for entry in records:
-        choice = entry.get("choice") or {}
-        status = str(choice.get("status") or "")
+        status = entry.choice.status
         if status in summary:
             summary[status] += 1
     return summary
 
 
-def collect_selected_album_ids(records: List[Dict]) -> Tuple[List[Dict[str, str]], int]:
+def collect_selected_album_ids(records: List[TruthRecord]) -> Tuple[List[Dict[str, str]], int]:
     selected: List[Dict[str, str]] = []
     seen: set[str] = set()
     unmatched = 0
 
     for entry in records:
-        choice = entry.get("choice") or {}
-        status = choice.get("status") or ""
-        chosen = entry.get("chosen") or {}
-        tidal_id = choice.get("tidal_id") or chosen.get("id") or ""
-        album_title = (chosen.get("title") or (entry.get("album") or {}).get("title") or "").strip()
+        status = entry.choice.status
+        tidal_id = entry.selected_tidal_id
+        album_title = entry.selected_title.strip()
 
         if not tidal_id or status in {"none", "skip", ""}:
             unmatched += 1
