@@ -445,7 +445,10 @@ class TruthRecord:
     @property
     def source_line(self) -> Optional[int]:
         line = self.source.get("line")
-        return int(line) if line else None
+        try:
+            return int(line) if line is not None else None
+        except (ValueError, TypeError):
+            return None
 
     @property
     def selected_tidal_id(self) -> str:
@@ -476,11 +479,12 @@ class TruthRecord:
 
 
 def _parse_list(value: Any) -> List[str]:
-    if value is None:
+    if not value:
         return []
     if isinstance(value, list):
-        return [str(item) for item in value if item is not None]
-    return [str(value)]
+        return [s for item in value if item is not None and (s := str(item).strip())]
+    s_value = str(value).strip()
+    return [s_value] if s_value else []
 
 
 def _parse_float_dict(value: Any) -> Dict[str, float]:
