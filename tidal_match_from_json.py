@@ -411,7 +411,7 @@ def main() -> int:
         record_id = build_record_id(raw_album)
         existing = by_id.get(record_id)
         if args.resume and existing:
-            status = (existing.get("choice") or {}).get("status", "")
+            status = existing.choice.status
             if status in {"selected", "none", "auto_selected"}:
                 continue
 
@@ -531,7 +531,7 @@ def main() -> int:
 
         if existing:
             for i, entry in enumerate(records):
-                if entry.get("record_id") == record_id:
+                if entry.record_id == record_id:
                     records[i] = record
                     break
         else:

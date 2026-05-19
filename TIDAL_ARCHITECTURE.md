@@ -54,6 +54,8 @@ pipeline in this repository.
   - `AlbumInput`
   - `Candidate`
   - `QueryCandidate`
+  - `Choice`
+  - `TruthRecord`
   - weight/template constants
 
 - `tidal_pipeline.normalize`
@@ -229,6 +231,11 @@ The persisted truth set is
 $$
 T = \{(a_i, \widetilde{Q}_i, C_i, y_i)\}_{i=1}^{N}.
 $$
+
+In memory, each persisted item is represented by `TruthRecord`, with its label
+represented by `Choice`. `TruthRecord.from_dict()` and `TruthRecord.to_dict()`
+mirror the on-disk JSON schema, including the existing field order, so
+round-tripping a truth file does not rewrite the persisted format.
 
 If desired, `--train-coverage` uses a prefix of $T$ to update both the feature
 weights $w_f$ and the query-template weights used by $S$.

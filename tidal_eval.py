@@ -24,14 +24,13 @@ from typing import Dict, List, Optional
 
 from tidal_pipeline.client import CachedSearchBackend
 from tidal_pipeline.match import (
-    album_from_record,
     choose_auto_candidate,
     load_truth_records,
     load_weights,
     search_candidates_for_album,
     summarize_review_records,
 )
-from tidal_pipeline.models import QueryCandidate
+from tidal_pipeline.models import QueryCandidate, TruthRecord
 
 
 # ---------------------------------------------------------------------------
@@ -39,35 +38,22 @@ from tidal_pipeline.models import QueryCandidate
 # ---------------------------------------------------------------------------
 
 
-def cached_query_candidates(record: dict) -> List[QueryCandidate]:
+def cached_query_candidates(record: TruthRecord) -> List[QueryCandidate]:
     """Rebuild the selected query list persisted in a truth record."""
-    query_candidates = record.get("query_candidates") or []
-    if query_candidates:
-        return [
-            QueryCandidate(
-                template=str(candidate.get("template", "cached")),
-                query=str(candidate.get("query", "")),
-            )
-            for candidate in query_candidates
-            if isinstance(candidate, dict) and candidate.get("query")
-        ]
+    if record.query_candidates:
+        return list(record.query_candidates)
 
-    stored_queries = record.get("queries") or []
-    fallback_queries: List[str] = []
-    if stored_queries:
-        fallback_queries = [str(query) for query in stored_queries if query]
-    else:
-        seen: set[str] = set()
-        for candidate in record.get("candidates") or []:
-            if not isinstance(candidate, dict):
-                continue
-            for query in candidate.get("queries") or []:
-                query_text = str(query) if query else ""
-                if query_text and query_text not in seen:
-                    seen.add(query_text)
-                    fallback_queries.append(query_text)
+    if record.queries:
+        return [QueryCandidate(template="cached", query=q) for q in record.queries if q]
 
-    return [QueryCandidate(template="cached", query=query) for query in fallback_queries]
+    seen: set[str] = set()
+    fallback: List[QueryCandidate] = []
+    for candidate in record.candidates:
+        for query in candidate.queries:
+            if query and query not in seen:
+                seen.add(query)
+                fallback.append(QueryCandidate(template="cached", query=query))
+    return fallback
 
 
 # ---------------------------------------------------------------------------
@@ -127,34 +113,29 @@ class RecordResult:
 
 
 def evaluate_record(
-    record: dict,
+    record: TruthRecord,
     weights: Dict[str, float],
     score_threshold: float,
     recent_year: int,
     recent_threshold: float,
 ) -> Optional[RecordResult]:
     """Evaluate a single truth record. Returns None if not evaluable."""
-    choice = record.get("choice") or {}
-    status = choice.get("status") or ""
+    status = record.choice.status
     if status not in {"selected", "auto_selected"}:
         return None
 
-    ground_truth_id = str(choice.get("tidal_id") or "")
-    if not ground_truth_id:
-        chosen = record.get("chosen") or {}
-        ground_truth_id = str(chosen.get("id") or "")
+    ground_truth_id = record.selected_tidal_id
     if not ground_truth_id:
         return None
 
-    raw_candidates = record.get("candidates") or []
+    raw_candidates = record.candidates
     if not raw_candidates:
         return None
 
-    album = album_from_record(record)
-    backend = CachedSearchBackend([record])
+    backend = CachedSearchBackend([record.to_dict()])
     rescored = search_candidates_for_album(
         client=backend,
-        album=album,
+        album=record.album,
         weights=weights,
         selected_queries=cached_query_candidates(record),
         limit=max(1, len(raw_candidates)),
@@ -172,9 +153,8 @@ def evaluate_record(
 
     # Original score from truth record
     original_score = 0.0
-    chosen_data = record.get("chosen") or {}
-    if isinstance(chosen_data.get("score"), (int, float)):
-        original_score = float(chosen_data["score"])
+    if record.chosen:
+        original_score = record.chosen.score
 
     # Auto-selection replay
     auto_candidate, auto_reason = choose_auto_candidate(
@@ -188,8 +168,8 @@ def evaluate_record(
     top = rescored[0] if rescored else None
 
     return RecordResult(
-        record_id=record.get("record_id", ""),
-        title=(record.get("album") or {}).get("title", ""),
+        record_id=record.record_id,
+        title=record.album.title,
         ground_truth_id=ground_truth_id,
         ground_truth_status=status,
         original_score=original_score,
