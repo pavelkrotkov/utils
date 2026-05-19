@@ -77,8 +77,9 @@ Environment Variables:
     )
     parser.add_argument(
         "--enable-tables-fallback",
-        action="store_true",
-        help="Enable Mathpix's advanced fallback algorithm for large or complex tables",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable Mathpix's advanced fallback algorithm for large or complex tables (default: enabled)",
     )
     parser.add_argument(
         "--timeout",
