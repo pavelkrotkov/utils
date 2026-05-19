@@ -310,6 +310,9 @@ def main() -> None:
             )
 
         def transcribe() -> None:
+            # Always ask mlx-audio for JSON; we emit the user's requested
+            # format locally via emit_transcript so all backends share the
+            # same txt/srt/vtt output policy.
             generate_transcription(
                 model=args.model,
                 audio=str(audio_for_transcription),
