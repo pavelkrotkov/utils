@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from tidal_pipeline.albums import AlbumInput, Candidate, QueryCandidate
-from tidal_pipeline.client import AlbumHit, TidalClient
+from tidal_pipeline.client import AlbumDetail, AlbumHit, SearchBackend
 from tidal_pipeline.normalize import (
     GENERIC_TITLE_TOKENS,
     artist_tokens_from_list,
@@ -84,15 +84,28 @@ class _FeatureContext:
     label_norm: str
     requested_numbers: Set[str]
     hit_numbers: Set[str]
+    composers: List[str]
+    performers: List[str]
+    ensembles: List[str]
+    conductor_list: List[str]
+    hit_artists: List[str]
+    hit_title_raw: str
+    album_year: Optional[int]
+    hit_year: Optional[int]
+    hit_copyright: str
+    album_title_norm: str
+    hit_title_norm: str
+    generic_title: bool
 
 
 def _build_feature_context(album: AlbumInput, hit: AlbumHit) -> _FeatureContext:
     title_values = [album.title] + album.works
     hit_title_tokens = tokenize(hit.title)
     hit_artist_tokens = artist_tokens_from_list(hit.artists)
+    title_tokens = tokens_from_list(title_values)
     return _FeatureContext(
         title_values=title_values,
-        title_tokens=tokens_from_list(title_values),
+        title_tokens=title_tokens,
         composer_tokens=tokens_from_list(album.composers),
         performer_tokens=artist_tokens_from_list(album.performers),
         ensemble_tokens=artist_tokens_from_list(album.ensembles),
@@ -104,16 +117,28 @@ def _build_feature_context(album: AlbumInput, hit: AlbumHit) -> _FeatureContext:
         label_norm=normalize(album.label),
         requested_numbers=extract_numeric_tokens(title_values),
         hit_numbers=extract_numeric_tokens([hit.title]),
+        composers=album.composers,
+        performers=album.performers,
+        ensembles=album.ensembles,
+        conductor_list=[album.conductor],
+        hit_artists=hit.artists,
+        hit_title_raw=hit.title,
+        album_year=extract_year(album.year),
+        hit_year=extract_year(hit.release_date),
+        hit_copyright=hit.copyright,
+        album_title_norm=normalize(album.title),
+        hit_title_norm=normalize(hit.title),
+        generic_title=bool(title_tokens) and title_tokens.issubset(GENERIC_TITLE_TOKENS),
     )
 
 
-def _extract_features_from_context(
-    album: AlbumInput, hit: AlbumHit, context: _FeatureContext
-) -> Dict[str, float]:
-    composer_phrase = phrase_overlap_score(album.composers, [hit.title, *hit.artists])
-    performer_phrase = phrase_overlap_score(album.performers, hit.artists)
-    ensemble_phrase = phrase_overlap_score(album.ensembles, hit.artists)
-    conductor_phrase = phrase_overlap_score([album.conductor], hit.artists)
+def _extract_features_from_context(context: _FeatureContext) -> Dict[str, float]:
+    composer_phrase = phrase_overlap_score(
+        context.composers, [context.hit_title_raw, *context.hit_artists]
+    )
+    performer_phrase = phrase_overlap_score(context.performers, context.hit_artists)
+    ensemble_phrase = phrase_overlap_score(context.ensembles, context.hit_artists)
+    conductor_phrase = phrase_overlap_score(context.conductor_list, context.hit_artists)
 
     features = {
         "title": overlap_score(context.title_tokens, context.hit_title_tokens),
@@ -138,26 +163,25 @@ def _extract_features_from_context(
     }
 
     if context.label_norm and len(context.label_norm) > 2:
-        copy_norm = normalize(hit.copyright)
+        copy_norm = normalize(context.hit_copyright)
         if context.label_norm in copy_norm:
             features["label"] = 1.0
 
-    album_year = extract_year(album.year)
-    hit_year = extract_year(hit.release_date)
-    if album_year and hit_year and album_year == hit_year:
+    if context.album_year and context.hit_year and context.album_year == context.hit_year:
         features["year"] = 1.0
 
-    normalized_title = normalize(album.title)
-    normalized_hit_title = normalize(hit.title)
-    if normalized_title and normalized_hit_title:
-        if normalized_title in normalized_hit_title or normalized_hit_title in normalized_title:
+    if context.album_title_norm and context.hit_title_norm:
+        if (
+            context.album_title_norm in context.hit_title_norm
+            or context.hit_title_norm in context.album_title_norm
+        ):
             features["title"] = max(features["title"], 0.95)
 
     return features
 
 
 def extract_features(album: AlbumInput, hit: AlbumHit) -> Dict[str, float]:
-    return _extract_features_from_context(album, hit, _build_feature_context(album, hit))
+    return _extract_features_from_context(_build_feature_context(album, hit))
 
 
 def base_score(features: Dict[str, float], weights: Dict[str, float]) -> float:
@@ -166,14 +190,11 @@ def base_score(features: Dict[str, float], weights: Dict[str, float]) -> float:
 
 def _apply_penalties_with_context(
     base: float,
-    album: AlbumInput,
     features: Dict[str, float],
     context: _FeatureContext,
 ) -> float:
     score = base
-    generic_title = bool(context.title_tokens) and context.title_tokens.issubset(
-        GENERIC_TITLE_TOKENS
-    )
+    generic_title = context.generic_title
 
     artist_support = max(
         features.get("performer", 0.0),
@@ -212,7 +233,7 @@ def apply_penalties(
     features: Dict[str, float],
     hit: AlbumHit,
 ) -> float:
-    return _apply_penalties_with_context(base, album, features, _build_feature_context(album, hit))
+    return _apply_penalties_with_context(base, features, _build_feature_context(album, hit))
 
 
 def score_candidate(
@@ -222,10 +243,8 @@ def score_candidate(
 ) -> Tuple[float, Dict[str, float]]:
     active_weights = weights or DEFAULT_WEIGHTS
     context = _build_feature_context(album, hit)
-    features = _extract_features_from_context(album, hit, context)
-    score = _apply_penalties_with_context(
-        base_score(features, active_weights), album, features, context
-    )
+    features = _extract_features_from_context(context)
+    score = _apply_penalties_with_context(base_score(features, active_weights), features, context)
     return score, features
 
 
@@ -462,7 +481,7 @@ def select_query_candidates(
 
 
 def search_candidates_for_album(
-    client: TidalClient,
+    client: SearchBackend,
     album: AlbumInput,
     weights: Optional[Dict[str, float]],
     selected_queries: List[QueryCandidate],
@@ -494,10 +513,71 @@ def search_candidates_for_album(
         if sleep_seconds:
             time.sleep(sleep_seconds)
 
+    return sort_candidates(list(candidates_map.values()))
+
+
+def sort_candidates(candidates: List[Candidate]) -> List[Candidate]:
+    """Sort by score, query count, then lowercased title, all descending."""
     return sorted(
-        candidates_map.values(),
+        candidates,
         key=lambda candidate: (candidate.score, len(candidate.queries), candidate.title.lower()),
         reverse=True,
+    )
+
+
+def apply_details(candidate: Candidate, detail: AlbumDetail) -> None:
+    candidate.title = detail.title or candidate.title
+    candidate.artists = detail.artists or candidate.artists
+    candidate.release_date = detail.release_date or candidate.release_date
+    candidate.copyright = detail.copyright or candidate.copyright
+    candidate.track_count = detail.track_count
+    candidate.details_fetched = True
+
+
+def ensure_details(
+    backend: SearchBackend,
+    ordered: List[Candidate],
+    limit: int,
+    sleep: float,
+) -> None:
+    for candidate in ordered[:limit]:
+        if candidate.details_fetched:
+            continue
+        detail = backend.get_album_details(candidate.id)
+        if detail:
+            apply_details(candidate, detail)
+        if sleep:
+            time.sleep(sleep)
+
+
+def score_manual_candidate(
+    backend: SearchBackend,
+    album: AlbumInput,
+    tidal_id: str,
+    weights: Optional[Dict[str, float]],
+) -> Optional[Candidate]:
+    detail = backend.get_album_details(tidal_id)
+    if not detail:
+        return None
+
+    hit = AlbumHit(
+        id=detail.id,
+        title=detail.title,
+        artists=detail.artists,
+        release_date=detail.release_date,
+        copyright=detail.copyright,
+    )
+    score, features = score_candidate(album, hit, weights)
+    return Candidate(
+        id=detail.id,
+        title=detail.title,
+        artists=detail.artists,
+        release_date=detail.release_date,
+        copyright=detail.copyright,
+        score=score,
+        features=features,
+        track_count=detail.track_count,
+        details_fetched=True,
     )
 
 
@@ -679,7 +759,7 @@ def build_record_id(album: AlbumInput) -> str:
 
 
 def train_coverage(
-    client: TidalClient,
+    client: SearchBackend,
     truth_records: List[TruthRecord],
     weights: Dict[str, float],
     template_weights: Dict[str, float],
