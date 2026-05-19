@@ -22,7 +22,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from mpxpy.mathpix_client import MathpixClient
+from pdf_convert_common import import_or_die, require_pdf_path, resolve_output_path
 
 
 def log(level: str, message: str) -> None:
@@ -90,14 +90,12 @@ Environment Variables:
     parser.add_argument("--verbose", action="store_true", help="Show traceback details on errors")
     args = parser.parse_args()
 
-    pdf_path = Path(args.pdf_path)
-    if not pdf_path.is_file():
-        log("ERROR", f"'{pdf_path}' does not exist or is not a file.")
-        sys.exit(1)
+    pdf_path = require_pdf_path(args.pdf_path)
 
     try:
         app_id, app_key = resolve_credentials(args)
-        client = MathpixClient(app_id=app_id, app_key=app_key)
+        mathpix_client = import_or_die("mpxpy.mathpix_client", "mpxpy")
+        client = mathpix_client.MathpixClient(app_id=app_id, app_key=app_key)
 
         log("INFO", f"Uploading {pdf_path} to Mathpix.")
         pdf = client.pdf_new(
@@ -116,10 +114,11 @@ Environment Variables:
                 f"Mathpix processing did not complete within {args.timeout} seconds."
             )
 
-        if args.output:
-            out_path = Path(args.output)
-        else:
-            out_path = pdf_path.with_suffix(".md")
+        out_path = resolve_output_path(
+            pdf_path,
+            Path(args.output) if args.output else None,
+            None,
+        )
 
         pdf.to_md_file(path=str(out_path))
         log("INFO", f"Wrote Markdown to {out_path}.")

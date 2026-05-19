@@ -7,7 +7,7 @@ and TIDAL import.
 
 - PDF to Markdown conversion (Mathpix SDK, Docling, LlamaParse, PyMuPDF4LLM, or local marker).
 - Markdown splitting into per-section or per-subsection files.
-- Audio transcription (OpenAI API or local whisper-cpp, with optional pyannote diarization).
+- Audio transcription (OpenAI API, local whisper-cpp with optional pyannote diarization, or MLX VibeVoice-ASR on Apple Silicon).
 - TIDAL playlist import from Gramophone-style MHTML/Markdown pages.
 
 For deeper context, refer to the script headers and inline help.
@@ -52,7 +52,9 @@ uv run ./pdf_convert_docling.py input.pdf -o output.md
 uv run ./pdf_convert_docling.py input.pdf --page-range 1-5
 ```
 
-Note: If you omit `--page-range`, the script uses Docling defaults. Provide a contiguous range like `1-5` when you want a subset of pages.
+All local/hosted PDF converters that support `--page-range` use the same
+user-facing syntax: 1-based page numbers, comma-separated lists, ranges, and
+`N` for the last page, such as `1-5`, `1,3,5-10`, or `5-N`.
 
 LlamaParse (LlamaCloud, hosted):
 
@@ -70,7 +72,7 @@ PyMuPDF4LLM (local, fast layout-aware parsing):
 
 ```bash
 uv run ./pdf_convert_pymupdf4llm.py input.pdf -o output.md
-uv run ./pdf_convert_pymupdf4llm.py input.pdf --page-range 0-4
+uv run ./pdf_convert_pymupdf4llm.py input.pdf --page-range 1-5
 ```
 
 Layout mode requires `pymupdf4llm[layout]` (or `pymupdf4llm[ocr,layout]` for OCR support).
@@ -79,6 +81,7 @@ Marker (best for simpler PDFs, local):
 
 ```bash
 uv run ./pdf_convert_marker.py input.pdf -o output.md
+uv run ./pdf_convert_marker.py input.pdf --page-range 1,3,5-N
 ```
 
 ## Markdown Tools
@@ -150,10 +153,10 @@ tool to use:
 | Query generation / candidate recall | `tidal_match_from_json.py --batch-review` | Yes |
 | Truth labels (new albums) | `tidal_match_from_json.py` | Yes |
 
-Re-scoring is deterministic — `tidal_eval.py` re-ranks the cached candidates
-without touching the API. If you improve query generation (surfacing better
-candidates), re-run the matcher to refresh the candidate pool, re-label any
-changed results, then re-eval.
+Re-scoring is deterministic — `tidal_eval.py` replays the cached candidates
+through the same search/scoring/ranking driver without touching the API. If you
+improve query generation (surfacing better candidates), re-run the matcher to
+refresh the candidate pool, re-label any changed results, then re-eval.
 
 Treat the truth file as read-only unless you deliberately want to extend or
 refresh the ground truth.
@@ -177,6 +180,14 @@ Local whisper-cpp (plain transcript by default):
 uv run ./audio_transcribe_whisper.py interview.m4a
 ```
 
+Apple Silicon VibeVoice-ASR via MLX (structured JSON by default):
+
+```bash
+uv run ./audio_transcribe_vibevoice.py interview.m4a
+uv run ./audio_transcribe_vibevoice.py interview.m4a --context "speaker names, acronyms"
+uv run ./audio_transcribe_vibevoice.py interview.m4a --format txt -o interview.txt
+```
+
 Enable pyannote speaker diarization when speaker labels are needed:
 
 ```bash
@@ -186,6 +197,10 @@ uv run ./audio_transcribe_whisper.py interview.m4a --diarization --num-speakers 
 By default, the local script prints progress/ETA reports and writes `<input>.txt`.
 With `--diarization`, it writes `<input>.spk.txt`. Use `--no-progress` to silence
 progress reports or `--progress-interval SECONDS` to adjust their frequency.
+
+The VibeVoice script defaults to `mlx-community/VibeVoice-ASR-4bit`, writes
+`<input>.vibevoice.json`, supports `json`, `txt`, `srt`, and `vtt`, and downloads
+the model through Hugging Face on first use.
 
 ## Notes
 
