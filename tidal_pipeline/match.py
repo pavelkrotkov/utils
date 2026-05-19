@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from tidal_pipeline.client import AlbumHit, TidalClient
+from tidal_pipeline.client import AlbumHit, SearchBackend
 from tidal_pipeline.models import (
     AlbumInput,
     Candidate,
@@ -345,7 +345,7 @@ def select_query_candidates(
 
 
 def search_candidates_for_album(
-    client: TidalClient,
+    client: SearchBackend,
     album: AlbumInput,
     weights: Optional[Dict[str, float]],
     selected_queries: List[QueryCandidate],
@@ -575,7 +575,7 @@ def build_record_id(album: AlbumInput) -> str:
 
 
 def train_coverage(
-    client: TidalClient,
+    client: SearchBackend,
     truth_records: List[Dict],
     weights: Dict[str, float],
     template_weights: Dict[str, float],

@@ -149,10 +149,10 @@ tool to use:
 | Query generation / candidate recall | `tidal_match_from_json.py --batch-review` | Yes |
 | Truth labels (new albums) | `tidal_match_from_json.py` | Yes |
 
-Re-scoring is deterministic — `tidal_eval.py` re-ranks the cached candidates
-without touching the API. If you improve query generation (surfacing better
-candidates), re-run the matcher to refresh the candidate pool, re-label any
-changed results, then re-eval.
+Re-scoring is deterministic — `tidal_eval.py` replays the cached candidates
+through the same search/scoring/ranking driver without touching the API. If you
+improve query generation (surfacing better candidates), re-run the matcher to
+refresh the candidate pool, re-label any changed results, then re-eval.
 
 Treat the truth file as read-only unless you deliberately want to extend or
 refresh the ground truth.
