@@ -50,15 +50,28 @@ class _FeatureContext:
     label_norm: str
     requested_numbers: Set[str]
     hit_numbers: Set[str]
+    composers: List[str]
+    performers: List[str]
+    ensembles: List[str]
+    conductor_list: List[str]
+    hit_artists: List[str]
+    hit_title_raw: str
+    album_year: Optional[int]
+    hit_year: Optional[int]
+    hit_copyright: str
+    album_title_norm: str
+    hit_title_norm: str
+    generic_title: bool
 
 
 def _build_feature_context(album: AlbumInput, hit: AlbumHit) -> _FeatureContext:
     title_values = [album.title] + album.works
     hit_title_tokens = tokenize(hit.title)
     hit_artist_tokens = artist_tokens_from_list(hit.artists)
+    title_tokens = tokens_from_list(title_values)
     return _FeatureContext(
         title_values=title_values,
-        title_tokens=tokens_from_list(title_values),
+        title_tokens=title_tokens,
         composer_tokens=tokens_from_list(album.composers),
         performer_tokens=artist_tokens_from_list(album.performers),
         ensemble_tokens=artist_tokens_from_list(album.ensembles),
@@ -70,16 +83,28 @@ def _build_feature_context(album: AlbumInput, hit: AlbumHit) -> _FeatureContext:
         label_norm=normalize(album.label),
         requested_numbers=extract_numeric_tokens(title_values),
         hit_numbers=extract_numeric_tokens([hit.title]),
+        composers=album.composers,
+        performers=album.performers,
+        ensembles=album.ensembles,
+        conductor_list=[album.conductor],
+        hit_artists=hit.artists,
+        hit_title_raw=hit.title,
+        album_year=extract_year(album.year),
+        hit_year=extract_year(hit.release_date),
+        hit_copyright=hit.copyright,
+        album_title_norm=normalize(album.title),
+        hit_title_norm=normalize(hit.title),
+        generic_title=bool(title_tokens) and title_tokens.issubset(GENERIC_TITLE_TOKENS),
     )
 
 
-def _extract_features_from_context(
-    album: AlbumInput, hit: AlbumHit, context: _FeatureContext
-) -> Dict[str, float]:
-    composer_phrase = phrase_overlap_score(album.composers, [hit.title, *hit.artists])
-    performer_phrase = phrase_overlap_score(album.performers, hit.artists)
-    ensemble_phrase = phrase_overlap_score(album.ensembles, hit.artists)
-    conductor_phrase = phrase_overlap_score([album.conductor], hit.artists)
+def _extract_features_from_context(context: _FeatureContext) -> Dict[str, float]:
+    composer_phrase = phrase_overlap_score(
+        context.composers, [context.hit_title_raw, *context.hit_artists]
+    )
+    performer_phrase = phrase_overlap_score(context.performers, context.hit_artists)
+    ensemble_phrase = phrase_overlap_score(context.ensembles, context.hit_artists)
+    conductor_phrase = phrase_overlap_score(context.conductor_list, context.hit_artists)
 
     features = {
         "title": overlap_score(context.title_tokens, context.hit_title_tokens),
@@ -104,26 +129,25 @@ def _extract_features_from_context(
     }
 
     if context.label_norm and len(context.label_norm) > 2:
-        copy_norm = normalize(hit.copyright)
+        copy_norm = normalize(context.hit_copyright)
         if context.label_norm in copy_norm:
             features["label"] = 1.0
 
-    album_year = extract_year(album.year)
-    hit_year = extract_year(hit.release_date)
-    if album_year and hit_year and album_year == hit_year:
+    if context.album_year and context.hit_year and context.album_year == context.hit_year:
         features["year"] = 1.0
 
-    normalized_title = normalize(album.title)
-    normalized_hit_title = normalize(hit.title)
-    if normalized_title and normalized_hit_title:
-        if normalized_title in normalized_hit_title or normalized_hit_title in normalized_title:
+    if context.album_title_norm and context.hit_title_norm:
+        if (
+            context.album_title_norm in context.hit_title_norm
+            or context.hit_title_norm in context.album_title_norm
+        ):
             features["title"] = max(features["title"], 0.95)
 
     return features
 
 
 def extract_features(album: AlbumInput, hit: AlbumHit) -> Dict[str, float]:
-    return _extract_features_from_context(album, hit, _build_feature_context(album, hit))
+    return _extract_features_from_context(_build_feature_context(album, hit))
 
 
 def base_score(features: Dict[str, float], weights: Dict[str, float]) -> float:
@@ -132,14 +156,11 @@ def base_score(features: Dict[str, float], weights: Dict[str, float]) -> float:
 
 def _apply_penalties_with_context(
     base: float,
-    album: AlbumInput,
     features: Dict[str, float],
     context: _FeatureContext,
 ) -> float:
     score = base
-    generic_title = bool(context.title_tokens) and context.title_tokens.issubset(
-        GENERIC_TITLE_TOKENS
-    )
+    generic_title = context.generic_title
 
     artist_support = max(
         features.get("performer", 0.0),
@@ -178,7 +199,7 @@ def apply_penalties(
     features: Dict[str, float],
     hit: AlbumHit,
 ) -> float:
-    return _apply_penalties_with_context(base, album, features, _build_feature_context(album, hit))
+    return _apply_penalties_with_context(base, features, _build_feature_context(album, hit))
 
 
 def score_candidate(
@@ -188,10 +209,8 @@ def score_candidate(
 ) -> Tuple[float, Dict[str, float]]:
     active_weights = weights or DEFAULT_WEIGHTS
     context = _build_feature_context(album, hit)
-    features = _extract_features_from_context(album, hit, context)
-    score = _apply_penalties_with_context(
-        base_score(features, active_weights), album, features, context
-    )
+    features = _extract_features_from_context(context)
+    score = _apply_penalties_with_context(base_score(features, active_weights), features, context)
     return score, features
 
 
