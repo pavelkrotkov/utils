@@ -793,7 +793,9 @@ def main() -> None:
     args.whisper_bin = resolve_whisper_bin(args.whisper_bin, args.verbose)
     progress = None if args.no_progress else ProgressReporter(interval=args.progress_interval)
     diarized_default = "diarized-breaks" if args.style == "breaks" else "diarized-txt"
-    output_format = args.format or (diarized_default if args.diarization else "txt")
+    output_format = args.format or (
+        diarized_default if (args.diarization or args.style == "breaks") else "txt"
+    )
 
     if output_format in {"diarized-txt", "diarized-breaks"} and not args.diarization:
         print(f"ERROR: --format {output_format} requires --diarization.", file=sys.stderr)
