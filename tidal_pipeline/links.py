@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import List, Tuple
 
 from tidal_pipeline.normalize import is_markdown_separator
+from tidal_pipeline.truth import TruthRecord
 
 
 @dataclass
@@ -29,25 +30,20 @@ def load_updates(truth_path: Path) -> List[LinkUpdate]:
     data = json.loads(truth_path.read_text(encoding="utf-8"))
     if not isinstance(data, list):
         raise ValueError("Truth JSON must be a list of records.")
+    records = [TruthRecord.from_dict(item) for item in data if isinstance(item, dict)]
 
     updates: List[LinkUpdate] = []
-    for entry in data:
-        if not isinstance(entry, dict):
-            continue
-        choice = entry.get("choice") or {}
-        status = choice.get("status") or ""
+    for entry in records:
+        status = entry.choice.status
         if status not in {"selected", "auto_selected"}:
             continue
-        chosen = entry.get("chosen") or {}
-        tidal_id = str(choice.get("tidal_id") or chosen.get("id") or "").strip()
+        tidal_id = entry.selected_tidal_id.strip()
         if not tidal_id:
             continue
-        source = entry.get("source") or {}
-        source_line = int(source.get("line") or 0)
+        source_line = entry.source_line or 0
         if source_line <= 0:
             continue
-        album = entry.get("album") or {}
-        title = str(chosen.get("title") or album.get("title") or "").strip()
+        title = entry.selected_title.strip()
         updates.append(LinkUpdate(source_line=source_line, title=title, tidal_id=tidal_id))
 
     updates.sort(key=lambda item: item.source_line, reverse=True)

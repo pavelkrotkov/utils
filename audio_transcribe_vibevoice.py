@@ -94,7 +94,7 @@ def resolve_output_paths(
     final_path.parent.mkdir(parents=True, exist_ok=True)
     suffix = f".{output_format}"
     if final_path.name.lower().endswith(suffix):
-        mlx_stem = Path(str(final_path)[: -len(suffix)])
+        mlx_stem = final_path.with_suffix("")
         generated_path = final_path
     else:
         mlx_stem = final_path.with_name(f"{final_path.name}.mlx-audio")
@@ -104,7 +104,7 @@ def resolve_output_paths(
 
 
 def validate_output(path: Path) -> None:
-    if not path.exists() or path.stat().st_size == 0:
+    if not path.is_file() or path.stat().st_size == 0:
         print(f"ERROR: mlx-audio did not create a non-empty output file: {path}", file=sys.stderr)
         sys.exit(1)
 
