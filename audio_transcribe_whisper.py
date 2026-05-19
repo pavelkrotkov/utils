@@ -690,9 +690,7 @@ def merge_asr_turns(
 
     if verbose:
         print(
-            "INFO: Normalized "
-            f"{len(speaker_map)} unique speakers: "
-            f"{list(speaker_map.values())}",
+            f"INFO: Normalized {len(speaker_map)} unique speakers: {list(speaker_map.values())}",
             file=sys.stderr,
         )
 
