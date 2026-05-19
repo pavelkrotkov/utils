@@ -113,6 +113,12 @@ class TidalMatchScoringTest(unittest.TestCase):
 
         self.assertEqual(apply_penalties(1.0, album, features, hit), 0.7)
 
+    def test_apply_penalties_defaults_missing_features_to_zero(self) -> None:
+        album = AlbumInput(title="Recital", performers=["Jane Smith"])
+        hit = AlbumHit(id="1", title="Recital", artists=[], release_date="", copyright="")
+
+        self.assertEqual(apply_penalties(1.0, album, {}, hit), 0.45)
+
     def test_score_candidate_composes_layers(self) -> None:
         album = AlbumInput(title="Piano Concerto", performers=["Martha Argerich"])
         hit = AlbumHit(
