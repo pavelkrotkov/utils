@@ -29,19 +29,14 @@ import sys
 import time
 from pathlib import Path
 
-try:
-    from llama_cloud import LlamaCloud
-except ImportError as exc:
-    print(f"ERROR: Missing required Python package: {exc}", file=sys.stderr)
-    print("Install with: pip install llama-cloud", file=sys.stderr)
-    sys.exit(1)
-
-try:
-    from pypdf import PdfReader
-except ImportError as exc:
-    print(f"ERROR: Missing required Python package: {exc}", file=sys.stderr)
-    print("Install with: pip install pypdf", file=sys.stderr)
-    sys.exit(1)
+from pdf_convert_common import (
+    collapse_consecutive,
+    format_page_ranges,
+    import_or_die,
+    parse_page_range,
+    require_pdf_path,
+    resolve_output_path,
+)
 
 
 DEFAULT_TIER = "cost_effective"
@@ -83,7 +78,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--page-range",
-        help="Comma-separated page numbers or ranges (1-based, e.g., 1,3,5-10)",
+        help=(
+            "Comma-separated 1-based page numbers or ranges. "
+            "Examples: 1-5, 1,3,5-10, 5-N (N = last page)."
+        ),
     )
     parser.add_argument(
         "--max-pages",
@@ -120,20 +118,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def resolve_output_path(
-    input_path: Path,
-    output_path: Path | None,
-    output_dir: Path | None,
-) -> Path:
-    if output_path is not None:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        return output_path
-
-    resolved_dir = output_dir or input_path.parent
-    resolved_dir.mkdir(parents=True, exist_ok=True)
-    return resolved_dir / f"{input_path.stem}.md"
-
-
 def resolve_output_path_for_job(
     job_id: str,
     output_path: Path | None,
@@ -155,64 +139,14 @@ def resolve_output_path_for_job(
 
 
 def load_pdf_page_count(pdf_path: Path) -> int:
+    pypdf = import_or_die("pypdf", "pypdf")
+
     try:
-        reader = PdfReader(str(pdf_path))
+        reader = pypdf.PdfReader(str(pdf_path))
         return len(reader.pages)
     except Exception as exc:
         print(f"ERROR: Unable to read PDF pages: {exc}", file=sys.stderr)
         sys.exit(1)
-
-
-def parse_page_range_spec(page_range: str) -> list[int]:
-    pages: list[int] = []
-    for raw_part in page_range.split(","):
-        part = raw_part.strip()
-        if not part:
-            continue
-        if "-" in part:
-            start_raw, end_raw = part.split("-", 1)
-            try:
-                start = int(start_raw)
-                end = int(end_raw)
-            except ValueError as exc:
-                raise ValueError("Invalid --page-range value.") from exc
-            if start < 1 or end < 1 or end < start:
-                raise ValueError("Invalid --page-range value.")
-            pages.extend(range(start, end + 1))
-        else:
-            try:
-                page = int(part)
-            except ValueError as exc:
-                raise ValueError("Invalid --page-range value.") from exc
-            if page < 1:
-                raise ValueError("Invalid --page-range value.")
-            pages.append(page)
-
-    if not pages:
-        raise ValueError("--page-range produced no pages.")
-    return sorted(set(pages))
-
-
-def format_page_range(pages: list[int]) -> str:
-    if not pages:
-        return ""
-
-    sorted_pages = sorted(set(pages))
-    ranges: list[tuple[int, int]] = []
-    start = sorted_pages[0]
-    prev = sorted_pages[0]
-
-    for page in sorted_pages[1:]:
-        if page == prev + 1:
-            prev = page
-            continue
-        ranges.append((start, prev))
-        start = page
-        prev = page
-    ranges.append((start, prev))
-
-    parts = [f"{begin}-{end}" if begin != end else str(begin) for begin, end in ranges]
-    return ",".join(parts)
 
 
 def chunk_pages(pages: list[int], chunk_size: int) -> list[list[int]]:
@@ -269,7 +203,7 @@ def extract_error_message(result: object) -> str | None:
     return None
 
 
-def wait_for_job(client: LlamaCloud, job_id: str) -> object:
+def wait_for_job(client: object, job_id: str) -> object:
     start_time = time.monotonic()
     while True:
         result = client.parsing.get(job_id=job_id)
@@ -335,6 +269,9 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
+    llama_cloud = import_or_die("llama_cloud", "llama-cloud")
+    LlamaCloud = llama_cloud.LlamaCloud
+
     if args.fetch_job:
         api_key = args.api_key or os.getenv("LLAMA_CLOUD_API_KEY")
         if not api_key:
@@ -376,9 +313,7 @@ def main() -> None:
     if args.pdf_path is None:
         parser.error("pdf_path is required unless --fetch-job is provided.")
 
-    if not args.pdf_path.exists() or not args.pdf_path.is_file():
-        print(f"ERROR: PDF file not found: {args.pdf_path}", file=sys.stderr)
-        sys.exit(1)
+    pdf_path = require_pdf_path(args.pdf_path)
 
     if args.chunk_pages < 1:
         print("ERROR: --chunk-pages must be at least 1.", file=sys.stderr)
@@ -388,21 +323,15 @@ def main() -> None:
         print("ERROR: --max-pages must be at least 1.", file=sys.stderr)
         sys.exit(1)
 
-    total_pages = load_pdf_page_count(args.pdf_path)
+    total_pages = load_pdf_page_count(pdf_path)
     pages = list(range(1, total_pages + 1))
 
     if args.page_range:
         try:
-            requested_pages = parse_page_range_spec(args.page_range)
+            pages = parse_page_range(args.page_range, total_pages, one_based=True)
         except ValueError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
-        pages = [page for page in requested_pages if page <= total_pages]
-        if len(pages) != len(requested_pages):
-            print(
-                "WARNING: Some pages were outside the document range and will be ignored.",
-                file=sys.stderr,
-            )
 
     if args.max_pages is not None:
         pages = [page for page in pages if page <= args.max_pages]
@@ -412,7 +341,7 @@ def main() -> None:
         sys.exit(1)
 
     chunks = chunk_pages(pages, args.chunk_pages)
-    output_path = resolve_output_path(args.pdf_path, args.output, args.output_dir)
+    output_path = resolve_output_path(pdf_path, args.output, args.output_dir)
     chunk_paths = [chunk_output_path(output_path, index) for index in range(1, len(chunks) + 1)]
 
     print(
@@ -446,7 +375,7 @@ def main() -> None:
 
     client = LlamaCloud(api_key=api_key)
     try:
-        file_obj = client.files.create(file=str(args.pdf_path), purpose="parse")
+        file_obj = client.files.create(file=str(pdf_path), purpose="parse")
     except Exception as exc:
         print(f"ERROR: Failed to upload PDF: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -468,7 +397,7 @@ def main() -> None:
                 file=sys.stderr,
             )
 
-        target_pages = format_page_range(chunk_pages_list)
+        target_pages = format_page_ranges(collapse_consecutive(chunk_pages_list))
         print(f"INFO: Chunk {index}/{len(chunks)} pages {target_pages} -> {chunk_path}")
 
         try:
