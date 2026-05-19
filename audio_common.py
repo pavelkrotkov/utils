@@ -240,9 +240,9 @@ def run_with_progress(
             text=True,
             bufsize=1,
         )
-    except FileNotFoundError:
+    except OSError:
         binary = missing_binary_label or (str(cmd[0]) if cmd else label)
-        print(f"ERROR: {label} binary not found: {binary}", file=sys.stderr)
+        print(f"ERROR: {label} binary not found or not executable: {binary}", file=sys.stderr)
         sys.exit(1)
 
     assert process.stdout is not None
@@ -268,9 +268,7 @@ def run_with_progress(
         if verbose:
             print(line, file=sys.stderr)
 
-    close_stdout = getattr(process.stdout, "close", None)
-    if close_stdout:
-        close_stdout()
+    process.stdout.close()
 
     returncode = process.wait()
     if returncode != 0:
