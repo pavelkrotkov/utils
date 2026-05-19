@@ -125,7 +125,9 @@ def _extract_features_from_context(
             performer_phrase,
             overlap_score(context.performer_tokens, context.hit_all_tokens) * 0.6,
         ),
-        "ensemble": max(ensemble_phrase, overlap_score(context.ensemble_tokens, context.hit_all_tokens)),
+        "ensemble": max(
+            ensemble_phrase, overlap_score(context.ensemble_tokens, context.hit_all_tokens)
+        ),
         "conductor": max(
             conductor_phrase,
             overlap_score(context.conductor_tokens, context.hit_all_tokens) * 0.6,
@@ -169,7 +171,9 @@ def _apply_penalties_with_context(
     context: _FeatureContext,
 ) -> float:
     score = base
-    generic_title = bool(context.title_tokens) and context.title_tokens.issubset(GENERIC_TITLE_TOKENS)
+    generic_title = bool(context.title_tokens) and context.title_tokens.issubset(
+        GENERIC_TITLE_TOKENS
+    )
 
     artist_support = max(
         features.get("performer", 0.0),
@@ -219,7 +223,9 @@ def score_candidate(
     active_weights = weights or DEFAULT_WEIGHTS
     context = _build_feature_context(album, hit)
     features = _extract_features_from_context(album, hit, context)
-    score = _apply_penalties_with_context(base_score(features, active_weights), album, features, context)
+    score = _apply_penalties_with_context(
+        base_score(features, active_weights), album, features, context
+    )
     return score, features
 
 
