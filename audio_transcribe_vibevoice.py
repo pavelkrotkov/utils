@@ -107,7 +107,7 @@ def resolve_output_paths(
     final_path.parent.mkdir(parents=True, exist_ok=True)
     suffix = f".{output_format}"
     if final_path.name.lower().endswith(suffix):
-        mlx_stem = Path(str(final_path)[: -len(suffix)])
+        mlx_stem = final_path.with_suffix("")
         generated_path = final_path
     else:
         mlx_stem = final_path.with_name(f"{final_path.name}.mlx-audio")
