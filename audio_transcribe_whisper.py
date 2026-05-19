@@ -712,7 +712,7 @@ def run_ffmpeg_convert(
                 return None
         elif key == "out_time":
             processed_seconds = parse_ffmpeg_timestamp(value)
-        elif key == "progress" and value == "end" and duration and not saw_ffmpeg_progress:
+        elif key == "progress" and value == "end":
             return 100.0
 
         if processed_seconds is None or not duration:
@@ -733,11 +733,10 @@ def run_ffmpeg_convert(
         missing_binary_label=ffmpeg_bin,
     )
 
-    try:
-        validate_nonempty_output(output_path, "ffmpeg")
-    except SystemExit:
+    if not output_path.exists() or output_path.stat().st_size == 0:
         print_process_tail(output_tail, "ffmpeg conversion")
-        raise
+        print(f"ERROR: ffmpeg produced empty output: {output_path}", file=sys.stderr)
+        sys.exit(1)
 
 
 def resolve_whisper_bin(whisper_bin: str, verbose: bool = False) -> str:
