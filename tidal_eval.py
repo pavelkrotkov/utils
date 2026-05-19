@@ -62,8 +62,8 @@ def cached_query_candidates(record: dict) -> List[QueryCandidate]:
             if not isinstance(candidate, dict):
                 continue
             for query in candidate.get("queries") or []:
-                query_text = str(query)
-                if query_text not in seen:
+                query_text = str(query) if query else ""
+                if query_text and query_text not in seen:
                     seen.add(query_text)
                     fallback_queries.append(query_text)
 

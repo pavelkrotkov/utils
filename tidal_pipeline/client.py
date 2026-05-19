@@ -98,7 +98,8 @@ class CachedSearchBackend:
                     ),
                 )
                 for query in raw_candidate.get("queries") or []:
-                    self._add_query_hit(str(query), hit)
+                    if query:
+                        self._add_query_hit(str(query), hit)
 
     def _add_query_hit(self, query: str, hit: AlbumHit) -> None:
         """Add a cached hit once per query, keeping metadata from the first occurrence."""
@@ -115,11 +116,11 @@ class CachedSearchBackend:
         if isinstance(artists, str):
             artists = [artists]
         return AlbumHit(
-            id=str(candidate.get("id", "")),
-            title=str(candidate.get("title", "")),
-            artists=[str(artist) for artist in artists],
-            release_date=str(candidate.get("release_date", "")),
-            copyright=str(candidate.get("copyright", "")),
+            id=str(candidate.get("id") or ""),
+            title=str(candidate.get("title") or ""),
+            artists=[str(artist) for artist in artists if artist],
+            release_date=str(candidate.get("release_date") or ""),
+            copyright=str(candidate.get("copyright") or ""),
         )
 
     def search_albums(self, query: str, limit: int = 5) -> List[AlbumHit]:
