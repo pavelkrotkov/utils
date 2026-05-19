@@ -5,8 +5,8 @@ single build system, no automated test suite, and no lint config. Use the notes
 below to run scripts safely and follow the established style.
 
 Project focus areas:
-- PDF to Markdown conversion for scientific papers (Mathpix API).
-- Audio transcription (OpenAI API or local whisper-cpp, with optional pyannote diarization).
+- PDF to Markdown conversion for scientific papers (Mathpix SDK).
+- Audio transcription (OpenAI API, local whisper-cpp with optional pyannote diarization, or MLX VibeVoice-ASR on Apple Silicon).
 - TIDAL playlist import from classical music review pages (Gramophone-style MHTML/MD).
 
 If you need broader project context, read `GEMINI.md`.
@@ -29,7 +29,6 @@ System dependencies (manual):
 
 Run scripts (examples):
 - `uv run ./pdf_convert_mathpix_sdk.py input.pdf -o output.md`
-- `uv run ./pdf_convert_mathpix_api.py input.pdf -o output.md`
 - `uv run ./pdf_convert_marker.py input.pdf -o output.md`
 - `uv run ./pdf_convert_docling.py input.pdf -o output.md`
 - `uv run ./pdf_convert_llamaparse.py input.pdf -o output.md`
@@ -38,6 +37,7 @@ Run scripts (examples):
 - `./audio_transcribe_openai.sh recording.m4a output.txt`
 - `uv run ./audio_transcribe_whisper.py interview.m4a`
 - `uv run ./audio_transcribe_whisper.py interview.m4a --diarization --num-speakers 2`
+- `uv run ./audio_transcribe_vibevoice.py interview.m4a`
 
 Single-test guidance:
 - There is no test harness.
@@ -50,7 +50,7 @@ Operational Notes (from existing docs)
 -------------------------------------------------------------------------------
 
 Environment variables:
-- `MATHPIX_APP_ID`, `MATHPIX_APP_KEY` for Mathpix tools.
+- `MATHPIX_APP_ID`, `MATHPIX_APP_KEY` for Mathpix. `MATHPIX_API_KEY` can be used as an app-key fallback.
 - `LLAMA_CLOUD_API_KEY` for LlamaParse (LlamaCloud).
 - `OPENAI_API_KEY` for OpenAI transcription.
 - `TIDAL_CLIENT_ID`, `TIDAL_CLIENT_SECRET` for TIDAL import.
@@ -62,20 +62,22 @@ LlamaCloud API key setup:
 
 Repository scripts:
 - `pdf_convert_mathpix_sdk.py` uses the `mpxpy` SDK.
-- `pdf_convert_mathpix_api.py` uses direct HTTP requests with `requests`.
 - `pdf_convert_marker.py` uses `marker-pdf` for simpler PDFs (local conversion).
 - `pdf_convert_docling.py` uses Docling for local Markdown conversion.
 - `pdf_convert_llamaparse.py` uses LlamaParse (LlamaCloud) for hosted parsing.
 - `pdf_convert_pymupdf4llm.py` uses PyMuPDF4LLM for local Markdown conversion.
 - `audio_transcribe_openai.sh` uses OpenAI's `/v1/audio/transcriptions` API and can downsample large files.
 - `audio_transcribe_whisper.py` runs a local whisper-cpp pipeline (mono 16kHz conversion + plain transcript by default). Use `--diarization` to add pyannote speaker diarization and merge speaker labels.
+- `audio_transcribe_vibevoice.py` uses `mlx-audio` with VibeVoice-ASR on Apple Silicon, defaults to `mlx-community/VibeVoice-ASR-4bit`, and writes native structured JSON by default.
 - `tidal_import_page_to_playlist.py` imports classical albums from MHTML/MD files to TIDAL playlists using API v2.
 - `test_matching.py` helper for testing TIDAL matching (see below).
 
 Repository layout:
 - Each script is standalone and intended to be run directly.
 - Outputs are typically written next to the input file unless overridden.
-- No shared modules or packages; avoid introducing cross-script imports.
+- Prefer standalone scripts for simple one-off utilities.
+- Extract a shared module when duplication is producing bugs or divergent semantics;
+  keep shared modules narrow, local to the affected script cluster, and CLI-friendly.
 
 Execution tips:
 - Ensure scripts are executable (`chmod +x <script>` if needed).
@@ -87,7 +89,8 @@ Code Style Guidelines
 -------------------------------------------------------------------------------
 
 General
-- Keep scripts standalone; avoid cross-file imports.
+- Prefer standalone scripts; use focused shared modules when they prevent duplicated
+  behavior from drifting across related scripts.
 - Keep changes minimal and focused; do not add dependencies unless necessary.
 - Favor clarity over cleverness; explicit control flow is preferred.
 - Keep output user-friendly and CLI-oriented; print concise status messages.

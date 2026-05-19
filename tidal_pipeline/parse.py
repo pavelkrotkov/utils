@@ -10,13 +10,11 @@ from typing import List, Optional, Tuple
 
 from bs4 import BeautifulSoup
 
-from tidal_pipeline.models import (
+from tidal_pipeline.normalize import (
     INSTRUMENT_ABBREVS,
     INSTRUMENT_MAP,
     SKIP_ARTIST_SEGMENTS,
     SKIP_SEGMENTS,
-)
-from tidal_pipeline.normalize import (
     clean_markdown_inline,
     extract_instruments,
     is_markdown_separator,

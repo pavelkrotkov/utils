@@ -9,7 +9,7 @@ Transcribe audio locally with VibeVoice-ASR through mlx-audio.
 
 Defaults to mlx-community/VibeVoice-ASR-4bit. mlx-audio is asked for raw JSON,
 then this script normalizes that JSON into shared TranscriptSegment objects and
-emits txt, srt, or vtt locally.
+emits json, txt, srt, or vtt locally.
 
 Usage:
     uv run ./audio_transcribe_vibevoice.py interview.m4a
@@ -24,9 +24,15 @@ import json
 import os
 import platform
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
+from audio_common import (
+    ProgressReporter,
+    convert_to_pcm16k_mono,
+    run_threaded_with_periodic_progress,
+)
 from audio_transcript import TranscriptSegment, emit_transcript
 
 
@@ -61,6 +67,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--context",
         help="Optional hotwords or domain context to guide transcription",
+    )
+    parser.add_argument(
+        "--pre-convert-pcm16k",
+        action="store_true",
+        help=(
+            "Convert input to mono 16 kHz WAV before VibeVoice "
+            "(also enabled by VIBEVOICE_PRECONVERT_PCM16K=1)"
+        ),
+    )
+    parser.add_argument("--no-progress", action="store_true", help="Disable progress reports")
+    parser.add_argument(
+        "--progress-interval",
+        type=float,
+        default=10.0,
+        help="Seconds between progress reports (default: 10)",
     )
     parser.add_argument("--verbose", action="store_true", help="Show mlx-audio details")
     return parser
@@ -98,7 +119,7 @@ def resolve_output_paths(
 
 
 def validate_output(path: Path) -> None:
-    if not path.exists() or path.stat().st_size == 0:
+    if not path.is_file() or path.stat().st_size == 0:
         print(f"ERROR: mlx-audio did not create a non-empty output file: {path}", file=sys.stderr)
         sys.exit(1)
 
@@ -237,6 +258,11 @@ def _coerce_seconds(
     return seconds
 
 
+def _bool_env(name: str) -> bool:
+    value = os.environ.get(name, "")
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -263,21 +289,49 @@ def main() -> None:
     )
     old_mtime_ns = generated_path.stat().st_mtime_ns if generated_path.exists() else None
 
-    print(f"INFO: Transcribing with {args.model}", file=sys.stderr)
-    print(f"INFO: Writing {args.format.upper()} to {final_path}", file=sys.stderr)
+    progress = None if args.no_progress else ProgressReporter(interval=args.progress_interval)
+    pre_convert = args.pre_convert_pcm16k or _bool_env("VIBEVOICE_PRECONVERT_PCM16K")
+    if progress:
+        progress.info(f"Transcribing with {args.model}")
+        progress.info(f"Writing {args.format.upper()} to {final_path}")
+    else:
+        print(f"INFO: Transcribing with {args.model}", file=sys.stderr)
+        print(f"INFO: Writing {args.format.upper()} to {final_path}", file=sys.stderr)
 
-    try:
-        generate_transcription(
-            model=args.model,
-            audio=str(args.input),
-            output_path=str(mlx_stem),
-            format="json",
-            verbose=args.verbose,
-            context=args.context,
-        )
-    except Exception as exc:
-        print(f"ERROR: VibeVoice transcription failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+    with tempfile.TemporaryDirectory(prefix="vibevoice_pcm16k_") as temp_dir:
+        audio_for_transcription = args.input
+        if pre_convert:
+            audio_for_transcription = Path(temp_dir) / "audio.wav"
+            convert_to_pcm16k_mono(
+                args.input,
+                audio_for_transcription,
+                progress=progress,
+                verbose=args.verbose,
+            )
+
+        def transcribe() -> None:
+            generate_transcription(
+                model=args.model,
+                audio=str(audio_for_transcription),
+                output_path=str(mlx_stem),
+                format="json",
+                verbose=args.verbose,
+                context=args.context,
+            )
+
+        try:
+            if progress:
+                run_threaded_with_periodic_progress(
+                    transcribe,
+                    reporter=progress,
+                    label="VibeVoice ASR",
+                    interval=args.progress_interval,
+                )
+            else:
+                transcribe()
+        except Exception as exc:
+            print(f"ERROR: VibeVoice transcription failed: {exc}", file=sys.stderr)
+            sys.exit(1)
 
     validate_output(generated_path)
     if old_mtime_ns is not None and generated_path.stat().st_mtime_ns == old_mtime_ns:
