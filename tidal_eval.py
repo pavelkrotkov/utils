@@ -8,8 +8,8 @@
 # ///
 """Offline evaluation harness for the TIDAL matching pipeline.
 
-Re-scores cached candidates from a truth file using current (or specified)
-weights, replays auto-selection, and compares against ground-truth choices.
+Replays cached candidates from a truth file through the shared search driver,
+replays auto-selection, and compares against ground-truth choices.
 
 No API calls are made — everything runs from cached data in the truth file.
 """
@@ -22,16 +22,16 @@ import statistics
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from tidal_pipeline.client import AlbumHit
+from tidal_pipeline.client import CachedSearchBackend
 from tidal_pipeline.match import (
     album_from_record,
     choose_auto_candidate,
     load_truth_records,
     load_weights,
-    score_candidate,
+    search_candidates_for_album,
     summarize_review_records,
 )
-from tidal_pipeline.models import AlbumInput, Candidate
+from tidal_pipeline.models import QueryCandidate
 
 
 # ---------------------------------------------------------------------------
@@ -39,46 +39,35 @@ from tidal_pipeline.models import AlbumInput, Candidate
 # ---------------------------------------------------------------------------
 
 
-def candidate_to_album_hit(c: dict) -> AlbumHit:
-    """Reconstruct an AlbumHit from a cached truth-record candidate."""
-    artists = c.get("artists") or []
-    if isinstance(artists, str):
-        artists = [artists]
-    return AlbumHit(
-        id=str(c.get("id", "")),
-        title=str(c.get("title", "")),
-        artists=artists,
-        release_date=str(c.get("release_date", "")),
-        copyright=str(c.get("copyright", "")),
-    )
-
-
-def rescore_candidates(
-    album: AlbumInput,
-    raw_candidates: List[dict],
-    weights: Dict[str, float],
-) -> List[Candidate]:
-    """Re-score all cached candidates and return sorted descending."""
-    results: List[Candidate] = []
-    for c in raw_candidates:
-        hit = candidate_to_album_hit(c)
-        score, features = score_candidate(album, hit, weights)
-        results.append(
-            Candidate(
-                id=hit.id,
-                title=hit.title,
-                artists=hit.artists,
-                release_date=hit.release_date,
-                copyright=hit.copyright,
-                score=score,
-                features=features,
-                queries=c.get("queries", []),
-                track_count=c.get("track_count"),
-                details_fetched=c.get("details_fetched", False),
+def cached_query_candidates(record: dict) -> List[QueryCandidate]:
+    """Rebuild the selected query list persisted in a truth record."""
+    query_candidates = record.get("query_candidates") or []
+    if query_candidates:
+        return [
+            QueryCandidate(
+                template=str(candidate.get("template", "cached")),
+                query=str(candidate.get("query", "")),
             )
-        )
-    results.sort(key=lambda x: x.score, reverse=True)
-    return results
+            for candidate in query_candidates
+            if isinstance(candidate, dict) and candidate.get("query")
+        ]
+
+    stored_queries = record.get("queries") or []
+    fallback_queries: List[str] = []
+    if stored_queries:
+        fallback_queries = [str(query) for query in stored_queries if query]
+    else:
+        seen: set[str] = set()
+        for candidate in record.get("candidates") or []:
+            if not isinstance(candidate, dict):
+                continue
+            for query in candidate.get("queries") or []:
+                query_text = str(query) if query else ""
+                if query_text and query_text not in seen:
+                    seen.add(query_text)
+                    fallback_queries.append(query_text)
+
+    return [QueryCandidate(template="cached", query=query) for query in fallback_queries]
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +151,15 @@ def evaluate_record(
         return None
 
     album = album_from_record(record)
-    rescored = rescore_candidates(album, raw_candidates, weights)
+    backend = CachedSearchBackend([record])
+    rescored = search_candidates_for_album(
+        client=backend,
+        album=album,
+        weights=weights,
+        selected_queries=cached_query_candidates(record),
+        limit=max(1, len(raw_candidates)),
+        sleep_seconds=0,
+    )
 
     # Find the ground-truth candidate in the re-scored ordering
     new_rank = 0

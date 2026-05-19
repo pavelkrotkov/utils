@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # /// script
-# dependencies = ["marker-pdf"]
+# dependencies = ["marker-pdf", "pypdf"]
 # ///
 """
 Convert a local PDF to Markdown using marker (best for simpler documents).
@@ -17,14 +17,14 @@ import argparse
 import sys
 from pathlib import Path
 
-try:
-    from marker.config.parser import ConfigParser
-    from marker.models import create_model_dict
-    from marker.output import save_output
-except ImportError as e:
-    print(f"ERROR: Missing required Python package: {e}", file=sys.stderr)
-    print("Install with: pip install marker-pdf", file=sys.stderr)
-    sys.exit(1)
+from pdf_convert_common import (
+    collapse_consecutive,
+    format_page_ranges,
+    import_or_die,
+    parse_page_range,
+    require_pdf_path,
+    resolve_output_path,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -46,7 +46,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--page-range",
-        help="Comma-separated page numbers or ranges (e.g., 0,5-10,20)",
+        help=(
+            "Comma-separated 1-based page numbers or ranges. "
+            "Examples: 1-5, 1,3,5-10, 5-N (N = last page)."
+        ),
     )
     parser.add_argument(
         "--force-ocr",
@@ -85,40 +88,52 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def resolve_output_paths(
-    input_path: Path,
-    output_path: Path | None,
-    output_dir: Path | None,
-) -> tuple[Path, str]:
-    if output_path is not None:
-        resolved_dir = output_path.parent
-        base_name = output_path.stem
-    else:
-        resolved_dir = output_dir or input_path.parent
-        base_name = input_path.stem
+def load_pdf_page_count(pdf_path: Path) -> int:
+    pypdf = import_or_die("pypdf", "pypdf")
 
-    resolved_dir.mkdir(parents=True, exist_ok=True)
-    return resolved_dir, base_name
+    try:
+        reader = pypdf.PdfReader(str(pdf_path))
+        return len(reader.pages)
+    except Exception as exc:
+        print(f"ERROR: Unable to read PDF pages: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    if not args.pdf_path.exists() or not args.pdf_path.is_file():
-        print(f"ERROR: PDF file not found: {args.pdf_path}", file=sys.stderr)
-        sys.exit(1)
+    pdf_path = require_pdf_path(args.pdf_path)
 
-    output_dir, base_name = resolve_output_paths(
-        args.pdf_path,
+    output_path = resolve_output_path(
+        pdf_path,
         args.output,
         args.output_dir,
     )
+    output_dir = output_path.parent
+    base_name = output_path.stem
+
+    page_range = None
+    if args.page_range:
+        try:
+            page_count = load_pdf_page_count(pdf_path)
+            pages = parse_page_range(args.page_range, page_count, one_based=False)
+            page_range = format_page_ranges(collapse_consecutive(pages))
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+    marker_parser = import_or_die("marker.config.parser", "marker-pdf")
+    marker_models = import_or_die("marker.models", "marker-pdf")
+    marker_output = import_or_die("marker.output", "marker-pdf")
+    ConfigParser = marker_parser.ConfigParser
+    create_model_dict = marker_models.create_model_dict
+    save_output = marker_output.save_output
 
     config_options = {
         "output_format": "markdown",
         "output_dir": str(output_dir),
-        "page_range": args.page_range,
+        "page_range": page_range,
         "force_ocr": args.force_ocr,
         "strip_existing_ocr": args.strip_existing_ocr,
         "use_llm": args.use_llm,
@@ -144,7 +159,7 @@ def main() -> None:
         llm_service=llm_service,
     )
 
-    rendered = converter(str(args.pdf_path))
+    rendered = converter(str(pdf_path))
     save_output(rendered, str(output_dir), base_name)
 
     output_md = output_dir / f"{base_name}.md"
