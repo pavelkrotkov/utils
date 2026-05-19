@@ -5,7 +5,7 @@ and TIDAL import.
 
 ## Overview
 
-- PDF to Markdown conversion (Mathpix API, Docling, LlamaParse, PyMuPDF4LLM, or local marker).
+- PDF to Markdown conversion (Mathpix SDK, Docling, LlamaParse, PyMuPDF4LLM, or local marker).
 - Markdown splitting into per-section or per-subsection files.
 - Audio transcription (OpenAI API, local whisper-cpp with optional pyannote diarization, or MLX VibeVoice-ASR on Apple Silicon).
 - TIDAL playlist import from Gramophone-style MHTML/Markdown pages.
@@ -24,7 +24,7 @@ brew install ffmpeg whisper-cpp jq
 
 Environment variables:
 
-- `MATHPIX_APP_ID`, `MATHPIX_APP_KEY` for Mathpix tools.
+- `MATHPIX_APP_ID`, `MATHPIX_APP_KEY` for Mathpix. `MATHPIX_API_KEY` can be used as an app-key fallback.
 - `LLAMA_CLOUD_API_KEY` for LlamaParse (LlamaCloud).
 - `OPENAI_API_KEY` for OpenAI transcription.
 - `TIDAL_CLIENT_ID` for TIDAL import (Required).
@@ -41,7 +41,8 @@ Mathpix (best for math-heavy PDFs):
 
 ```bash
 uv run ./pdf_convert_mathpix_sdk.py input.pdf -o output.md
-uv run ./pdf_convert_mathpix_api.py input.pdf -o output.md
+uv run ./pdf_convert_mathpix_sdk.py input.pdf --no-rm-spaces --enable-tables-fallback
+uv run ./pdf_convert_mathpix_sdk.py input.pdf --app-id YOUR_ID --app-key YOUR_KEY --timeout 300
 ```
 
 Docling (local, structured parsing):
