@@ -19,7 +19,7 @@ from tidal_pipeline.client import (
     TidalClient,
 )
 from tidal_pipeline.match import score_manual_candidate, search_candidates_for_album
-from tidal_pipeline.models import AlbumInput, QueryCandidate
+from tidal_pipeline.albums import AlbumInput, QueryCandidate
 
 
 class HandBuiltBackend(SearchBackend):

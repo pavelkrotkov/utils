@@ -7,7 +7,8 @@ import json
 import unittest
 from pathlib import Path
 
-from tidal_pipeline.models import AlbumInput, Candidate, Choice, QueryCandidate, TruthRecord
+from tidal_pipeline.albums import AlbumInput, Candidate, QueryCandidate
+from tidal_pipeline.truth import Choice, TruthRecord
 
 
 class TruthRecordTests(unittest.TestCase):

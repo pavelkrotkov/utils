@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple
 
-from tidal_pipeline.models import TruthRecord
 from tidal_pipeline.normalize import is_markdown_separator
+from tidal_pipeline.truth import TruthRecord
 
 
 @dataclass

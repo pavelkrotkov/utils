@@ -26,6 +26,7 @@ from tidal_pipeline.client import (
     resolve_country_code,
 )
 from tidal_pipeline.match import (
+    DEFAULT_TEMPLATE_WEIGHTS,
     build_record,
     build_record_id,
     build_query_candidates,
@@ -46,11 +47,7 @@ from tidal_pipeline.match import (
     summarize_review_records,
     train_coverage,
 )
-from tidal_pipeline.models import (
-    AlbumInput,
-    Candidate,
-    DEFAULT_TEMPLATE_WEIGHTS,
-)
+from tidal_pipeline.albums import AlbumInput, Candidate
 
 
 def prompt_yes_no(prompt: str, default: bool = False) -> bool:
