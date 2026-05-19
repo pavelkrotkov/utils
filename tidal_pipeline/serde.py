@@ -6,11 +6,12 @@ from typing import Any, Dict, List
 
 
 def parse_list(value: Any) -> List[str]:
-    if value is None:
+    if not value:
         return []
     if isinstance(value, list):
-        return [str(item) for item in value if item is not None]
-    return [str(value)]
+        return [s for item in value if item is not None and (s := str(item).strip())]
+    s = str(value).strip()
+    return [s] if s else []
 
 
 def parse_float_dict(value: Any) -> Dict[str, float]:
@@ -30,4 +31,4 @@ def parse_dict(value: Any) -> Dict[str, Any]:
 
 
 def parse_string(value: Any) -> str:
-    return str(value or "")
+    return str(value) if value is not None else ""

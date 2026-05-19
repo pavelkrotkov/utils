@@ -112,7 +112,7 @@ class TruthRecord:
             queries=[candidate.query for candidate in selected_queries],
             query_candidates=selected_queries,
             candidates=ordered,
-            top_candidates=ordered[: int(top or len(ordered))],
+            top_candidates=ordered[:top] if top is not None else ordered,
             choice=choice,
             chosen=chosen,
             review=review,
