@@ -53,9 +53,23 @@ class RecordingReporter(ProgressReporter):
         self.finished.append((stage, detail))
 
 
+class FakeStdout:
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = iter(lines)
+
+    def __iter__(self) -> "FakeStdout":
+        return self
+
+    def __next__(self) -> str:
+        return next(self._lines)
+
+    def close(self) -> None:
+        pass
+
+
 class FakeProcess:
     def __init__(self, lines: list[str], returncode: int = 0) -> None:
-        self.stdout = iter(lines)
+        self.stdout = FakeStdout(lines)
         self.returncode = returncode
 
     def wait(self) -> int:

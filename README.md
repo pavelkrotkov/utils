@@ -178,6 +178,7 @@ Local whisper-cpp (plain transcript by default):
 
 ```bash
 uv run ./audio_transcribe_whisper.py interview.m4a
+uv run ./audio_transcribe_whisper.py interview.m4a --format srt
 ```
 
 Apple Silicon VibeVoice-ASR via MLX (structured JSON by default):
@@ -185,6 +186,7 @@ Apple Silicon VibeVoice-ASR via MLX (structured JSON by default):
 ```bash
 uv run ./audio_transcribe_vibevoice.py interview.m4a
 uv run ./audio_transcribe_vibevoice.py interview.m4a --context "speaker names, acronyms"
+uv run ./audio_transcribe_vibevoice.py interview.m4a --format vtt -o interview.vtt
 uv run ./audio_transcribe_vibevoice.py interview.m4a --format txt -o interview.txt
 ```
 
@@ -198,9 +200,11 @@ By default, the local script prints progress/ETA reports and writes `<input>.txt
 With `--diarization`, it writes `<input>.spk.txt`. Use `--no-progress` to silence
 progress reports or `--progress-interval SECONDS` to adjust their frequency.
 
-The VibeVoice script defaults to `mlx-community/VibeVoice-ASR-4bit`, writes
-`<input>.vibevoice.json`, supports `json`, `txt`, `srt`, and `vtt`, and downloads
-the model through Hugging Face on first use.
+Whisper and VibeVoice share the same local `txt`, `srt`, and `vtt` transcript
+emitters. Whisper defaults to `diarized-txt` output when `--diarization` is
+enabled. The VibeVoice script defaults to `mlx-community/VibeVoice-ASR-4bit`,
+writes `<input>.vibevoice.json`, supports `json`, `txt`, `srt`, and `vtt`, and
+downloads the model through Hugging Face on first use.
 
 ## Notes
 

@@ -22,6 +22,7 @@ Dependencies:
 
 Usage Examples:
   ./audio_transcribe_whisper.py input.m4a
+  ./audio_transcribe_whisper.py input.m4a --format srt
   ./audio_transcribe_whisper.py input.m4a --diarization --speakers "Alice,Bob" --num-speakers 2
   ./audio_transcribe_whisper.py input.m4a --diarization --style breaks
   ./audio_transcribe_whisper.py input.m4a --diarization --no-ffmpeg --pyannote-model pyannote/speaker-diarization-community-1
@@ -47,6 +48,7 @@ from audio_common import (
     print_process_tail,
     run_with_progress,
 )
+from audio_transcript import TranscriptSegment, emit_transcript
 
 
 # ───────────────────────────────────────────────────────────────────────────────
@@ -448,37 +450,18 @@ def overlap(a0: float, a1: float, b0: float, b1: float) -> float:
     return max(0.0, min(a1, b1) - max(a0, b0))
 
 
-def merge_asr_turns(
+def merge_asr_turn_segments(
     asr_segments: List[Tuple[float, float, str]],
     speaker_turns: List[Tuple[float, float, str]],
-    style: str,
-    speaker_names: Optional[List[str]],
     verbose: bool = False,
-) -> List[str]:
+) -> List[TranscriptSegment]:
     """
-    Merge timed ASR tuples with speaker-turn tuples and return transcript lines.
+    Merge timed ASR tuples with speaker-turn tuples and return transcript segments.
 
     ASR input is (start, end, text). Speaker-turn input is (start, end, label).
-    Speaker labels are normalized by first appearance before optional name remapping.
+    Speaker labels are normalized by first appearance.
     """
-
-    def display_speaker_label(speaker: Optional[str]) -> str:
-        """Map normalized SPEAKER_nn labels to user-provided names when available."""
-        if not speaker:
-            return ""
-
-        if speaker_names and speaker.startswith("SPEAKER_"):
-            try:
-                idx = int(speaker.split("_")[1])
-            except (IndexError, ValueError):
-                return speaker
-
-            if idx < len(speaker_names):
-                return speaker_names[idx]
-
-        return speaker
-
-    seg_speakers: List[Tuple[Optional[str], str]] = []
+    seg_speakers: List[Tuple[float, float, str, Optional[str]]] = []
     for s_start, s_end, s_text in asr_segments:
         best_speaker = None
         best_overlap = 0.0
@@ -489,10 +472,10 @@ def merge_asr_turns(
                 best_overlap = ovlp
                 best_speaker = speaker_label
 
-        seg_speakers.append((best_speaker, s_text))
+        seg_speakers.append((s_start, s_end, s_text, best_speaker))
 
     speaker_map: Dict[str, str] = {}
-    for speaker, _ in seg_speakers:
+    for _, _, _, speaker in seg_speakers:
         if speaker and speaker not in speaker_map:
             speaker_map[speaker] = f"SPEAKER_{len(speaker_map):02d}"
 
@@ -502,41 +485,47 @@ def merge_asr_turns(
             file=sys.stderr,
         )
 
-    normalized = [(speaker_map.get(spk, spk), txt) for spk, txt in seg_speakers]
+    return [
+        TranscriptSegment(
+            start=start,
+            end=end,
+            text=text,
+            speaker=speaker_map.get(speaker) if speaker else None,
+        )
+        for start, end, text, speaker in seg_speakers
+    ]
+
+
+def merge_asr_turns(
+    asr_segments: List[Tuple[float, float, str]],
+    speaker_turns: List[Tuple[float, float, str]],
+    style: str,
+    speaker_names: Optional[List[str]],
+    verbose: bool = False,
+) -> List[str]:
+    """Merge timed ASR and speaker-turn tuples into legacy transcript lines."""
+    segments = merge_asr_turn_segments(asr_segments, speaker_turns, verbose)
+    if style == "labels":
+        return emit_transcript(segments, "diarized-txt", speaker_names).splitlines()
+
     lines: List[str] = []
-    for speaker, group in itertools.groupby(normalized, key=lambda item: item[0]):
-        texts = [text for _, text in group if text]
-        if not texts:
-            continue
-
+    for _, group in itertools.groupby(segments, key=lambda segment: segment.speaker):
+        texts = [segment.text for segment in group if segment.text]
         combined = " ".join(texts).strip()
-        if not combined:
-            continue
-
-        if style == "breaks":
+        if combined:
             lines.append("--- speaker change ---")
             lines.append(combined)
-        else:
-            display_label = display_speaker_label(speaker)
-            if display_label:
-                lines.append(f"{display_label}: {combined}")
-            else:
-                lines.append(combined)
-
     return lines
 
 
 def merge_asr_with_diar(
     segments: List[Dict[str, Any]],
     diarization: Any,
-    style: str,
-    speaker_names: Optional[List[str]],
     verbose: bool = False,
-) -> List[str]:
+) -> List[TranscriptSegment]:
     """
     Merge ASR segments with diarization by assigning each ASR segment to best-matching speaker,
-    then grouping consecutive segments with same speaker.
-    Returns list of transcript lines (plain text with speaker labels or break markers).
+    normalizing speaker labels by order of first appearance.
     """
     # Build index of timed segments
     timed_segs = []
@@ -563,7 +552,7 @@ def merge_asr_with_diar(
         (turn.start, turn.end, speaker_label)
         for turn, _, speaker_label in diarization.itertracks(yield_label=True)
     ]
-    return merge_asr_turns(timed_segs, speaker_turns, style, speaker_names, verbose)
+    return merge_asr_turn_segments(timed_segs, speaker_turns, verbose)
 
 
 # ───────────────────────────────────────────────────────────────────────────────
@@ -577,6 +566,38 @@ def plain_transcript(segments: List[Dict[str, Any]], fallback_text: Optional[str
         return fallback_text.strip()
     texts = [_seg_text(s) for s in segments]
     return " ".join(t for t in texts if t).strip()
+
+
+def transcript_segments_from_whisper(
+    segments: List[Dict[str, Any]],
+    fallback_text: Optional[str],
+) -> List[TranscriptSegment]:
+    """Convert normalized whisper segment dictionaries to shared transcript segments."""
+    transcript_segments = []
+    for seg in segments:
+        text = _seg_text(seg)
+        if not text:
+            continue
+        start = _seg_start(seg)
+        end = _seg_end(seg)
+        if start is None:
+            start = 0.0
+        if end is None:
+            end = start
+        if end < start:
+            end = start
+        speaker = seg.get("speaker") if isinstance(seg, dict) else None
+        transcript_segments.append(
+            TranscriptSegment(start=start, end=end, text=text, speaker=speaker)
+        )
+
+    if transcript_segments:
+        return transcript_segments
+
+    if fallback_text:
+        return [TranscriptSegment(start=0.0, end=0.0, text=fallback_text.strip())]
+
+    return []
 
 
 # ───────────────────────────────────────────────────────────────────────────────
@@ -696,7 +717,12 @@ def main() -> None:
         "-o",
         "--output",
         type=Path,
-        help="Output transcript path (default: <input>.txt, or <input>.spk.txt with --diarization)",
+        help="Output transcript path (default: based on input and --format)",
+    )
+    parser.add_argument(
+        "--format",
+        choices=["txt", "srt", "vtt", "diarized-txt"],
+        help="Output format (default: txt, or diarized-txt with --diarization)",
     )
     parser.add_argument("--ffmpeg-bin", default="ffmpeg", help="Path to ffmpeg binary")
     parser.add_argument("--ffprobe-bin", default="ffprobe", help="Path to ffprobe binary")
@@ -759,6 +785,11 @@ def main() -> None:
     speaker_names = [s.strip() for s in args.speakers.split(",")] if args.speakers else None
     args.whisper_bin = resolve_whisper_bin(args.whisper_bin, args.verbose)
     progress = None if args.no_progress else ProgressReporter(interval=args.progress_interval)
+    output_format = args.format or ("diarized-txt" if args.diarization else "txt")
+
+    if output_format == "diarized-txt" and not args.diarization:
+        print("ERROR: --format diarized-txt requires --diarization.", file=sys.stderr)
+        sys.exit(1)
 
     if not args.input.exists():
         print(f"ERROR: Input file not found: {args.input}", file=sys.stderr)
@@ -768,7 +799,12 @@ def main() -> None:
         print(f"ERROR: Whisper model not found: {args.large_model}", file=sys.stderr)
         sys.exit(1)
 
-    output_path = args.output or args.input.with_suffix(".spk.txt" if args.diarization else ".txt")
+    if args.output:
+        output_path = args.output
+    elif output_format == "diarized-txt":
+        output_path = args.input.with_suffix(".spk.txt")
+    else:
+        output_path = args.input.with_suffix(f".{output_format}")
 
     # Temporary files
     temp_dir = tempfile.mkdtemp(prefix="whisper_pyannote_")
@@ -816,6 +852,7 @@ def main() -> None:
         segments, fallback_text = load_whisper_segments(json_path, args.verbose)
         if progress:
             progress.finish("loading whisper output")
+        transcript_segments = transcript_segments_from_whisper(segments, fallback_text)
 
         # Check if segments have timestamps
         has_timestamps = any(_has_time(s) for s in segments)
@@ -829,7 +866,6 @@ def main() -> None:
                 progress.info(
                     "Skipping pyannote diarization (default; pass --diarization to enable)"
                 )
-            merged_lines = []
         else:
             if progress:
                 progress.start("pyannote model load", detail=args.pyannote_model)
@@ -851,9 +887,9 @@ def main() -> None:
             if has_timestamps:
                 if progress:
                     progress.start("merging ASR with diarization")
-                merged_lines = merge_asr_with_diar(
-                    segments, diarization, args.style, speaker_names, args.verbose
-                )
+                diarized_segments = merge_asr_with_diar(segments, diarization, args.verbose)
+                if diarized_segments:
+                    transcript_segments = diarized_segments
                 if progress:
                     progress.finish("merging ASR with diarization")
             else:
@@ -862,18 +898,19 @@ def main() -> None:
                         "WARNING: No timestamps in ASR segments; skipping diarization merge.",
                         file=sys.stderr,
                     )
-                merged_lines = []
 
         # Step 6: Write output
-        if merged_lines:
-            final_text = "\n".join(merged_lines)
-        else:
+        if not transcript_segments:
             if args.verbose:
                 print(
-                    "WARNING: No merged output; falling back to plain ASR transcript.",
+                    "WARNING: No transcript segments; falling back to plain ASR transcript.",
                     file=sys.stderr,
                 )
-            final_text = plain_transcript(segments, fallback_text)
+            transcript_segments = [
+                TranscriptSegment(0.0, 0.0, plain_transcript(segments, fallback_text))
+            ]
+
+        final_text = emit_transcript(transcript_segments, output_format, speaker_names)
 
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(final_text)
