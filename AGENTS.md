@@ -6,7 +6,7 @@ below to run scripts safely and follow the established style.
 
 Project focus areas:
 - PDF to Markdown conversion for scientific papers (Mathpix API).
-- Audio transcription (OpenAI API or local whisper-cpp, with optional pyannote diarization).
+- Audio transcription (OpenAI API, local whisper-cpp with optional pyannote diarization, or MLX VibeVoice-ASR on Apple Silicon).
 - TIDAL playlist import from classical music review pages (Gramophone-style MHTML/MD).
 
 If you need broader project context, read `GEMINI.md`.
@@ -38,6 +38,7 @@ Run scripts (examples):
 - `./audio_transcribe_openai.sh recording.m4a output.txt`
 - `uv run ./audio_transcribe_whisper.py interview.m4a`
 - `uv run ./audio_transcribe_whisper.py interview.m4a --diarization --num-speakers 2`
+- `uv run ./audio_transcribe_vibevoice.py interview.m4a`
 
 Single-test guidance:
 - There is no test harness.
@@ -69,6 +70,7 @@ Repository scripts:
 - `pdf_convert_pymupdf4llm.py` uses PyMuPDF4LLM for local Markdown conversion.
 - `audio_transcribe_openai.sh` uses OpenAI's `/v1/audio/transcriptions` API and can downsample large files.
 - `audio_transcribe_whisper.py` runs a local whisper-cpp pipeline (mono 16kHz conversion + plain transcript by default). Use `--diarization` to add pyannote speaker diarization and merge speaker labels.
+- `audio_transcribe_vibevoice.py` uses `mlx-audio` with VibeVoice-ASR on Apple Silicon, defaults to `mlx-community/VibeVoice-ASR-4bit`, and writes native structured JSON by default.
 - `tidal_import_page_to_playlist.py` imports classical albums from MHTML/MD files to TIDAL playlists using API v2.
 - `test_matching.py` helper for testing TIDAL matching (see below).
 

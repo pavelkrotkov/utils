@@ -7,7 +7,7 @@ and TIDAL import.
 
 - PDF to Markdown conversion (Mathpix API, Docling, LlamaParse, PyMuPDF4LLM, or local marker).
 - Markdown splitting into per-section or per-subsection files.
-- Audio transcription (OpenAI API or local whisper-cpp, with optional pyannote diarization).
+- Audio transcription (OpenAI API, local whisper-cpp with optional pyannote diarization, or MLX VibeVoice-ASR on Apple Silicon).
 - TIDAL playlist import from Gramophone-style MHTML/Markdown pages.
 
 For deeper context, refer to the script headers and inline help.
@@ -176,6 +176,14 @@ Local whisper-cpp (plain transcript by default):
 uv run ./audio_transcribe_whisper.py interview.m4a
 ```
 
+Apple Silicon VibeVoice-ASR via MLX (structured JSON by default):
+
+```bash
+uv run ./audio_transcribe_vibevoice.py interview.m4a
+uv run ./audio_transcribe_vibevoice.py interview.m4a --context "speaker names, acronyms"
+uv run ./audio_transcribe_vibevoice.py interview.m4a --format txt -o interview.txt
+```
+
 Enable pyannote speaker diarization when speaker labels are needed:
 
 ```bash
@@ -185,6 +193,10 @@ uv run ./audio_transcribe_whisper.py interview.m4a --diarization --num-speakers 
 By default, the local script prints progress/ETA reports and writes `<input>.txt`.
 With `--diarization`, it writes `<input>.spk.txt`. Use `--no-progress` to silence
 progress reports or `--progress-interval SECONDS` to adjust their frequency.
+
+The VibeVoice script defaults to `mlx-community/VibeVoice-ASR-4bit`, writes
+`<input>.vibevoice.json`, supports `json`, `txt`, `srt`, and `vtt`, and downloads
+the model through Hugging Face on first use.
 
 ## Notes
 
