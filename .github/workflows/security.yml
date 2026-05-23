@@ -30,7 +30,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --locked --all-extras --dev
+        run: uv sync --all-extras --dev
 
       - name: Run pip-audit
         run: uv run pip-audit
@@ -63,6 +63,6 @@ jobs:
 
       - name: Install and Run zizmor
         run: |
-          pipx install zizmor
+          pipx install zizmor==0.10.0
           zizmor .github/workflows
         continue-on-error: true
