@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 
-def parse_list(value: Any) -> List[str]:
+def parse_list(value: Any) -> list[str]:
     if not value:
         return []
     if isinstance(value, list):
@@ -14,10 +14,10 @@ def parse_list(value: Any) -> List[str]:
     return [s] if s else []
 
 
-def parse_float_dict(value: Any) -> Dict[str, float]:
+def parse_float_dict(value: Any) -> dict[str, float]:
     if not isinstance(value, dict):
         return {}
-    parsed: Dict[str, float] = {}
+    parsed: dict[str, float] = {}
     for key, item in value.items():
         try:
             parsed[str(key)] = float(item)
@@ -26,7 +26,7 @@ def parse_float_dict(value: Any) -> Dict[str, float]:
     return parsed
 
 
-def parse_dict(value: Any) -> Dict[str, Any]:
+def parse_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 

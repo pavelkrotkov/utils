@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple
 
 from tidal_pipeline.normalize import is_markdown_separator
 from tidal_pipeline.truth import TruthRecord
@@ -26,13 +25,13 @@ class LinkUpdate:
         return f"[**Listen on TIDAL**]({self.url})"
 
 
-def load_updates(truth_path: Path) -> List[LinkUpdate]:
+def load_updates(truth_path: Path) -> list[LinkUpdate]:
     data = json.loads(truth_path.read_text(encoding="utf-8"))
     if not isinstance(data, list):
         raise ValueError("Truth JSON must be a list of records.")
     records = [TruthRecord.from_dict(item) for item in data if isinstance(item, dict)]
 
-    updates: List[LinkUpdate] = []
+    updates: list[LinkUpdate] = []
     for entry in records:
         status = entry.choice.status
         if status not in {"selected", "auto_selected"}:
@@ -50,14 +49,14 @@ def load_updates(truth_path: Path) -> List[LinkUpdate]:
     return updates
 
 
-def find_block_end(lines: List[str], start_idx: int) -> int:
+def find_block_end(lines: list[str], start_idx: int) -> int:
     for idx in range(start_idx, len(lines)):
         if is_markdown_separator(lines[idx]):
             return idx
     return len(lines)
 
 
-def apply_updates(lines: List[str], updates: List[LinkUpdate]) -> Tuple[List[str], int]:
+def apply_updates(lines: list[str], updates: list[LinkUpdate]) -> tuple[list[str], int]:
     inserted = 0
 
     for update in updates:
@@ -83,7 +82,7 @@ def apply_updates(lines: List[str], updates: List[LinkUpdate]) -> Tuple[List[str
         while insert_at > start_idx and not lines[insert_at - 1].strip():
             insert_at -= 1
 
-        snippet: List[str] = []
+        snippet: list[str] = []
         if insert_at > start_idx and lines[insert_at - 1].strip():
             snippet.append("")
         snippet.append(update.line)

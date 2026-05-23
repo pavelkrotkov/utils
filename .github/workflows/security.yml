@@ -1,0 +1,66 @@
+name: Security & Workflows Lint
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 12 * * 1' # Runs weekly on Mondays at 12:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  pip-audit:
+    name: Dependency Vulnerability Audit (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked --all-extras --dev
+
+      - name: Run pip-audit
+        run: uv run pip-audit
+
+  actionlint:
+    name: GitHub Actions Lint (actionlint)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Run actionlint
+        uses: raven-actions/actionlint@v2
+
+  zizmor:
+    name: GitHub Actions Security Audit (zizmor)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # required to upload SARIF if needed, but we can also just run it and print findings
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install and Run zizmor
+        run: |
+          pipx install zizmor
+          zizmor .github/workflows
