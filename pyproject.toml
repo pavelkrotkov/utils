@@ -3,7 +3,12 @@ name = "utils"
 version = "0.1.0"
 description = "A collection of standalone utility scripts"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "beautifulsoup4",
+    "numpy",
+    "pandas",
+    "requests",
+]
 
 [tool.ruff]
 line-length = 100
