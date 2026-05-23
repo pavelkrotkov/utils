@@ -8,7 +8,7 @@ We use `uv` for dependency management. To set up your local development environm
 
 ```bash
 # Install dependencies, developer tools, and create a virtual environment
-uv sync --all-extras --dev
+uv sync --dev
 
 # Install git pre-commit hooks
 uv run pre-commit install
@@ -52,6 +52,8 @@ uv run ty check \
   --exclude "test_audio_common.py" \
   .
 ```
+
+Specialized scripts keep heavyweight or provider-specific dependencies in their inline PEP 723 metadata. Run those scripts directly with `uv run ./script_name.py ...` so `uv` resolves only the dependencies needed for that tool.
 
 ### 4. Security Audits
 You can run dependency audits locally using:
