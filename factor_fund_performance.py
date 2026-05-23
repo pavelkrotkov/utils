@@ -551,7 +551,7 @@ def main() -> int:
     fx_rates: dict[date, dict[str, float]] | None = None
     try:
         fx_rates = fetch_ecb_rates(settings)
-    except Exception as exc:
+    except requests.RequestException as exc:
         if not args.quiet:
             print(f"warning: FX rates unavailable ({exc})", file=sys.stderr)
     frames: list[pd.DataFrame] = []
