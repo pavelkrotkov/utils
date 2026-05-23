@@ -20,8 +20,8 @@ import argparse
 import json
 import statistics
 from pathlib import Path
-from typing import Dict, List, Optional
 
+from tidal_pipeline.albums import QueryCandidate
 from tidal_pipeline.client import CachedSearchBackend
 from tidal_pipeline.match import (
     choose_auto_candidate,
@@ -30,16 +30,14 @@ from tidal_pipeline.match import (
     search_candidates_for_album,
     summarize_review_records,
 )
-from tidal_pipeline.albums import QueryCandidate
 from tidal_pipeline.truth import TruthRecord
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def cached_query_candidates(record: TruthRecord) -> List[QueryCandidate]:
+def cached_query_candidates(record: TruthRecord) -> list[QueryCandidate]:
     """Rebuild the selected query list persisted in a truth record."""
     if record.query_candidates:
         return list(record.query_candidates)
@@ -48,7 +46,7 @@ def cached_query_candidates(record: TruthRecord) -> List[QueryCandidate]:
         return [QueryCandidate(template="cached", query=q) for q in record.queries if q]
 
     seen: set[str] = set()
-    fallback: List[QueryCandidate] = []
+    fallback: list[QueryCandidate] = []
     for candidate in record.candidates:
         for query in candidate.queries:
             if query and query not in seen:
@@ -66,20 +64,20 @@ class RecordResult:
     """Evaluation outcome for a single truth record."""
 
     __slots__ = (
-        "record_id",
-        "title",
-        "ground_truth_id",
-        "ground_truth_status",
-        "original_score",
-        "new_score",
-        "new_rank",
-        "candidate_count",
-        "top_id",
-        "top_score",
+        "auto_correct",
         "auto_id",
         "auto_reason",
+        "candidate_count",
+        "ground_truth_id",
+        "ground_truth_status",
+        "new_rank",
+        "new_score",
+        "original_score",
+        "record_id",
+        "title",
         "top1_correct",
-        "auto_correct",
+        "top_id",
+        "top_score",
     )
 
     def __init__(
@@ -94,7 +92,7 @@ class RecordResult:
         candidate_count: int,
         top_id: str,
         top_score: float,
-        auto_id: Optional[str],
+        auto_id: str | None,
         auto_reason: str,
     ):
         self.record_id = record_id
@@ -115,11 +113,11 @@ class RecordResult:
 
 def evaluate_record(
     record: TruthRecord,
-    weights: Dict[str, float],
+    weights: dict[str, float],
     score_threshold: float,
     recent_year: int,
     recent_threshold: float,
-) -> Optional[RecordResult]:
+) -> RecordResult | None:
     """Evaluate a single truth record. Returns None if not evaluable."""
     status = record.choice.status
     if status not in {"selected", "auto_selected"}:
@@ -192,7 +190,7 @@ def evaluate_record(
 class EvalReport:
     """Aggregate evaluation metrics."""
 
-    def __init__(self, results: List[RecordResult]):
+    def __init__(self, results: list[RecordResult]):
         self.results = results
         self.n = len(results)
 
@@ -235,20 +233,20 @@ class EvalReport:
         return statistics.mean(reciprocals)
 
     @property
-    def correct_scores(self) -> List[float]:
+    def correct_scores(self) -> list[float]:
         return [r.new_score for r in self.results if r.new_rank > 0]
 
     @property
-    def regressions(self) -> List[RecordResult]:
+    def regressions(self) -> list[RecordResult]:
         """Records where the correct candidate dropped from rank 1."""
         return [r for r in self.results if not r.top1_correct and r.new_rank > 0]
 
     @property
-    def lost(self) -> List[RecordResult]:
+    def lost(self) -> list[RecordResult]:
         """Records where the correct candidate is no longer in candidates."""
         return [r for r in self.results if r.new_rank == 0]
 
-    def score_stats(self) -> Dict[str, float]:
+    def score_stats(self) -> dict[str, float]:
         scores = self.correct_scores
         if not scores:
             return {"min": 0, "median": 0, "mean": 0, "max": 0}
@@ -439,7 +437,7 @@ def main() -> int:
         )
         print("Evaluating records with status in {selected, auto_selected}...")
 
-    results: List[RecordResult] = []
+    results: list[RecordResult] = []
     for record in records:
         result = evaluate_record(
             record,

@@ -9,8 +9,8 @@
 from __future__ import annotations
 
 import unittest
-from typing import Dict, List, Optional
 
+from tidal_pipeline.albums import AlbumInput, QueryCandidate
 from tidal_pipeline.client import (
     AlbumDetail,
     AlbumHit,
@@ -19,22 +19,21 @@ from tidal_pipeline.client import (
     TidalClient,
 )
 from tidal_pipeline.match import score_manual_candidate, search_candidates_for_album
-from tidal_pipeline.albums import AlbumInput, QueryCandidate
 
 
 class HandBuiltBackend(SearchBackend):
     def __init__(
         self,
-        hits_by_query: Dict[str, List[AlbumHit]],
-        details_by_id: Optional[Dict[str, AlbumDetail]] = None,
+        hits_by_query: dict[str, list[AlbumHit]],
+        details_by_id: dict[str, AlbumDetail] | None = None,
     ) -> None:
         self.hits_by_query = hits_by_query
         self.details_by_id = details_by_id or {}
 
-    def search_albums(self, query: str, limit: int = 5) -> List[AlbumHit]:
+    def search_albums(self, query: str, limit: int = 5) -> list[AlbumHit]:
         return self.hits_by_query.get(query, [])[:limit]
 
-    def get_album_details(self, album_id: str) -> Optional[AlbumDetail]:
+    def get_album_details(self, album_id: str) -> AlbumDetail | None:
         return self.details_by_id.get(album_id)
 
 

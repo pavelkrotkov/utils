@@ -6,7 +6,6 @@ from __future__ import annotations
 import importlib
 import unittest
 
-
 PARSER_MODULES = [
     "pdf_convert_docling",
     "pdf_convert_llamaparse",
@@ -48,9 +47,11 @@ class PageRangeParserTest(unittest.TestCase):
         for module_name in PARSER_MODULES:
             module = importlib.import_module(module_name)
             for spec in invalid_specs:
-                with self.subTest(module=module_name, spec=spec):
-                    with self.assertRaisesRegex(ValueError, r"^Invalid --page-range value:"):
-                        module.parse_page_range(spec, 10, one_based=True)
+                with (
+                    self.subTest(module=module_name, spec=spec),
+                    self.assertRaisesRegex(ValueError, r"^Invalid --page-range value:"),
+                ):
+                    module.parse_page_range(spec, 10, one_based=True)
 
 
 if __name__ == "__main__":

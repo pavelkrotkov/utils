@@ -57,7 +57,7 @@ class FakeStdout:
     def __init__(self, lines: list[str]) -> None:
         self._lines = iter(lines)
 
-    def __iter__(self) -> "FakeStdout":
+    def __iter__(self) -> FakeStdout:
         return self
 
     def __next__(self) -> str:
@@ -163,8 +163,7 @@ class ConvertToPcm16kMonoTest(unittest.TestCase):
                     str(output_path),
                 ],
                 check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 text=True,
             )
             stream = json.loads(result.stdout)["streams"][0]

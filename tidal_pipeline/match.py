@@ -9,7 +9,6 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
 
 from tidal_pipeline.albums import AlbumInput, Candidate, QueryCandidate
 from tidal_pipeline.client import AlbumDetail, AlbumHit, SearchBackend
@@ -71,27 +70,27 @@ PERFORMER_WEIGHT_BOOST = 1.5
 
 @dataclass(frozen=True)
 class _FeatureContext:
-    title_values: List[str]
-    title_tokens: Set[str]
-    composer_tokens: Set[str]
-    performer_tokens: Set[str]
-    ensemble_tokens: Set[str]
-    conductor_tokens: Set[str]
-    instrument_tokens: Set[str]
-    hit_title_tokens: Set[str]
-    hit_artist_tokens: Set[str]
-    hit_all_tokens: Set[str]
+    title_values: list[str]
+    title_tokens: set[str]
+    composer_tokens: set[str]
+    performer_tokens: set[str]
+    ensemble_tokens: set[str]
+    conductor_tokens: set[str]
+    instrument_tokens: set[str]
+    hit_title_tokens: set[str]
+    hit_artist_tokens: set[str]
+    hit_all_tokens: set[str]
     label_norm: str
-    requested_numbers: Set[str]
-    hit_numbers: Set[str]
-    composers: List[str]
-    performers: List[str]
-    ensembles: List[str]
-    conductor_list: List[str]
-    hit_artists: List[str]
+    requested_numbers: set[str]
+    hit_numbers: set[str]
+    composers: list[str]
+    performers: list[str]
+    ensembles: list[str]
+    conductor_list: list[str]
+    hit_artists: list[str]
     hit_title_raw: str
-    album_year: Optional[int]
-    hit_year: Optional[int]
+    album_year: int | None
+    hit_year: int | None
     hit_copyright: str
     album_title_norm: str
     hit_title_norm: str
@@ -99,7 +98,7 @@ class _FeatureContext:
 
 
 def _build_feature_context(album: AlbumInput, hit: AlbumHit) -> _FeatureContext:
-    title_values = [album.title] + album.works
+    title_values = [album.title, *album.works]
     hit_title_tokens = tokenize(hit.title)
     hit_artist_tokens = artist_tokens_from_list(hit.artists)
     title_tokens = tokens_from_list(title_values)
@@ -132,7 +131,7 @@ def _build_feature_context(album: AlbumInput, hit: AlbumHit) -> _FeatureContext:
     )
 
 
-def _extract_features_from_context(context: _FeatureContext) -> Dict[str, float]:
+def _extract_features_from_context(context: _FeatureContext) -> dict[str, float]:
     composer_phrase = phrase_overlap_score(
         context.composers, [context.hit_title_raw, *context.hit_artists]
     )
@@ -170,27 +169,30 @@ def _extract_features_from_context(context: _FeatureContext) -> Dict[str, float]
     if context.album_year and context.hit_year and context.album_year == context.hit_year:
         features["year"] = 1.0
 
-    if context.album_title_norm and context.hit_title_norm:
-        if (
+    if (
+        context.album_title_norm
+        and context.hit_title_norm
+        and (
             context.album_title_norm in context.hit_title_norm
             or context.hit_title_norm in context.album_title_norm
-        ):
-            features["title"] = max(features["title"], 0.95)
+        )
+    ):
+        features["title"] = max(features["title"], 0.95)
 
     return features
 
 
-def extract_features(album: AlbumInput, hit: AlbumHit) -> Dict[str, float]:
+def extract_features(album: AlbumInput, hit: AlbumHit) -> dict[str, float]:
     return _extract_features_from_context(_build_feature_context(album, hit))
 
 
-def base_score(features: Dict[str, float], weights: Dict[str, float]) -> float:
+def base_score(features: dict[str, float], weights: dict[str, float]) -> float:
     return sum(features[key] * weights.get(key, 0.0) for key in features)
 
 
 def _apply_penalties_with_context(
     base: float,
-    features: Dict[str, float],
+    features: dict[str, float],
     context: _FeatureContext,
 ) -> float:
     score = base
@@ -230,7 +232,7 @@ def _apply_penalties_with_context(
 def apply_penalties(
     base: float,
     album: AlbumInput,
-    features: Dict[str, float],
+    features: dict[str, float],
     hit: AlbumHit,
 ) -> float:
     return _apply_penalties_with_context(base, features, _build_feature_context(album, hit))
@@ -239,8 +241,8 @@ def apply_penalties(
 def score_candidate(
     album: AlbumInput,
     hit: AlbumHit,
-    weights: Optional[Dict[str, float]] = None,
-) -> Tuple[float, Dict[str, float]]:
+    weights: dict[str, float] | None = None,
+) -> tuple[float, dict[str, float]]:
     active_weights = weights or DEFAULT_WEIGHTS
     context = _build_feature_context(album, hit)
     features = _extract_features_from_context(context)
@@ -252,9 +254,9 @@ def build_query_candidates(
     album: AlbumInput,
     rng: random.Random,
     shuffle_count: int = 2,
-) -> List[QueryCandidate]:
+) -> list[QueryCandidate]:
     seen: set[str] = set()
-    candidates: List[QueryCandidate] = []
+    candidates: list[QueryCandidate] = []
 
     def add_query(template: str, value: str) -> None:
         cleaned = " ".join(value.split())
@@ -394,16 +396,16 @@ def query_family(template: str) -> str:
 
 
 def select_query_candidates(
-    candidates: List[QueryCandidate],
-    template_weights: Optional[Dict[str, float]],
-    max_queries: Optional[int],
+    candidates: list[QueryCandidate],
+    template_weights: dict[str, float] | None,
+    max_queries: int | None,
     rng: random.Random,
-) -> List[QueryCandidate]:
+) -> list[QueryCandidate]:
     active_template_weights = template_weights or DEFAULT_TEMPLATE_WEIGHTS
     if not max_queries or len(candidates) <= max_queries:
         return candidates
 
-    ranked: List[Tuple[float, int, int, QueryCandidate]] = []
+    ranked: list[tuple[float, int, int, QueryCandidate]] = []
     for candidate in candidates:
         base = active_template_weights.get(candidate.template, 0.5)
         if candidate.template.startswith("performer"):
@@ -414,7 +416,7 @@ def select_query_candidates(
         ranked.append((base, compactness, brevity, candidate))
 
     ranked.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
-    selected: List[QueryCandidate] = []
+    selected: list[QueryCandidate] = []
     seen_queries: set[str] = set()
     family_limits = {
         "title": 2,
@@ -483,12 +485,12 @@ def select_query_candidates(
 def search_candidates_for_album(
     client: SearchBackend,
     album: AlbumInput,
-    weights: Optional[Dict[str, float]],
-    selected_queries: List[QueryCandidate],
+    weights: dict[str, float] | None,
+    selected_queries: list[QueryCandidate],
     limit: int,
     sleep_seconds: float,
-) -> List[Candidate]:
-    candidates_map: Dict[str, Candidate] = {}
+) -> list[Candidate]:
+    candidates_map: dict[str, Candidate] = {}
 
     for query_candidate in selected_queries:
         hits = client.search_albums(query_candidate.query, limit=limit)
@@ -516,7 +518,7 @@ def search_candidates_for_album(
     return sort_candidates(list(candidates_map.values()))
 
 
-def sort_candidates(candidates: List[Candidate]) -> List[Candidate]:
+def sort_candidates(candidates: list[Candidate]) -> list[Candidate]:
     """Sort by score, query count, then lowercased title, all descending."""
     return sorted(
         candidates,
@@ -536,7 +538,7 @@ def apply_details(candidate: Candidate, detail: AlbumDetail) -> None:
 
 def ensure_details(
     backend: SearchBackend,
-    ordered: List[Candidate],
+    ordered: list[Candidate],
     limit: int,
     sleep: float,
 ) -> None:
@@ -554,8 +556,8 @@ def score_manual_candidate(
     backend: SearchBackend,
     album: AlbumInput,
     tidal_id: str,
-    weights: Optional[Dict[str, float]],
-) -> Optional[Candidate]:
+    weights: dict[str, float] | None,
+) -> Candidate | None:
     detail = backend.get_album_details(tidal_id)
     if not detail:
         return None
@@ -582,11 +584,11 @@ def score_manual_candidate(
 
 
 def choose_auto_candidate(
-    ordered: List[Candidate],
+    ordered: list[Candidate],
     score_threshold: float,
     recent_year: int,
     recent_threshold: float,
-) -> Tuple[Optional[Candidate], str]:
+) -> tuple[Candidate | None, str]:
     if not ordered:
         return None, ""
 
@@ -614,7 +616,7 @@ def choose_auto_candidate(
     return None, ""
 
 
-def parse_list(value) -> List[str]:
+def parse_list(value) -> list[str]:
     if not value:
         return []
     if isinstance(value, list):
@@ -624,7 +626,7 @@ def parse_list(value) -> List[str]:
     return []
 
 
-def load_album_inputs(path: Path) -> List[AlbumInput]:
+def load_album_inputs(path: Path) -> list[AlbumInput]:
     raw = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(raw, dict) and "albums" in raw:
         entries = raw["albums"]
@@ -633,7 +635,7 @@ def load_album_inputs(path: Path) -> List[AlbumInput]:
     else:
         raise ValueError("Input JSON must be a list or have an 'albums' key.")
 
-    albums: List[AlbumInput] = []
+    albums: list[AlbumInput] = []
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -663,7 +665,7 @@ def load_album_inputs(path: Path) -> List[AlbumInput]:
     return albums
 
 
-def load_weights(path: Optional[Path]) -> Dict[str, float]:
+def load_weights(path: Path | None) -> dict[str, float]:
     if not path or not path.exists():
         return dict(DEFAULT_WEIGHTS)
     raw = json.loads(path.read_text(encoding="utf-8"))
@@ -674,7 +676,7 @@ def load_weights(path: Optional[Path]) -> Dict[str, float]:
     return weights
 
 
-def load_training_model(path: Optional[Path]) -> Tuple[Dict[str, float], Dict[str, float]]:
+def load_training_model(path: Path | None) -> tuple[dict[str, float], dict[str, float]]:
     if not path or not path.exists():
         return dict(DEFAULT_WEIGHTS), dict(DEFAULT_TEMPLATE_WEIGHTS)
     raw = json.loads(path.read_text(encoding="utf-8"))
@@ -689,11 +691,11 @@ def load_training_model(path: Optional[Path]) -> Tuple[Dict[str, float], Dict[st
     return weights, template_weights
 
 
-def save_training_model(path: Path, model: Dict) -> None:
+def save_training_model(path: Path, model: dict) -> None:
     path.write_text(json.dumps(model, indent=2), encoding="utf-8")
 
 
-def load_truth_records(path: Path) -> List[TruthRecord]:
+def load_truth_records(path: Path) -> list[TruthRecord]:
     if not path.exists():
         raise RuntimeError(f"Truth file not found: {path}")
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -702,14 +704,14 @@ def load_truth_records(path: Path) -> List[TruthRecord]:
     return [TruthRecord.from_dict(entry) for entry in data if isinstance(entry, dict)]
 
 
-def save_truth_records(path: Path, records: List[TruthRecord]) -> None:
+def save_truth_records(path: Path, records: list[TruthRecord]) -> None:
     path.write_text(
         json.dumps([record.to_dict() for record in records], indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
 
 
-def load_existing_output(path: Path) -> Tuple[List[TruthRecord], Dict[str, TruthRecord]]:
+def load_existing_output(path: Path) -> tuple[list[TruthRecord], dict[str, TruthRecord]]:
     if not path.exists():
         return [], {}
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -721,10 +723,10 @@ def load_existing_output(path: Path) -> Tuple[List[TruthRecord], Dict[str, Truth
 
 
 def update_scoring_weights(
-    weights: Dict[str, float],
-    feature_sums: Dict[str, float],
+    weights: dict[str, float],
+    feature_sums: dict[str, float],
     count: int,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     if count == 0:
         return weights
     updated = dict(weights)
@@ -735,9 +737,9 @@ def update_scoring_weights(
 
 
 def update_template_weights(
-    template_weights: Dict[str, float],
-    stats: Dict[str, Dict[str, int]],
-) -> Dict[str, float]:
+    template_weights: dict[str, float],
+    stats: dict[str, dict[str, int]],
+) -> dict[str, float]:
     updated = dict(template_weights)
     for template, counts in stats.items():
         attempts = counts.get("attempts", 0)
@@ -760,19 +762,19 @@ def build_record_id(album: AlbumInput) -> str:
 
 def train_coverage(
     client: SearchBackend,
-    truth_records: List[TruthRecord],
-    weights: Dict[str, float],
-    template_weights: Dict[str, float],
+    truth_records: list[TruthRecord],
+    weights: dict[str, float],
+    template_weights: dict[str, float],
     args: argparse.Namespace,
     rng: random.Random,
-) -> Tuple[Dict[str, float], Dict[str, float], Dict]:
+) -> tuple[dict[str, float], dict[str, float], dict]:
     start_time = time.time()
-    stats: Dict[str, Dict[str, int]] = {}
-    feature_sums: Dict[str, float] = {key: 0.0 for key in weights}
+    stats: dict[str, dict[str, int]] = {}
+    feature_sums: dict[str, float] = {key: 0.0 for key in weights}
     feature_count = 0
 
     train_records = truth_records[: args.train_limit]
-    targets: List[Tuple[str, AlbumInput, str]] = []
+    targets: list[tuple[str, AlbumInput, str]] = []
     for record in train_records:
         tidal_id = record.choice.tidal_id
         if not tidal_id:
@@ -861,19 +863,19 @@ def train_coverage(
     return weights, template_weights, model
 
 
-def album_to_dict(album: AlbumInput) -> Dict:
+def album_to_dict(album: AlbumInput) -> dict:
     return album.to_dict()
 
 
-def candidate_to_dict(candidate: Candidate) -> Dict:
+def candidate_to_dict(candidate: Candidate) -> dict:
     return candidate.to_dict()
 
 
-def query_candidate_to_dict(candidate: QueryCandidate) -> Dict:
+def query_candidate_to_dict(candidate: QueryCandidate) -> dict:
     return candidate.to_dict()
 
 
-def build_source_payload(album: AlbumInput) -> Dict:
+def build_source_payload(album: AlbumInput) -> dict:
     return {
         "file": album.source_file,
         "line": album.source_line,
@@ -886,11 +888,11 @@ def build_source_payload(album: AlbumInput) -> Dict:
 def build_record(
     album: AlbumInput,
     record_id: str,
-    ordered: List[Candidate],
-    selected_queries: List[QueryCandidate],
-    chosen: Optional[Candidate],
-    choice: Dict[str, object] | Choice,
-    weights: Dict[str, float],
+    ordered: list[Candidate],
+    selected_queries: list[QueryCandidate],
+    chosen: Candidate | None,
+    choice: dict[str, object] | Choice,
+    weights: dict[str, float],
     args: argparse.Namespace,
     auto_reason: str,
     mode: str,
@@ -924,7 +926,7 @@ def build_record(
     )
 
 
-def summarize_review_records(records: List[TruthRecord]) -> Dict[str, int]:
+def summarize_review_records(records: list[TruthRecord]) -> dict[str, int]:
     summary = {"auto_selected": 0, "selected": 0, "needs_review": 0, "none": 0, "skip": 0}
     for entry in records:
         status = entry.choice.status
@@ -933,8 +935,8 @@ def summarize_review_records(records: List[TruthRecord]) -> Dict[str, int]:
     return summary
 
 
-def collect_selected_album_ids(records: List[TruthRecord]) -> Tuple[List[Dict[str, str]], int]:
-    selected: List[Dict[str, str]] = []
+def collect_selected_album_ids(records: list[TruthRecord]) -> tuple[list[dict[str, str]], int]:
+    selected: list[dict[str, str]] = []
     seen: set[str] = set()
     unmatched = 0
 

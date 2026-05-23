@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from typing import Iterable, List, Optional
+from collections.abc import Iterable
 
 STOPWORDS = {
     "the",
@@ -210,7 +210,7 @@ def tokenize(text: str) -> set[str]:
     return {t for t in norm.split() if len(t) > 2 and t not in STOPWORDS}
 
 
-def split_tokens(text: str) -> List[str]:
+def split_tokens(text: str) -> list[str]:
     norm = normalize(text)
     return [t for t in norm.split() if len(t) > 1 and t not in STOPWORDS]
 
@@ -231,8 +231,8 @@ def artist_tokens_from_list(values: Iterable[str]) -> set[str]:
     return tokens
 
 
-def extract_instruments(text: str) -> List[str]:
-    instruments: List[str] = []
+def extract_instruments(text: str) -> list[str]:
+    instruments: list[str] = []
     for token in re.split(r"\s+", text or ""):
         raw = token.strip().strip(",;")
         if raw and raw.lower() in INSTRUMENT_ABBREVS:
@@ -268,7 +268,7 @@ def overlap_score(left: set[str], right: set[str]) -> float:
     return len(left & right) / len(left)
 
 
-def extract_year(text: str) -> Optional[str]:
+def extract_year(text: str) -> str | None:
     match = re.search(r"\b(?:19|20)\d{2}\b", text or "")
     return match.group(0) if match else None
 
@@ -280,9 +280,9 @@ def extract_numeric_tokens(values: Iterable[str]) -> set[str]:
     return tokens
 
 
-def merge_unique(values: Iterable[str]) -> List[str]:
+def merge_unique(values: Iterable[str]) -> list[str]:
     seen: set[str] = set()
-    merged: List[str] = []
+    merged: list[str] = []
     for value in values:
         cleaned = " ".join(str(value or "").split()).strip()
         if not cleaned:

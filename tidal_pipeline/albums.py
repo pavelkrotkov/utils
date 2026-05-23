@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from tidal_pipeline.serde import parse_float_dict, parse_list, parse_string
 
@@ -11,24 +11,22 @@ from tidal_pipeline.serde import parse_float_dict, parse_list, parse_string
 @dataclass
 class AlbumInput:
     title: str = ""
-    composers: List[str] = field(default_factory=list)
-    performers: List[str] = field(default_factory=list)
-    ensembles: List[str] = field(default_factory=list)
+    composers: list[str] = field(default_factory=list)
+    performers: list[str] = field(default_factory=list)
+    ensembles: list[str] = field(default_factory=list)
     conductor: str = ""
     label: str = ""
     year: str = ""
-    works: List[str] = field(default_factory=list)
-    instruments: List[str] = field(default_factory=list)
+    works: list[str] = field(default_factory=list)
+    instruments: list[str] = field(default_factory=list)
     source_file: str = ""
-    source_line: Optional[int] = None
+    source_line: int | None = None
     source_raw: str = ""
     source_subsection: str = ""
-    source_context: Dict[str, str] = field(default_factory=dict)
+    source_context: dict[str, str] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(
-        cls, data: Dict[str, Any], source: Optional[Dict[str, Any]] = None
-    ) -> "AlbumInput":
+    def from_dict(cls, data: dict[str, Any], source: dict[str, Any] | None = None) -> AlbumInput:
         source = source or {}
         context = source.get("context", {})
         return cls(
@@ -48,7 +46,7 @@ class AlbumInput:
             source_context=context if isinstance(context, dict) else {},
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "title": self.title,
             "composers": self.composers,
@@ -66,20 +64,20 @@ class AlbumInput:
 class Candidate:
     id: str
     title: str
-    artists: List[str]
+    artists: list[str]
     release_date: str
     copyright: str
     score: float
-    features: Dict[str, float]
-    queries: List[str] = field(default_factory=list)
-    track_count: Optional[int] = None
+    features: dict[str, float]
+    queries: list[str] = field(default_factory=list)
+    track_count: int | None = None
     details_fetched: bool = False
     has_track_count: bool = field(default=True, repr=False)
     has_queries: bool = field(default=True, repr=False)
     has_details_fetched: bool = field(default=True, repr=False)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Candidate":
+    def from_dict(cls, data: dict[str, Any]) -> Candidate:
         return cls(
             id=parse_string(data.get("id")),
             title=parse_string(data.get("title")),
@@ -96,7 +94,7 @@ class Candidate:
             has_details_fetched="details_fetched" in data,
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         result = {
             "id": self.id,
             "title": self.title,
@@ -121,13 +119,13 @@ class QueryCandidate:
     query: str
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "QueryCandidate":
+    def from_dict(cls, data: dict[str, Any]) -> QueryCandidate:
         return cls(
             template=parse_string(data.get("template")),
             query=parse_string(data.get("query")),
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "template": self.template,
             "query": self.query,

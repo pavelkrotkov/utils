@@ -11,14 +11,14 @@ import stat
 import time
 import urllib.parse
 import webbrowser
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Protocol, Tuple, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 import requests
-
 
 TIDAL_AUTH_URL = "https://login.tidal.com/authorize"
 TIDAL_TOKEN_URL = "https://auth.tidal.com/v1/oauth2/token"
@@ -49,7 +49,7 @@ TOKEN_FILE_NAME = "tokens.json"
 class AlbumHit:
     id: str
     title: str
-    artists: List[str]
+    artists: list[str]
     release_date: str
     copyright: str
 
@@ -58,26 +58,26 @@ class AlbumHit:
 class AlbumDetail:
     id: str
     title: str
-    artists: List[str]
+    artists: list[str]
     release_date: str
     copyright: str
-    track_count: Optional[int] = None
+    track_count: int | None = None
 
 
 @runtime_checkable
 class SearchBackend(Protocol):
-    def search_albums(self, query: str, limit: int = 5) -> List[AlbumHit]: ...
+    def search_albums(self, query: str, limit: int = 5) -> list[AlbumHit]: ...
 
-    def get_album_details(self, album_id: str) -> Optional[AlbumDetail]: ...
+    def get_album_details(self, album_id: str) -> AlbumDetail | None: ...
 
 
 class CachedSearchBackend:
     """Offline SearchBackend backed by cached truth-record candidates."""
 
-    def __init__(self, truth_records: Iterable[Dict]) -> None:
-        self._hits_by_query: Dict[str, List[AlbumHit]] = {}
-        self._details_by_id: Dict[str, AlbumDetail] = {}
-        self._seen_by_query: Dict[str, set[str]] = {}
+    def __init__(self, truth_records: Iterable[dict]) -> None:
+        self._hits_by_query: dict[str, list[AlbumHit]] = {}
+        self._details_by_id: dict[str, AlbumDetail] = {}
+        self._seen_by_query: dict[str, set[str]] = {}
 
         for record in truth_records:
             if not isinstance(record, dict):
@@ -111,7 +111,7 @@ class CachedSearchBackend:
         seen.add(hit.id)
         self._hits_by_query.setdefault(query, []).append(hit)
 
-    def _candidate_to_album_hit(self, candidate: Dict) -> AlbumHit:
+    def _candidate_to_album_hit(self, candidate: dict) -> AlbumHit:
         artists = candidate.get("artists") or []
         if isinstance(artists, str):
             artists = [artists]
@@ -123,10 +123,10 @@ class CachedSearchBackend:
             copyright=str(candidate.get("copyright") or ""),
         )
 
-    def search_albums(self, query: str, limit: int = 5) -> List[AlbumHit]:
+    def search_albums(self, query: str, limit: int = 5) -> list[AlbumHit]:
         return list(self._hits_by_query.get(query, []))[:limit]
 
-    def get_album_details(self, album_id: str) -> Optional[AlbumDetail]:
+    def get_album_details(self, album_id: str) -> AlbumDetail | None:
         return self._details_by_id.get(str(album_id))
 
 
@@ -134,7 +134,7 @@ class OAuthHandler:
     def __init__(self) -> None:
         self.code_verifier = self._generate_code_verifier()
         self.code_challenge = self._generate_code_challenge(self.code_verifier)
-        self.auth_code: Optional[str] = None
+        self.auth_code: str | None = None
         self.state = secrets.token_urlsafe(16)
 
     def _generate_code_verifier(self) -> str:
@@ -195,7 +195,7 @@ class OAuthHandler:
             raise RuntimeError("Failed to capture authorization code.")
         return self.auth_code
 
-    def exchange_code(self, code: str) -> Dict:
+    def exchange_code(self, code: str) -> dict:
         data = {
             "grant_type": "authorization_code",
             "client_id": TIDAL_CLIENT_ID,
@@ -211,7 +211,7 @@ class OAuthHandler:
             raise RuntimeError(f"Token exchange failed: {resp.text}")
         return resp.json()
 
-    def refresh_tokens(self, refresh_token: str) -> Dict:
+    def refresh_tokens(self, refresh_token: str) -> dict:
         data = {
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
@@ -226,7 +226,7 @@ class OAuthHandler:
         return resp.json()
 
 
-def save_tokens(tokens: Dict, file_path: Path) -> None:
+def save_tokens(tokens: dict, file_path: Path) -> None:
     file_path.parent.mkdir(parents=True, exist_ok=True)
     if "expires_in" in tokens:
         tokens["expires_at"] = int(time.time()) + tokens["expires_in"]
@@ -235,7 +235,7 @@ def save_tokens(tokens: Dict, file_path: Path) -> None:
     os.chmod(file_path, stat.S_IRUSR | stat.S_IWUSR)
 
 
-def load_tokens(file_path: Path) -> Optional[Dict]:
+def load_tokens(file_path: Path) -> dict | None:
     if not file_path.exists():
         return None
     try:
@@ -244,7 +244,7 @@ def load_tokens(file_path: Path) -> Optional[Dict]:
         return None
 
 
-def token_country_code(token: str) -> Optional[str]:
+def token_country_code(token: str) -> str | None:
     parts = token.split(".")
     if len(parts) < 2:
         return None
@@ -260,7 +260,7 @@ def token_country_code(token: str) -> Optional[str]:
     return None
 
 
-def resolve_country_code(token: str, requested: Optional[str]) -> str:
+def resolve_country_code(token: str, requested: str | None) -> str:
     if requested:
         normalized = requested.strip().upper()
         if normalized and normalized != "AUTO":
@@ -321,14 +321,14 @@ class TidalClient(SearchBackend):
     def _req_v1(
         self,
         path: str,
-        params: Optional[Dict[str, str]] = None,
+        params: dict[str, str] | None = None,
         retry: int = 2,
     ) -> requests.Response:
         url = f"{TIDAL_API_V1_BASE}{path}"
         p = params or {}
         p["countryCode"] = self.country_code
 
-        resp: Optional[requests.Response] = None
+        resp: requests.Response | None = None
         for attempt in range(retry + 1):
             resp = self.session.get(
                 url,
@@ -360,7 +360,7 @@ class TidalClient(SearchBackend):
     def _req_web_v1(
         self,
         path: str,
-        params: Optional[Dict[str, str]] = None,
+        params: dict[str, str] | None = None,
         retry: int = 2,
     ) -> requests.Response:
         url = f"{TIDAL_WEB_V1_BASE}{path}"
@@ -379,7 +379,7 @@ class TidalClient(SearchBackend):
         if TIDAL_WEB_USER_AGENT:
             headers["User-Agent"] = TIDAL_WEB_USER_AGENT
 
-        resp: Optional[requests.Response] = None
+        resp: requests.Response | None = None
         for attempt in range(retry + 1):
             resp = self.session.get(url, params=p, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS)
 
@@ -403,7 +403,7 @@ class TidalClient(SearchBackend):
             raise RuntimeError("Failed to reach TIDAL API.")
         return resp
 
-    def _parse_pages_path(self, path: str) -> Tuple[str, Dict[str, str]]:
+    def _parse_pages_path(self, path: str) -> tuple[str, dict[str, str]]:
         parsed = urllib.parse.urlparse(path)
         if parsed.scheme and parsed.netloc:
             raw_path = parsed.path
@@ -414,7 +414,7 @@ class TidalClient(SearchBackend):
             else:
                 raw_path, raw_query = path, ""
 
-        params: Dict[str, str] = {}
+        params: dict[str, str] = {}
         if raw_query:
             for key, values in urllib.parse.parse_qs(raw_query).items():
                 if values:
@@ -423,12 +423,12 @@ class TidalClient(SearchBackend):
             raw_path = f"/{raw_path}"
         return raw_path, params
 
-    def _extract_tracks_from_pages(self, doc: Dict) -> Tuple[List[str], List[str]]:
-        tracks: List[str] = []
+    def _extract_tracks_from_pages(self, doc: dict) -> tuple[list[str], list[str]]:
+        tracks: list[str] = []
         seen: set[str] = set()
-        data_paths: List[str] = []
+        data_paths: list[str] = []
 
-        def add_track(track_id: Optional[str]) -> None:
+        def add_track(track_id: str | None) -> None:
             if not track_id:
                 return
             tid = str(track_id)
@@ -436,7 +436,7 @@ class TidalClient(SearchBackend):
                 seen.add(tid)
                 tracks.append(tid)
 
-        def handle_item(entry: Dict) -> None:
+        def handle_item(entry: dict) -> None:
             if not isinstance(entry, dict):
                 return
             raw_item = entry.get("item")
@@ -449,7 +449,7 @@ class TidalClient(SearchBackend):
             track_id = item.get("id")
             add_track(track_id)
 
-        def handle_paged_list(paged: Dict) -> None:
+        def handle_paged_list(paged: dict) -> None:
             data_path = paged.get("dataApiPath")
             if data_path:
                 data_paths.append(data_path)
@@ -459,7 +459,7 @@ class TidalClient(SearchBackend):
                     if isinstance(entry, dict):
                         handle_item(entry)
 
-        def handle_module(module: Dict) -> None:
+        def handle_module(module: dict) -> None:
             if module.get("type") != "ALBUM_ITEMS":
                 return
             paged = module.get("pagedList")
@@ -501,15 +501,15 @@ class TidalClient(SearchBackend):
         self,
         method: str,
         path: str,
-        params: Optional[Dict[str, str]] = None,
-        json_data: Optional[Dict] = None,
+        params: dict[str, str] | None = None,
+        json_data: dict | None = None,
         retry: int = 2,
     ) -> requests.Response:
         url = f"{TIDAL_API_BASE}{path}"
         p = params or {}
         p["countryCode"] = self.country_code
 
-        resp: Optional[requests.Response] = None
+        resp: requests.Response | None = None
         for attempt in range(retry + 1):
             resp = self.session.request(
                 method,
@@ -539,7 +539,7 @@ class TidalClient(SearchBackend):
             raise RuntimeError("Failed to reach TIDAL API.")
         return resp
 
-    def search_albums(self, query: str, limit: int = 5) -> List[AlbumHit]:
+    def search_albums(self, query: str, limit: int = 5) -> list[AlbumHit]:
         encoded_query = urllib.parse.quote(query)
         params = {"page[limit]": limit, "include": "albums.artists"}
         try:
@@ -559,7 +559,7 @@ class TidalClient(SearchBackend):
         albums_lookup = {(x["type"], x["id"]): x for x in included if x.get("type") == "albums"}
         artists_lookup = {(x["type"], x["id"]): x for x in included if x.get("type") == "artists"}
 
-        hits: List[AlbumHit] = []
+        hits: list[AlbumHit] = []
         for rel in album_rels:
             if rel.get("type") != "albums":
                 continue
@@ -591,7 +591,7 @@ class TidalClient(SearchBackend):
 
         return hits
 
-    def get_album_details(self, album_id: str) -> Optional[AlbumDetail]:
+    def get_album_details(self, album_id: str) -> AlbumDetail | None:
         try:
             params = {"include": "artists"}
             resp = self._req("GET", f"/albums/{album_id}", params=params)
@@ -610,7 +610,7 @@ class TidalClient(SearchBackend):
         if isinstance(cright, dict):
             cright = str(cright)
 
-        artists: List[str] = []
+        artists: list[str] = []
         included = data.get("included", [])
         artists_lookup = {(x["type"], x["id"]): x for x in included if x.get("type") == "artists"}
         rel_artists = item.get("relationships", {}).get("artists", {}).get("data", [])
@@ -628,12 +628,12 @@ class TidalClient(SearchBackend):
             track_count=attr.get("numberOfItems"),
         )
 
-    def _get_album_tracks_v1(self, album_id: str) -> List[str]:
-        tracks: List[str] = []
+    def _get_album_tracks_v1(self, album_id: str) -> list[str]:
+        tracks: list[str] = []
         seen: set[str] = set()
         offset = 0
         limit = 100
-        total: Optional[int] = None
+        total: int | None = None
 
         while True:
             params = {"limit": str(limit), "offset": str(offset)}
@@ -664,8 +664,8 @@ class TidalClient(SearchBackend):
 
         return tracks
 
-    def _get_album_tracks_web(self, album_id: str) -> List[str]:
-        tracks: List[str] = []
+    def _get_album_tracks_web(self, album_id: str) -> list[str]:
+        tracks: list[str] = []
         seen: set[str] = set()
 
         resp = self._req_web_v1(
@@ -700,8 +700,8 @@ class TidalClient(SearchBackend):
 
         return tracks
 
-    def get_album_tracks(self, album_id: str, expected: Optional[int] = None) -> List[str]:
-        tracks: List[str] = []
+    def get_album_tracks(self, album_id: str, expected: int | None = None) -> list[str]:
+        tracks: list[str] = []
         seen: set[str] = set()
         base_path = f"/albums/{album_id}/relationships/items"
         next_link = base_path
@@ -754,7 +754,7 @@ class TidalClient(SearchBackend):
 
         return tracks
 
-    def get_current_user_id(self) -> Optional[str]:
+    def get_current_user_id(self) -> str | None:
         resp = self._req("GET", "/users/me")
         if resp.status_code != 200:
             return None
@@ -777,7 +777,7 @@ class TidalClient(SearchBackend):
             )
         return user_id
 
-    def add_albums_to_collection(self, collection_id: str, album_ids: List[str]) -> None:
+    def add_albums_to_collection(self, collection_id: str, album_ids: list[str]) -> None:
         chunk_size = 50
         now = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
         unique_ids = list(dict.fromkeys(album_ids))
@@ -798,7 +798,7 @@ class TidalClient(SearchBackend):
                     f"Failed to add albums to collection: {resp.status_code} {resp.text}"
                 )
 
-    def add_tracks_to_playlist(self, playlist_id: str, track_ids: List[str]) -> None:
+    def add_tracks_to_playlist(self, playlist_id: str, track_ids: list[str]) -> None:
         chunk_size = 20
         for i in range(0, len(track_ids), chunk_size):
             chunk = track_ids[i : i + chunk_size]
@@ -827,8 +827,8 @@ class TidalClient(SearchBackend):
 
         raise RuntimeError("Failed to create playlist.")
 
-    def list_playlists(self, limit: int = 100) -> List[Dict]:
-        playlists: List[Dict] = []
+    def list_playlists(self, limit: int = 100) -> list[dict]:
+        playlists: list[dict] = []
         next_link = f"/my/playlists?page[limit]={limit}"
 
         while next_link:
@@ -845,8 +845,8 @@ class TidalClient(SearchBackend):
 
         return playlists
 
-    def _fetch_track_album_map(self, track_ids: List[str]) -> Dict[str, List[str]]:
-        album_map: Dict[str, List[str]] = {}
+    def _fetch_track_album_map(self, track_ids: list[str]) -> dict[str, list[str]]:
+        album_map: dict[str, list[str]] = {}
         chunk_size = 50
         unique_ids = list(dict.fromkeys(track_ids))
 
@@ -862,7 +862,7 @@ class TidalClient(SearchBackend):
                 rel = item.get("relationships", {}).get("albums", {}).get("data", [])
                 if isinstance(rel, dict):
                     rel = [rel]
-                album_ids: List[str] = []
+                album_ids: list[str] = []
                 for entry in rel:
                     if not isinstance(entry, dict):
                         continue
@@ -874,9 +874,9 @@ class TidalClient(SearchBackend):
 
         return album_map
 
-    def get_playlist_track_album_ids(self, playlist_id: str) -> Tuple[List[str], List[str]]:
-        track_ids: List[str] = []
-        album_ids: List[str] = []
+    def get_playlist_track_album_ids(self, playlist_id: str) -> tuple[list[str], list[str]]:
+        track_ids: list[str] = []
+        album_ids: list[str] = []
         next_link = f"/playlists/{playlist_id}/relationships/items"
 
         while next_link:
