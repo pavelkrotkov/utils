@@ -26,7 +26,6 @@ from pdf_convert_common import (
     resolve_output_path,
 )
 
-
 DEFAULT_DPI = 150
 DEFAULT_IMAGE_FORMAT = "png"
 

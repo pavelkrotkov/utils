@@ -40,7 +40,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from audio_common import (
     ProgressReporter,
@@ -49,7 +49,6 @@ from audio_common import (
     run_with_progress,
 )
 from audio_transcript import TranscriptSegment, emit_transcript
-
 
 # ───────────────────────────────────────────────────────────────────────────────
 # Environment setup
@@ -97,9 +96,9 @@ class PyannoteProgressHook:
         self,
         step_name: str,
         step_artifact: Any,
-        file: Optional[Dict[str, Any]] = None,
-        total: Optional[int] = None,
-        completed: Optional[int] = None,
+        file: dict[str, Any] | None = None,
+        total: int | None = None,
+        completed: int | None = None,
     ) -> None:
         del step_artifact, file
 
@@ -137,7 +136,7 @@ def _has_time(seg: Any) -> bool:
     return False
 
 
-def _seg_start(seg: Dict[str, Any]) -> Optional[float]:
+def _seg_start(seg: dict[str, Any]) -> float | None:
     """Extract start time (seconds) from segment, or None if unavailable."""
     if "start" in seg:
         return float(seg["start"])
@@ -146,13 +145,12 @@ def _seg_start(seg: Dict[str, Any]) -> Optional[float]:
     if "ts" in seg:
         return float(seg["ts"])
     # whisper-cpp format: offsets.from in milliseconds
-    if "offsets" in seg and isinstance(seg["offsets"], dict):
-        if "from" in seg["offsets"]:
-            return float(seg["offsets"]["from"]) * 0.001
+    if "offsets" in seg and isinstance(seg["offsets"], dict) and "from" in seg["offsets"]:
+        return float(seg["offsets"]["from"]) * 0.001
     return None
 
 
-def _seg_end(seg: Dict[str, Any]) -> Optional[float]:
+def _seg_end(seg: dict[str, Any]) -> float | None:
     """Extract end time (seconds) from segment, or None if unavailable."""
     if "end" in seg:
         return float(seg["end"])
@@ -161,9 +159,8 @@ def _seg_end(seg: Dict[str, Any]) -> Optional[float]:
     if "te" in seg:
         return float(seg["te"])
     # whisper-cpp format: offsets.to in milliseconds
-    if "offsets" in seg and isinstance(seg["offsets"], dict):
-        if "to" in seg["offsets"]:
-            return float(seg["offsets"]["to"]) * 0.001
+    if "offsets" in seg and isinstance(seg["offsets"], dict) and "to" in seg["offsets"]:
+        return float(seg["offsets"]["to"]) * 0.001
     return None
 
 
@@ -178,7 +175,7 @@ def _seg_text(seg: Any) -> str:
     return ""
 
 
-def _normalize_segments(raw: Any) -> List[Dict[str, Any]]:
+def _normalize_segments(raw: Any) -> list[dict[str, Any]]:
     """
     Normalize whisper JSON 'segments' field to a list of dicts.
     Handles:
@@ -224,7 +221,7 @@ def _normalize_segments(raw: Any) -> List[Dict[str, Any]]:
 
 def load_whisper_segments(
     json_path: Path, verbose: bool = False
-) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+) -> tuple[list[dict[str, Any]], str | None]:
     """
     Load and normalize whisper-cpp JSON output.
     Returns: (segments_list, fallback_text)
@@ -236,7 +233,7 @@ def load_whisper_segments(
         print(f"ERROR: Whisper JSON not found: {json_path}", file=sys.stderr)
         sys.exit(1)
 
-    with open(json_path, "r", encoding="utf-8") as f:
+    with open(json_path, encoding="utf-8") as f:
         try:
             data = json.load(f)
         except json.JSONDecodeError as e:
@@ -270,7 +267,7 @@ def load_whisper_segments(
     # Sort by time if any segment has timestamps
     if any(_has_time(s) for s in segments):
 
-        def sort_key(s: Dict[str, Any]) -> Tuple[float, float]:
+        def sort_key(s: dict[str, Any]) -> tuple[float, float]:
             start = _seg_start(s)
             end = _seg_end(s)
             return (start if start is not None else 0.0, end if end is not None else 0.0)
@@ -302,7 +299,7 @@ def print_pyannote_access_help() -> None:
     )
 
 
-def load_pyannote(model_name: str, hf_token: Optional[str], verbose: bool = False) -> Any:
+def load_pyannote(model_name: str, hf_token: str | None, verbose: bool = False) -> Any:
     """
     Load pyannote pipeline with fallback from 3.1 to community-1 if needed.
     Returns: Pipeline instance or exits on failure.
@@ -375,11 +372,11 @@ def load_pyannote(model_name: str, hf_token: Optional[str], verbose: bool = Fals
 def run_diarization(
     pipeline: Any,
     audio_path: Path,
-    num_speakers: Optional[int],
-    min_speakers: Optional[int],
-    max_speakers: Optional[int],
+    num_speakers: int | None,
+    min_speakers: int | None,
+    max_speakers: int | None,
     verbose: bool = False,
-    progress: Optional[ProgressReporter] = None,
+    progress: ProgressReporter | None = None,
 ) -> Any:
     """Run pyannote diarization on audio file. Returns Annotation."""
     try:
@@ -389,7 +386,7 @@ def run_diarization(
         print("Install with: pip install torch pyannote.audio", file=sys.stderr)
         sys.exit(1)
 
-    kwargs: Dict[str, int] = {}
+    kwargs: dict[str, int] = {}
     if num_speakers is not None:
         kwargs["num_speakers"] = num_speakers
     if min_speakers is not None:
@@ -420,7 +417,7 @@ def run_diarization(
         return diarization_output
 
     if hasattr(diarization_output, "speaker_diarization"):
-        speaker_diarization = getattr(diarization_output, "speaker_diarization")
+        speaker_diarization = diarization_output.speaker_diarization
         if isinstance(speaker_diarization, Annotation):
             if verbose:
                 print(
@@ -451,10 +448,10 @@ def overlap(a0: float, a1: float, b0: float, b1: float) -> float:
 
 
 def merge_asr_turn_segments(
-    asr_segments: List[Tuple[float, float, str]],
-    speaker_turns: List[Tuple[float, float, str]],
+    asr_segments: list[tuple[float, float, str]],
+    speaker_turns: list[tuple[float, float, str]],
     verbose: bool = False,
-) -> List[TranscriptSegment]:
+) -> list[TranscriptSegment]:
     """
     Merge timed ASR tuples with speaker-turn tuples and return transcript segments.
 
@@ -463,7 +460,7 @@ def merge_asr_turn_segments(
     first appearance), which `emit_diarized_txt` later maps to user-supplied
     names by index.
     """
-    seg_speakers: List[Tuple[float, float, str, Optional[str]]] = []
+    seg_speakers: list[tuple[float, float, str, str | None]] = []
     for s_start, s_end, s_text in asr_segments:
         best_speaker = None
         best_overlap = 0.0
@@ -476,7 +473,7 @@ def merge_asr_turn_segments(
 
         seg_speakers.append((s_start, s_end, s_text, best_speaker))
 
-    speaker_map: Dict[str, str] = {}
+    speaker_map: dict[str, str] = {}
     for _, _, _, speaker in seg_speakers:
         if speaker and speaker not in speaker_map:
             speaker_map[speaker] = f"SPEAKER_{len(speaker_map):02d}"
@@ -499,18 +496,18 @@ def merge_asr_turn_segments(
 
 
 def merge_asr_turns(
-    asr_segments: List[Tuple[float, float, str]],
-    speaker_turns: List[Tuple[float, float, str]],
+    asr_segments: list[tuple[float, float, str]],
+    speaker_turns: list[tuple[float, float, str]],
     style: str,
-    speaker_names: Optional[List[str]],
+    speaker_names: list[str] | None,
     verbose: bool = False,
-) -> List[str]:
+) -> list[str]:
     """Merge timed ASR and speaker-turn tuples into legacy transcript lines."""
     segments = merge_asr_turn_segments(asr_segments, speaker_turns, verbose)
     if style == "labels":
         return emit_transcript(segments, "diarized-txt", speaker_names).splitlines()
 
-    lines: List[str] = []
+    lines: list[str] = []
     for _, group in itertools.groupby(segments, key=lambda segment: segment.speaker):
         texts = [segment.text for segment in group if segment.text]
         combined = " ".join(texts).strip()
@@ -521,10 +518,10 @@ def merge_asr_turns(
 
 
 def merge_asr_with_diar(
-    segments: List[Dict[str, Any]],
+    segments: list[dict[str, Any]],
     diarization: Any,
     verbose: bool = False,
-) -> List[TranscriptSegment]:
+) -> list[TranscriptSegment]:
     """
     Merge ASR segments with diarization by assigning each ASR segment to best-matching speaker.
 
@@ -564,7 +561,7 @@ def merge_asr_with_diar(
 # ───────────────────────────────────────────────────────────────────────────────
 
 
-def plain_transcript(segments: List[Dict[str, Any]], fallback_text: Optional[str]) -> str:
+def plain_transcript(segments: list[dict[str, Any]], fallback_text: str | None) -> str:
     """Produce plain transcript from ASR segments or fallback text."""
     if fallback_text:
         return fallback_text.strip()
@@ -573,9 +570,9 @@ def plain_transcript(segments: List[Dict[str, Any]], fallback_text: Optional[str
 
 
 def transcript_segments_from_whisper(
-    segments: List[Dict[str, Any]],
-    fallback_text: Optional[str],
-) -> List[TranscriptSegment]:
+    segments: list[dict[str, Any]],
+    fallback_text: str | None,
+) -> list[TranscriptSegment]:
     """Convert normalized whisper segment dictionaries to shared transcript segments."""
     transcript_segments = []
     for seg in segments:
@@ -615,7 +612,7 @@ def run_ffmpeg_convert(
     ffmpeg_bin: str,
     ffprobe_bin: str,
     verbose: bool,
-    progress: Optional[ProgressReporter] = None,
+    progress: ProgressReporter | None = None,
 ) -> None:
     """Convert input media to mono 16 kHz WAV using ffmpeg."""
     convert_to_pcm16k_mono(
@@ -659,7 +656,7 @@ def run_whisper(
     threads: int,
     language: str,
     verbose: bool,
-    progress: Optional[ProgressReporter] = None,
+    progress: ProgressReporter | None = None,
 ) -> None:
     """Run whisper-cpp to produce JSON output."""
     cmd = [
@@ -684,7 +681,7 @@ def run_whisper(
 
     progress_pattern = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 
-    def parse_progress(line: str) -> Optional[float]:
+    def parse_progress(line: str) -> float | None:
         progress_match = progress_pattern.search(line) if "progress" in line.lower() else None
         if not progress_match:
             return None

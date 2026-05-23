@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from tidal_pipeline.albums import AlbumInput, Candidate, QueryCandidate
 from tidal_pipeline.serde import parse_dict, parse_list, parse_string
@@ -15,10 +15,10 @@ class Choice:
     tidal_id: str = ""
     selected_at: str = ""
     manual: bool = False
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Choice":
+    def from_dict(cls, data: dict[str, Any]) -> Choice:
         known = {"status", "tidal_id", "selected_at", "manual"}
         return cls(
             status=parse_string(data.get("status")),
@@ -28,7 +28,7 @@ class Choice:
             extra={key: value for key, value in data.items() if key not in known},
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         result = {
             "status": self.status,
             "tidal_id": self.tidal_id,
@@ -42,19 +42,19 @@ class Choice:
 @dataclass
 class TruthRecord:
     record_id: str
-    source: Dict[str, Any]
+    source: dict[str, Any]
     album: AlbumInput
-    queries: List[str]
-    query_candidates: List[QueryCandidate]
-    candidates: List[Candidate]
-    top_candidates: List[Candidate]
+    queries: list[str]
+    query_candidates: list[QueryCandidate]
+    candidates: list[Candidate]
+    top_candidates: list[Candidate]
     choice: Choice
-    chosen: Optional[Candidate]
-    review: Dict[str, Any]
-    meta: Dict[str, Any]
+    chosen: Candidate | None
+    review: dict[str, Any]
+    meta: dict[str, Any]
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "TruthRecord":
+    def from_dict(cls, data: dict[str, Any]) -> TruthRecord:
         source = parse_dict(data.get("source"))
         album_data = parse_dict(data.get("album")) or data
         choice_data = parse_dict(data.get("choice"))
@@ -90,15 +90,15 @@ class TruthRecord:
         cls,
         album: AlbumInput,
         record_id: str,
-        ordered: List[Candidate],
-        selected_queries: List[QueryCandidate],
-        chosen: Optional[Candidate],
+        ordered: list[Candidate],
+        selected_queries: list[QueryCandidate],
+        chosen: Candidate | None,
         choice: Choice,
         *,
-        top: Optional[int] = None,
-        review: Dict[str, Any],
-        meta: Dict[str, Any],
-    ) -> "TruthRecord":
+        top: int | None = None,
+        review: dict[str, Any],
+        meta: dict[str, Any],
+    ) -> TruthRecord:
         return cls(
             record_id=record_id,
             source={
@@ -120,7 +120,7 @@ class TruthRecord:
         )
 
     @property
-    def source_line(self) -> Optional[int]:
+    def source_line(self) -> int | None:
         line = self.source.get("line")
         return int(line) if line else None
 
@@ -136,7 +136,7 @@ class TruthRecord:
             return self.chosen.title
         return self.album.title
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "record_id": self.record_id,
             "source": self.source,

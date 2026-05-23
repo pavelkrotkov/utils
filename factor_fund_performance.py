@@ -29,7 +29,6 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 
-
 USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -66,7 +65,7 @@ def fetch_soup(url: str, settings: FetchSettings) -> BeautifulSoup:
             response = requests.get(url, headers=get_random_headers(), timeout=settings.timeout)
             response.raise_for_status()
             return BeautifulSoup(response.text, "lxml")
-        except Exception as exc:  # noqa: BLE001 - surface helpful errors with retries
+        except requests.RequestException as exc:
             last_exc = exc
             if attempt < settings.retries:
                 time.sleep(settings.backoff * attempt)
@@ -288,7 +287,9 @@ def adjust_performance_table(
 
     adjusted = performance.copy()
     for column, fx_return in fx_returns.items():
-        adjusted[column] = adjusted[column].apply(lambda value: adjust_value(value, fx_return))
+        adjusted[column] = adjusted[column].apply(
+            lambda value, fx_return=fx_return: adjust_value(value, fx_return)
+        )
     return adjusted, target_currency, True
 
 
@@ -392,10 +393,7 @@ def parse_tickers_from_args(values: list[str] | None) -> list[str]:
 
 
 def parse_tickers_from_file(path: str) -> list[str]:
-    if path == "-":
-        content = sys.stdin.read()
-    else:
-        content = Path(path).read_text(encoding="utf-8")
+    content = sys.stdin.read() if path == "-" else Path(path).read_text(encoding="utf-8")
 
     tickers: list[str] = []
     for line in content.splitlines():
@@ -553,7 +551,7 @@ def main() -> int:
     fx_rates: dict[date, dict[str, float]] | None = None
     try:
         fx_rates = fetch_ecb_rates(settings)
-    except Exception as exc:  # noqa: BLE001 - FX conversion is optional
+    except requests.RequestException as exc:
         if not args.quiet:
             print(f"warning: FX rates unavailable ({exc})", file=sys.stderr)
     frames: list[pd.DataFrame] = []

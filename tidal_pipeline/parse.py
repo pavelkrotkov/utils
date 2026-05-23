@@ -6,7 +6,6 @@ import email
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 from bs4 import BeautifulSoup
 
@@ -37,7 +36,7 @@ class ParsedCandidate:
     label_line: str = ""
     raw_text: str = ""
     subsection: str = ""
-    line_number: Optional[int] = None
+    line_number: int | None = None
     source_file: str = ""
 
 
@@ -47,14 +46,12 @@ def should_skip_candidate(work_title: str) -> bool:
         return True
     if re.match(r"^\d{4}$", work):
         return True
-    if "Related Articles" in work:
-        return True
-    return False
+    return "Related Articles" in work
 
 
 def add_candidate(
     candidate: ParsedCandidate,
-    candidates: List[ParsedCandidate],
+    candidates: list[ParsedCandidate],
     seen_fingerprints: set[tuple[str, str, str]],
 ) -> None:
     if should_skip_candidate(candidate.work_title_hint):
@@ -70,7 +67,7 @@ def add_candidate(
     candidates.append(candidate)
 
 
-def parse_mhtml(file_path: Path) -> Tuple[str, List[ParsedCandidate]]:
+def parse_mhtml(file_path: Path) -> tuple[str, list[ParsedCandidate]]:
     with file_path.open("rb") as handle:
         msg = email.message_from_binary_file(handle)
 
@@ -103,7 +100,7 @@ def parse_mhtml(file_path: Path) -> Tuple[str, List[ParsedCandidate]]:
     elif soup.find("h1"):
         page_title = soup.find("h1").get_text(strip=True)
 
-    candidates: List[ParsedCandidate] = []
+    candidates: list[ParsedCandidate] = []
     seen_fingerprints: set[tuple[str, str, str]] = set()
 
     for header in soup.find_all(["h2", "h3"]):
@@ -200,14 +197,14 @@ def clean_markdown_heading(line: str) -> str:
 
 
 def candidate_from_markdown_block(
-    block: List[Tuple[int, str]],
+    block: list[tuple[int, str]],
     file_path: Path,
-) -> Optional[ParsedCandidate]:
+) -> ParsedCandidate | None:
     review_pos = next((idx for idx, (_, line) in enumerate(block) if is_review_line(line)), -1)
     if review_pos < 0:
         return None
 
-    title_entries: List[Tuple[int, str, str]] = []
+    title_entries: list[tuple[int, str, str]] = []
     for line_number, line in block[: review_pos + 1]:
         stripped = line.strip()
         if not stripped.startswith("##"):
@@ -278,7 +275,7 @@ def candidate_from_markdown_block(
     )
 
 
-def parse_markdown_blocks(file_path: Path) -> Tuple[str, List[ParsedCandidate]]:
+def parse_markdown_blocks(file_path: Path) -> tuple[str, list[ParsedCandidate]]:
     lines = file_path.read_text(encoding="utf-8").splitlines()
     page_title = file_path.stem
     for line in lines:
@@ -292,8 +289,8 @@ def parse_markdown_blocks(file_path: Path) -> Tuple[str, List[ParsedCandidate]]:
                 page_title = cleaned
                 break
 
-    blocks: List[List[Tuple[int, str]]] = []
-    current: List[Tuple[int, str]] = []
+    blocks: list[list[tuple[int, str]]] = []
+    current: list[tuple[int, str]] = []
     for line_number, line in enumerate(lines, start=1):
         stripped = line.strip()
         if stripped.startswith("## Related Reviews") or stripped.startswith("## Related News"):
@@ -307,7 +304,7 @@ def parse_markdown_blocks(file_path: Path) -> Tuple[str, List[ParsedCandidate]]:
     if current:
         blocks.append(current)
 
-    candidates: List[ParsedCandidate] = []
+    candidates: list[ParsedCandidate] = []
     seen_fingerprints: set[tuple[str, str, str]] = set()
     for block in blocks:
         candidate = candidate_from_markdown_block(block, file_path)
@@ -317,7 +314,7 @@ def parse_markdown_blocks(file_path: Path) -> Tuple[str, List[ParsedCandidate]]:
     return page_title, candidates
 
 
-def parse_markdown_legacy(file_path: Path) -> Tuple[str, List[ParsedCandidate]]:
+def parse_markdown_legacy(file_path: Path) -> tuple[str, list[ParsedCandidate]]:
     lines = file_path.read_text(encoding="utf-8").splitlines()
     page_title = file_path.stem
     for line in lines:
@@ -325,7 +322,7 @@ def parse_markdown_legacy(file_path: Path) -> Tuple[str, List[ParsedCandidate]]:
             page_title = line.strip()[2:].strip()
             break
 
-    candidates: List[ParsedCandidate] = []
+    candidates: list[ParsedCandidate] = []
     seen_fingerprints: set[tuple[str, str, str]] = set()
     i = 0
 
@@ -433,14 +430,14 @@ def parse_markdown_legacy(file_path: Path) -> Tuple[str, List[ParsedCandidate]]:
     return page_title, candidates
 
 
-def parse_markdown(file_path: Path) -> Tuple[str, List[ParsedCandidate]]:
+def parse_markdown(file_path: Path) -> tuple[str, list[ParsedCandidate]]:
     page_title, candidates = parse_markdown_blocks(file_path)
     if candidates:
         return page_title, candidates
     return parse_markdown_legacy(file_path)
 
 
-def extract_candidates(file_path: Path) -> Tuple[str, List[ParsedCandidate]]:
+def extract_candidates(file_path: Path) -> tuple[str, list[ParsedCandidate]]:
     ext = file_path.suffix.lower()
     if ext in {".mhtml", ".mht"}:
         return parse_mhtml(file_path)
@@ -449,7 +446,7 @@ def extract_candidates(file_path: Path) -> Tuple[str, List[ParsedCandidate]]:
     raise ValueError(f"Unsupported file extension: {ext}")
 
 
-def split_performer_hint(text: str) -> Tuple[List[str], List[str], str, List[str]]:
+def split_performer_hint(text: str) -> tuple[list[str], list[str], str, list[str]]:
     if not text:
         return [], [], "", []
 
@@ -464,12 +461,12 @@ def split_performer_hint(text: str) -> Tuple[List[str], List[str], str, List[str
             conductor = candidate
             left = left_candidate
 
-    performers: List[str] = []
-    ensembles: List[str] = []
+    performers: list[str] = []
+    ensembles: list[str] = []
 
     if instruments:
         tokens = [token.strip(",;") for token in left.split() if token.strip(",;")]
-        current: List[str] = []
+        current: list[str] = []
         for idx, token in enumerate(tokens):
             lower = token.lower()
             if lower in INSTRUMENT_ABBREVS:
@@ -489,7 +486,7 @@ def split_performer_hint(text: str) -> Tuple[List[str], List[str], str, List[str
             performers.append(" ".join(current))
         return performers, ensembles, conductor, instruments
 
-    segments: List[str] = []
+    segments: list[str] = []
     for chunk in left.split(";"):
         chunk = chunk.strip()
         if not chunk:
@@ -510,12 +507,12 @@ def split_performer_hint(text: str) -> Tuple[List[str], List[str], str, List[str
     return performers, ensembles, conductor, instruments
 
 
-def parse_heading_metadata(heading_line: str, fallback_title: str) -> Tuple[List[str], str, str]:
+def parse_heading_metadata(heading_line: str, fallback_title: str) -> tuple[list[str], str, str]:
     cleaned_heading = clean_markdown_inline(re.sub(r"^#{1,6}\s*", "", heading_line or "")).strip()
     bold_segments = [
         clean_markdown_inline(seg) for seg in re.findall(r"\*\*(.+?)\*\*", heading_line or "")
     ]
-    composers: List[str] = []
+    composers: list[str] = []
     for segment in bold_segments:
         composers.extend(part.strip() for part in re.split(r"\s*[.;/]\s*", segment) if part.strip())
     composers = merge_unique(composers)
@@ -524,7 +521,7 @@ def parse_heading_metadata(heading_line: str, fallback_title: str) -> Tuple[List
     remainder = clean_markdown_inline(remainder).strip(" -–—:;,.")
     if not composers and cleaned_heading:
         words = cleaned_heading.split()
-        composer_words: List[str] = []
+        composer_words: list[str] = []
         for word in words:
             stripped = re.sub(r"[^A-Za-z.]", "", word)
             if not stripped:
@@ -547,8 +544,8 @@ def extract_review_slug(subsection: str) -> str:
     return match.group(1).strip() if match else ""
 
 
-def extract_italicized_phrases(text: str) -> List[str]:
-    phrases: List[str] = []
+def extract_italicized_phrases(text: str) -> list[str]:
+    phrases: list[str] = []
     for match in re.findall(r"_([^_]+)_", text or ""):
         cleaned = clean_markdown_inline(match).strip(" -–—:;,.")
         if normalize(cleaned) in {"gramophone", "review"}:
@@ -558,7 +555,7 @@ def extract_italicized_phrases(text: str) -> List[str]:
     return merge_unique(phrases)
 
 
-def build_slug_phrases(slug: str, remove_terms: List[str]) -> List[str]:
+def build_slug_phrases(slug: str, remove_terms: list[str]) -> list[str]:
     if not slug:
         return []
     tokens = [token for token in slug.replace("-", " ").split() if token]
@@ -570,9 +567,9 @@ def build_slug_phrases(slug: str, remove_terms: List[str]) -> List[str]:
     return merge_unique(phrases)
 
 
-def strip_instrument_tokens(text: str, instruments: List[str]) -> str:
+def strip_instrument_tokens(text: str, instruments: list[str]) -> str:
     lowered_instruments = {normalize(value) for value in instruments if value}
-    tokens: List[str] = []
+    tokens: list[str] = []
     for token in clean_markdown_inline(text).split():
         norm = normalize(token)
         mapped = normalize(INSTRUMENT_MAP.get(norm, norm))
@@ -583,28 +580,29 @@ def strip_instrument_tokens(text: str, instruments: List[str]) -> str:
 
 
 def prune_artist_values(
-    values: List[str],
-    peer_values: List[str],
-    instruments: List[str],
-) -> List[str]:
+    values: list[str],
+    peer_values: list[str],
+    instruments: list[str],
+) -> list[str]:
     peers = [normalize(value) for value in peer_values if value]
     instrument_tokens = {normalize(value) for value in instruments if value}
-    kept: List[str] = []
+    kept: list[str] = []
     for value in merge_unique(values):
         norm = normalize(value)
         if not norm:
             continue
-        if any(token in instrument_tokens for token in norm.split()):
-            if any(peer and peer in norm and peer != norm for peer in peers):
-                continue
+        if any(token in instrument_tokens for token in norm.split()) and any(
+            peer and peer in norm and peer != norm for peer in peers
+        ):
+            continue
         if any(peer and peer in norm and peer != norm for peer in peers):
             continue
         kept.append(value)
     return merge_unique(kept)
 
 
-def prune_composer_values(values: List[str], title: str, full_title: str) -> List[str]:
-    kept: List[str] = []
+def prune_composer_values(values: list[str], title: str, full_title: str) -> list[str]:
+    kept: list[str] = []
     title_norm = normalize(title)
     full_title_norm = normalize(full_title)
     for value in merge_unique(values):
@@ -622,7 +620,7 @@ def prune_composer_values(values: List[str], title: str, full_title: str) -> Lis
 def parse_performer_metadata(
     performer_line: str,
     label_line: str,
-) -> Tuple[List[str], List[str], str, List[str], str]:
+) -> tuple[list[str], list[str], str, list[str], str]:
     raw_line = (performer_line or "").strip()
     label = ""
     match = re.search(r"\(([^)]+)\)\s*$", raw_line or label_line or "")
@@ -639,9 +637,9 @@ def parse_performer_metadata(
     ]
     bold_segments = [segment for segment in bold_segments if segment]
 
-    performers: List[str] = []
-    ensembles: List[str] = []
-    conductor_parts: List[str] = []
+    performers: list[str] = []
+    ensembles: list[str] = []
+    conductor_parts: list[str] = []
 
     if len(bold_segments) > 1:
         for segment in bold_segments:
@@ -787,6 +785,6 @@ def candidate_to_entry(candidate: ParsedCandidate) -> dict:
     }
 
 
-def parse_file_to_entries(file_path: Path) -> List[dict]:
+def parse_file_to_entries(file_path: Path) -> list[dict]:
     _, candidates = extract_candidates(file_path)
     return [candidate_to_entry(candidate) for candidate in candidates]

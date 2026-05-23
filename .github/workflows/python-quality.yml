@@ -1,0 +1,56 @@
+name: Python Quality
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Run Ruff check
+        run: uv run ruff check --output-format=github .
+
+      - name: Run Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Run ty type check
+        run: >
+          uv run ty check --output-format=github
+          --exclude "tidal_pipeline"
+          --exclude "tidal_match_from_json.py"
+          --exclude "test_tidal_search_backend.py"
+          --exclude "factor_fund_performance.py"
+          --exclude "audio_transcribe_vibevoice.py"
+          --exclude "audio_transcribe_whisper.py"
+          --exclude "audio_transcript.py"
+          --exclude "pdf_convert_llamaparse.py"
+          --exclude "test_audio_common.py"
+          .

@@ -38,7 +38,6 @@ from pdf_convert_common import (
     resolve_output_path,
 )
 
-
 DEFAULT_TIER = "cost_effective"
 DEFAULT_VERSION = "latest"
 DEFAULT_CHUNK_PAGES = 100
