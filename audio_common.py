@@ -10,10 +10,9 @@ import threading
 import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Optional
 
 
-def format_duration(seconds: Optional[float]) -> str:
+def format_duration(seconds: float | None) -> str:
     """Format a duration in seconds as MM:SS or H:MM:SS."""
     if seconds is None:
         return "unknown"
@@ -27,7 +26,7 @@ def format_duration(seconds: Optional[float]) -> str:
         return "unknown"
 
     try:
-        seconds_int = int(round(seconds_float))
+        seconds_int = round(seconds_float)
     except (OverflowError, ValueError):
         return "unknown"
     hours, remainder = divmod(seconds_int, 3600)
@@ -50,7 +49,7 @@ class ProgressReporter:
         if self.enabled:
             print(f"INFO: {message}", file=sys.stderr, flush=True)
 
-    def start(self, stage: str, detail: Optional[str] = None) -> None:
+    def start(self, stage: str, detail: str | None = None) -> None:
         if not self.enabled:
             return
 
@@ -67,10 +66,10 @@ class ProgressReporter:
     def update(
         self,
         stage: str,
-        completed: Optional[float] = None,
-        total: Optional[float] = None,
+        completed: float | None = None,
+        total: float | None = None,
         *,
-        detail: Optional[str] = None,
+        detail: str | None = None,
         force: bool = False,
         show_count: bool = True,
     ) -> None:
@@ -114,7 +113,7 @@ class ProgressReporter:
 
         print(f"INFO: {stage}: {', '.join(parts)}", file=sys.stderr, flush=True)
 
-    def finish(self, stage: str, detail: Optional[str] = None) -> None:
+    def finish(self, stage: str, detail: str | None = None) -> None:
         if not self.enabled:
             return
 
@@ -136,7 +135,7 @@ def print_process_tail(lines: Sequence[str], label: str) -> None:
         print(f"  {line}", file=sys.stderr)
 
 
-def parse_ffmpeg_timestamp(value: str) -> Optional[float]:
+def parse_ffmpeg_timestamp(value: str) -> float | None:
     """Parse ffmpeg progress timestamps like HH:MM:SS.microseconds."""
     if not value or value == "N/A":
         return None
@@ -159,7 +158,7 @@ def probe_media_duration(
     input_path: Path,
     ffprobe_bin: str,
     verbose: bool = False,
-) -> Optional[float]:
+) -> float | None:
     """Return media duration in seconds when ffprobe is available."""
     if not shutil.which(ffprobe_bin) and not Path(ffprobe_bin).exists():
         if verbose:
@@ -181,8 +180,7 @@ def probe_media_duration(
         result = subprocess.run(
             cmd,
             check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
         )
     except (FileNotFoundError, subprocess.CalledProcessError):
@@ -218,13 +216,13 @@ def validate_nonempty_output(path: Path, label: str) -> None:
 def run_with_progress(
     cmd: Sequence[str],
     label: str,
-    parse_progress_line: Callable[[str], Optional[float]],
+    parse_progress_line: Callable[[str], float | None],
     *,
-    reporter: Optional[ProgressReporter] = None,
+    reporter: ProgressReporter | None = None,
     verbose: bool = False,
-    start_detail: Optional[str] = None,
-    finish_detail: Optional[str] = None,
-    missing_binary_label: Optional[str] = None,
+    start_detail: str | None = None,
+    finish_detail: str | None = None,
+    missing_binary_label: str | None = None,
     force_final_percent: bool = False,
     popen_factory: Callable[..., subprocess.Popen[str]] = subprocess.Popen,
 ) -> list[str]:
@@ -233,7 +231,7 @@ def run_with_progress(
         reporter.start(label, detail=start_detail)
 
     output_tail: list[str] = []
-    last_percent: Optional[float] = None
+    last_percent: float | None = None
 
     try:
         process = popen_factory(
@@ -298,7 +296,7 @@ def convert_to_pcm16k_mono(
     input_path: Path,
     output_wav: Path,
     *,
-    progress: Optional[ProgressReporter] = None,
+    progress: ProgressReporter | None = None,
     ffmpeg_bin: str = "ffmpeg",
     ffprobe_bin: str = "ffprobe",
     verbose: bool = False,
@@ -336,13 +334,13 @@ def convert_to_pcm16k_mono(
     if verbose:
         print(f"INFO: Running ffmpeg: {' '.join(cmd)}", file=sys.stderr)
 
-    def parse_progress(line: str) -> Optional[float]:
+    def parse_progress(line: str) -> float | None:
         nonlocal saw_ffmpeg_progress
         if "=" not in line:
             return None
 
         key, value = line.split("=", 1)
-        processed_seconds: Optional[float] = None
+        processed_seconds: float | None = None
         if key in {"out_time_ms", "out_time_us"}:
             try:
                 processed_seconds = int(value) / 1_000_000.0

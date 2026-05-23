@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Mapping, Sequence
 
 
 @dataclass(frozen=True)
@@ -214,7 +214,7 @@ def _format_vtt_timestamp(seconds: float) -> str:
 
 
 def _timestamp_parts(seconds: float) -> tuple[int, int, int, int]:
-    total_milliseconds = max(0, int(round(float(seconds) * 1000)))
+    total_milliseconds = max(0, round(float(seconds) * 1000))
     total_seconds, milliseconds = divmod(total_milliseconds, 1000)
     minutes_total, whole_seconds = divmod(total_seconds, 60)
     hours, minutes = divmod(minutes_total, 60)

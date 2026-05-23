@@ -15,8 +15,8 @@ import time
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
+from tidal_pipeline.albums import AlbumInput, Candidate
 from tidal_pipeline.client import (
     TIDAL_COUNTRY_CODE,
     TOKEN_FILE_DIR,
@@ -27,9 +27,9 @@ from tidal_pipeline.client import (
 )
 from tidal_pipeline.match import (
     DEFAULT_TEMPLATE_WEIGHTS,
+    build_query_candidates,
     build_record,
     build_record_id,
-    build_query_candidates,
     choose_auto_candidate,
     collect_selected_album_ids,
     ensure_details,
@@ -47,7 +47,6 @@ from tidal_pipeline.match import (
     summarize_review_records,
     train_coverage,
 )
-from tidal_pipeline.albums import AlbumInput, Candidate
 
 
 def prompt_yes_no(prompt: str, default: bool = False) -> bool:
@@ -62,7 +61,7 @@ def default_playlist_name(truth_path: Path) -> str:
     return f"{truth_path.stem} (Import)"
 
 
-def summarize_playlist(client: TidalClient, playlist_id: str) -> Dict:
+def summarize_playlist(client: TidalClient, playlist_id: str) -> dict:
     track_ids, album_ids = client.get_playlist_track_album_ids(playlist_id)
     album_counts = Counter(album_ids)
     top_albums = album_counts.most_common(5)
@@ -87,7 +86,7 @@ def summarize_playlist(client: TidalClient, playlist_id: str) -> Dict:
     }
 
 
-def select_existing_playlist(client: TidalClient, name: str) -> Tuple[Optional[str], bool]:
+def select_existing_playlist(client: TidalClient, name: str) -> tuple[str | None, bool]:
     playlists = client.list_playlists()
     matches = []
     for item in playlists:
@@ -125,7 +124,7 @@ def select_existing_playlist(client: TidalClient, name: str) -> Tuple[Optional[s
         print("Invalid selection.")
 
 
-def format_features(features: Dict[str, float]) -> str:
+def format_features(features: dict[str, float]) -> str:
     parts = [f"{key}={features[key]:.2f}" for key in sorted(features.keys()) if features[key] > 0]
     return " ".join(parts) if parts else "(no signals)"
 
@@ -174,12 +173,12 @@ def show_help() -> None:
 
 def prompt_for_choice(
     album: AlbumInput,
-    ordered: List[Candidate],
-    queries: List[str],
+    ordered: list[Candidate],
+    queries: list[str],
     client: TidalClient,
     display_count: int,
     detail_sleep: float,
-) -> Tuple[str, Optional[Candidate]]:
+) -> tuple[str, Candidate | None]:
     show_n = min(display_count, len(ordered)) if ordered else 0
 
     while True:
@@ -477,14 +476,14 @@ def main() -> int:
             print(f"Saved progress to {output_path}")
             return 0
 
-        choice: Dict[str, object] = {
+        choice: dict[str, object] = {
             "status": "skip",
             "tidal_id": "",
             "selected_at": datetime.now().isoformat(timespec="seconds"),
             "manual": False,
         }
 
-        chosen: Optional[Candidate] = None
+        chosen: Candidate | None = None
         if action == "auto" and selected:
             choice["status"] = "auto_selected"
             choice["tidal_id"] = selected.id
@@ -587,7 +586,7 @@ def main() -> int:
 
     base_name = args.playlist_name or default_playlist_name(output_path)
     playlist_name = base_name
-    playlist_id: Optional[str] = None
+    playlist_id: str | None = None
 
     if apply_changes:
         playlist_id, had_existing = select_existing_playlist(client, base_name)
@@ -611,9 +610,9 @@ def main() -> int:
         else:
             print(f"Using existing playlist: {playlist_id}")
 
-    all_tracks: List[str] = []
+    all_tracks: list[str] = []
     seen_tracks: set[str] = set()
-    shortfalls: List[str] = []
+    shortfalls: list[str] = []
 
     for entry in selected_entries:
         album_id = entry["id"]

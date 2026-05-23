@@ -35,7 +35,6 @@ from audio_common import (
 )
 from audio_transcript import TranscriptSegment, emit_transcript
 
-
 DEFAULT_MODEL = "mlx-community/VibeVoice-ASR-4bit"
 SUPPORTED_FORMATS = ("json", "txt", "srt", "vtt")
 
@@ -125,7 +124,7 @@ def validate_output(path: Path) -> None:
 
 
 def load_vibevoice_segments(json_path: Path) -> list[TranscriptSegment]:
-    with open(json_path, "r", encoding="utf-8") as file:
+    with open(json_path, encoding="utf-8") as file:
         try:
             data = json.load(file)
         except json.JSONDecodeError as exc:

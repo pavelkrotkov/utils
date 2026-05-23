@@ -3,7 +3,7 @@
   --resume \
   --auto-threshold 0.7
 All entries matched. Create playlist now? [y/N] y
-Create playlist 'The Best Classical Albums of 2025 _ Gramophone.albums.truth (Import)'? [Y/n] 
+Create playlist 'The Best Classical Albums of 2025 _ Gramophone.albums.truth (Import)'? [Y/n]
 Playlist created: c29dc976-f9c8-45b2-9a19-5ba6b4a0a897
 Warning: some albums returned fewer tracks than expected:
   - Donizetti: Lucia di Lammermoor: 0/39 tracks returned

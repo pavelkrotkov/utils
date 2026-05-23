@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+
 from tidal_pipeline.links import apply_updates, load_updates
 
 

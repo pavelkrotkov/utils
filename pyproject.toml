@@ -1,3 +1,33 @@
+[project]
+name = "utils"
+version = "0.1.0"
+description = "A collection of standalone utility scripts"
+requires-python = ">=3.10"
+dependencies = []
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["E501", "RUF001", "RUF002", "RUF003"]
+
+[tool.pytest.ini_options]
+addopts = ["--strict-markers", "--strict-config"]
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+
+[dependency-groups]
+dev = [
+    "pip-audit>=2.10.0",
+    "pre-commit>=4.6.0",
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.15.14",
+    "ty>=0.0.39",
+]

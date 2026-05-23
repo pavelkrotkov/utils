@@ -55,10 +55,12 @@ class PdfConvertCommonTest(unittest.TestCase):
             text_path.write_text("not a pdf", encoding="utf-8")
 
             for candidate in [root / "missing.pdf", text_path]:
-                with self.subTest(candidate=candidate):
-                    with contextlib.redirect_stderr(io.StringIO()):
-                        with self.assertRaises(SystemExit):
-                            require_pdf_path(candidate)
+                with (
+                    self.subTest(candidate=candidate),
+                    contextlib.redirect_stderr(io.StringIO()),
+                    self.assertRaises(SystemExit),
+                ):
+                    require_pdf_path(candidate)
 
     def test_import_or_die_returns_module(self) -> None:
         module = import_or_die("pathlib", "pathlib")
@@ -68,9 +70,8 @@ class PdfConvertCommonTest(unittest.TestCase):
     def test_import_or_die_exits_with_install_hint_for_missing_module(self) -> None:
         stderr = io.StringIO()
 
-        with contextlib.redirect_stderr(stderr):
-            with self.assertRaises(SystemExit):
-                import_or_die("_definitely_missing_pdf_backend_", "missing-package")
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+            import_or_die("_definitely_missing_pdf_backend_", "missing-package")
 
         self.assertIn("pip install missing-package", stderr.getvalue())
 
@@ -92,9 +93,11 @@ class PdfConvertCommonTest(unittest.TestCase):
 
     def test_parse_page_range_rejects_invalid_specs(self) -> None:
         for spec in ["", "0", "4-2", "1,,3", "2-", "1-2-3", "N-1", "11"]:
-            with self.subTest(spec=spec):
-                with self.assertRaisesRegex(ValueError, r"^Invalid --page-range value:"):
-                    parse_page_range(spec, 10, one_based=True)
+            with (
+                self.subTest(spec=spec),
+                self.assertRaisesRegex(ValueError, r"^Invalid --page-range value:"),
+            ):
+                parse_page_range(spec, 10, one_based=True)
 
 
 if __name__ == "__main__":

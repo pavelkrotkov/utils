@@ -6,9 +6,9 @@
 # ///
 import unittest
 
+from tidal_pipeline.albums import AlbumInput
 from tidal_pipeline.client import AlbumHit
 from tidal_pipeline.match import apply_penalties, base_score, extract_features, score_candidate
-from tidal_pipeline.albums import AlbumInput
 
 
 class TidalMatchScoringTest(unittest.TestCase):

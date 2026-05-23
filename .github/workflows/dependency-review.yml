@@ -1,0 +1,19 @@
+name: Dependency Review
+
+on:
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      # Note: This action may require GitHub Advanced Security (GHAS) if run on private repositories.
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
