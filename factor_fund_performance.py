@@ -65,7 +65,7 @@ def fetch_soup(url: str, settings: FetchSettings) -> BeautifulSoup:
             response = requests.get(url, headers=get_random_headers(), timeout=settings.timeout)
             response.raise_for_status()
             return BeautifulSoup(response.text, "lxml")
-        except Exception as exc:
+        except requests.RequestException as exc:
             last_exc = exc
             if attempt < settings.retries:
                 time.sleep(settings.backoff * attempt)
