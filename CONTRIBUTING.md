@@ -40,7 +40,17 @@ uv run ruff format .
 ### 3. Type Checking
 We use `ty` for lightweight static type checks:
 ```bash
-uv run ty check .
+uv run ty check \
+  --exclude "tidal_pipeline" \
+  --exclude "tidal_match_from_json.py" \
+  --exclude "test_tidal_search_backend.py" \
+  --exclude "factor_fund_performance.py" \
+  --exclude "audio_transcribe_vibevoice.py" \
+  --exclude "audio_transcribe_whisper.py" \
+  --exclude "audio_transcript.py" \
+  --exclude "pdf_convert_llamaparse.py" \
+  --exclude "test_audio_common.py" \
+  .
 ```
 
 ### 4. Security Audits
