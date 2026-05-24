@@ -32,30 +32,26 @@ EXPECTED_KEYWORDS = ["quick", "brown", "fox"]
 
 _has_openai_key = bool(os.environ.get("OPENAI_API_KEY"))
 _whisper_bin = shutil.which("whisper-cpp") or shutil.which("whisper-cli")
+_has_ffmpeg = bool(shutil.which("ffmpeg")) and bool(shutil.which("ffprobe"))
 _default_model = Path(
     os.environ.get("WHISPER_MODEL_PATH", Path.home() / "models" / "ggml-large-v3-turbo-q8_0.bin")
 )
-_has_whisper = bool(_whisper_bin) and _default_model.exists()
+_has_whisper = bool(_whisper_bin) and _has_ffmpeg and _default_model.exists()
 _has_hf_token = bool(os.environ.get("HF_TOKEN"))
 _is_apple_silicon = platform.system() == "Darwin" and platform.machine() == "arm64"
-_has_mlx_audio = False
-if _is_apple_silicon:
-    try:
-        import importlib.util
-
-        _has_mlx_audio = importlib.util.find_spec("mlx_audio") is not None
-    except (ImportError, AttributeError):
-        pass
 
 skip_no_openai = pytest.mark.skipif(not _has_openai_key, reason="OPENAI_API_KEY not set")
 skip_no_whisper = pytest.mark.skipif(
     not _has_whisper,
-    reason=f"whisper-cpp/whisper-cli not in PATH or model not found at {_default_model}",
+    reason=(
+        f"whisper-cpp/whisper-cli not in PATH, ffmpeg/ffprobe missing, "
+        f"or model not found at {_default_model}"
+    ),
 )
 skip_no_hf_token = pytest.mark.skipif(not _has_hf_token, reason="HF_TOKEN not set")
 skip_no_vibevoice = pytest.mark.skipif(
-    not (_is_apple_silicon and _has_mlx_audio),
-    reason="VibeVoice requires Apple Silicon and mlx-audio",
+    not _is_apple_silicon,
+    reason="VibeVoice requires Apple Silicon (uv run resolves mlx-audio via PEP 723)",
 )
 
 
@@ -227,7 +223,7 @@ def test_spaces_in_filename(tmp_path: Path) -> None:
         )
         assert out.exists() and out.stat().st_size > 0
         _assert_keywords(_read_transcript(out))
-    elif _is_apple_silicon and _has_mlx_audio:
+    elif _is_apple_silicon:
         out = tmp_path / "out.txt"
         _run(
             [
