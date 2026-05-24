@@ -114,8 +114,12 @@ if [ -z "${OPENAI_API_KEY:-}" ]; then
   exit 1
 fi
 
-# Get file size (macOS)
-SIZE_BYTES=$(stat -f%z "$INPUT")
+# Get file size (portable: macOS + Linux)
+if stat -f%z "$INPUT" >/dev/null 2>&1; then
+  SIZE_BYTES=$(stat -f%z "$INPUT")
+else
+  SIZE_BYTES=$(stat -c%s "$INPUT")
+fi
 
 FILE_TO_SEND="$INPUT"
 
@@ -129,7 +133,11 @@ if [ "$SIZE_BYTES" -gt "$MAX_BYTES" ]; then
     exit 1
   fi
 
-  NEW_SIZE=$(stat -f%z "$TMP_FILE")
+  if stat -f%z "$TMP_FILE" >/dev/null 2>&1; then
+    NEW_SIZE=$(stat -f%z "$TMP_FILE")
+  else
+    NEW_SIZE=$(stat -c%s "$TMP_FILE")
+  fi
   REDUCTION_PCT=$((100 - (NEW_SIZE * 100 / SIZE_BYTES)))
   echo "Downsampled size: ${SIZE_BYTES} -> ${NEW_SIZE} bytes (${REDUCTION_PCT}% smaller)."
   if [ "$NEW_SIZE" -gt "$MAX_BYTES" ]; then
