@@ -39,7 +39,12 @@ _default_model = Path(
 _has_whisper = bool(_whisper_bin) and _has_ffmpeg and _default_model.exists()
 _has_hf_token = bool(os.environ.get("HF_TOKEN"))
 _is_apple_silicon = platform.system() == "Darwin" and platform.machine() == "arm64"
-_vibevoice_opted_in = _is_apple_silicon and bool(os.environ.get("RUN_VIBEVOICE_SMOKE"))
+_vibevoice_opted_in = _is_apple_silicon and os.environ.get("RUN_VIBEVOICE_SMOKE", "").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 
 skip_no_openai = pytest.mark.skipif(not _has_openai_key, reason="OPENAI_API_KEY not set")
 skip_no_whisper = pytest.mark.skipif(
@@ -200,13 +205,13 @@ def test_spaces_in_filename(tmp_path: Path) -> None:
     spaced_input = spaced_dir / "my recording.m4a"
     shutil.copy(FIXTURE, spaced_input)
 
+    spaced_output = spaced_dir / "my transcript.txt"
+
     if _has_openai_key:
-        out = tmp_path / "out.txt"
-        _run([str(OPENAI_SCRIPT), "--model", "whisper-1", str(spaced_input), str(out)])
-        assert out.exists() and out.stat().st_size > 0
-        _assert_keywords(_read_transcript(out))
+        _run([str(OPENAI_SCRIPT), "--model", "whisper-1", str(spaced_input), str(spaced_output)])
+        assert spaced_output.exists() and spaced_output.stat().st_size > 0
+        _assert_keywords(_read_transcript(spaced_output))
     elif _has_whisper:
-        out = tmp_path / "out.txt"
         _run(
             [
                 "uv",
@@ -216,16 +221,15 @@ def test_spaces_in_filename(tmp_path: Path) -> None:
                 "--format",
                 "txt",
                 "-o",
-                str(out),
+                str(spaced_output),
                 "--large-model",
                 str(_default_model),
             ],
             timeout=60,
         )
-        assert out.exists() and out.stat().st_size > 0
-        _assert_keywords(_read_transcript(out))
+        assert spaced_output.exists() and spaced_output.stat().st_size > 0
+        _assert_keywords(_read_transcript(spaced_output))
     elif _vibevoice_opted_in:
-        out = tmp_path / "out.txt"
         _run(
             [
                 "uv",
@@ -235,11 +239,11 @@ def test_spaces_in_filename(tmp_path: Path) -> None:
                 "--format",
                 "txt",
                 "-o",
-                str(out),
+                str(spaced_output),
             ],
             timeout=60,
         )
-        assert out.exists() and out.stat().st_size > 0
-        _assert_keywords(_read_transcript(out))
+        assert spaced_output.exists() and spaced_output.stat().st_size > 0
+        _assert_keywords(_read_transcript(spaced_output))
     else:
         pytest.skip("No transcription backend available to test spaces-in-filename")
