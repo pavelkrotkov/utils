@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -31,7 +32,9 @@ EXPECTED_KEYWORDS = ["quick", "brown", "fox"]
 
 _has_openai_key = bool(os.environ.get("OPENAI_API_KEY"))
 _whisper_bin = shutil.which("whisper-cpp") or shutil.which("whisper-cli")
-_default_model = Path.home() / "models" / "ggml-large-v3-turbo-q8_0.bin"
+_default_model = Path(
+    os.environ.get("WHISPER_MODEL_PATH", Path.home() / "models" / "ggml-large-v3-turbo-q8_0.bin")
+)
 _has_whisper = bool(_whisper_bin) and _default_model.exists()
 _has_hf_token = bool(os.environ.get("HF_TOKEN"))
 _is_apple_silicon = platform.system() == "Darwin" and platform.machine() == "arm64"
@@ -41,7 +44,7 @@ if _is_apple_silicon:
         import importlib.util
 
         _has_mlx_audio = importlib.util.find_spec("mlx_audio") is not None
-    except Exception:
+    except (ImportError, AttributeError):
         pass
 
 skip_no_openai = pytest.mark.skipif(not _has_openai_key, reason="OPENAI_API_KEY not set")
@@ -71,17 +74,25 @@ def _assert_keywords(text: str) -> None:
 
 
 def _run(cmd: list[str], cwd: Path | None = None, timeout: int = 60) -> None:
-    result = subprocess.run(
-        cmd,
-        cwd=str(cwd or REPO_ROOT),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(cwd or REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise AssertionError(
+            f"Command timed out after {timeout}s:\n"
+            f"  cmd: {shlex.join(cmd)}\n"
+            f"  stdout: {e.stdout[-500:] if e.stdout else 'N/A'}\n"
+            f"  stderr: {e.stderr[-500:] if e.stderr else 'N/A'}"
+        ) from e
     if result.returncode != 0:
         raise AssertionError(
             f"Command failed (exit {result.returncode}):\n"
-            f"  cmd: {' '.join(cmd)}\n"
+            f"  cmd: {shlex.join(cmd)}\n"
             f"  stdout: {result.stdout[-500:]}\n"
             f"  stderr: {result.stderr[-500:]}"
         )
