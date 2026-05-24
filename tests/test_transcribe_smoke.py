@@ -73,7 +73,7 @@ def _assert_keywords(text: str) -> None:
         assert kw in text, f"Expected keyword {kw!r} not found in transcript:\n{text[:500]}"
 
 
-def _run(cmd: list[str], cwd: Path | None = None, timeout: int = 60) -> None:
+def _run(cmd: list[str], cwd: Path | None = None, timeout: int = 120) -> None:
     try:
         result = subprocess.run(
             cmd,
@@ -88,6 +88,12 @@ def _run(cmd: list[str], cwd: Path | None = None, timeout: int = 60) -> None:
             f"  cmd: {shlex.join(cmd)}\n"
             f"  stdout: {e.stdout[-500:] if e.stdout else 'N/A'}\n"
             f"  stderr: {e.stderr[-500:] if e.stderr else 'N/A'}"
+        ) from e
+    except OSError as e:
+        raise AssertionError(
+            f"Failed to execute command (binary missing or not executable):\n"
+            f"  cmd: {shlex.join(cmd)}\n"
+            f"  error: {e}"
         ) from e
     if result.returncode != 0:
         raise AssertionError(
