@@ -124,7 +124,10 @@ def test_openai_model(model: str, tmp_path: Path) -> None:
 def test_local_whisper(tmp_path: Path) -> None:
     out = tmp_path / "transcript.txt"
     _run(
-        ["uv", "run", str(WHISPER_SCRIPT), str(FIXTURE), "--format", "txt", "-o", str(out)],
+        [
+            "uv", "run", str(WHISPER_SCRIPT), str(FIXTURE),
+            "--format", "txt", "-o", str(out), "--large-model", str(_default_model),
+        ],
         timeout=60,
     )
     assert out.exists() and out.stat().st_size > 0, "Output file is missing or empty"
@@ -149,6 +152,8 @@ def test_local_whisper_diarization(tmp_path: Path) -> None:
             "--diarization",
             "-o",
             str(out),
+            "--large-model",
+            str(_default_model),
         ],
         timeout=60,
     )
@@ -201,6 +206,8 @@ def test_spaces_in_filename(tmp_path: Path) -> None:
                 "txt",
                 "-o",
                 str(out),
+                "--large-model",
+                str(_default_model),
             ],
             timeout=60,
         )
