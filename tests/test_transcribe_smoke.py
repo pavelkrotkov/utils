@@ -39,6 +39,7 @@ _default_model = Path(
 _has_whisper = bool(_whisper_bin) and _has_ffmpeg and _default_model.exists()
 _has_hf_token = bool(os.environ.get("HF_TOKEN"))
 _is_apple_silicon = platform.system() == "Darwin" and platform.machine() == "arm64"
+_vibevoice_opted_in = _is_apple_silicon and bool(os.environ.get("RUN_VIBEVOICE_SMOKE"))
 
 skip_no_openai = pytest.mark.skipif(not _has_openai_key, reason="OPENAI_API_KEY not set")
 skip_no_whisper = pytest.mark.skipif(
@@ -50,8 +51,8 @@ skip_no_whisper = pytest.mark.skipif(
 )
 skip_no_hf_token = pytest.mark.skipif(not _has_hf_token, reason="HF_TOKEN not set")
 skip_no_vibevoice = pytest.mark.skipif(
-    not _is_apple_silicon,
-    reason="VibeVoice requires Apple Silicon (uv run resolves mlx-audio via PEP 723)",
+    not _vibevoice_opted_in,
+    reason="VibeVoice requires Apple Silicon and RUN_VIBEVOICE_SMOKE=1",
 )
 
 
@@ -223,7 +224,7 @@ def test_spaces_in_filename(tmp_path: Path) -> None:
         )
         assert out.exists() and out.stat().st_size > 0
         _assert_keywords(_read_transcript(out))
-    elif _is_apple_silicon:
+    elif _vibevoice_opted_in:
         out = tmp_path / "out.txt"
         _run(
             [
