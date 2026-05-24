@@ -125,8 +125,16 @@ def test_local_whisper(tmp_path: Path) -> None:
     out = tmp_path / "transcript.txt"
     _run(
         [
-            "uv", "run", str(WHISPER_SCRIPT), str(FIXTURE),
-            "--format", "txt", "-o", str(out), "--large-model", str(_default_model),
+            "uv",
+            "run",
+            str(WHISPER_SCRIPT),
+            str(FIXTURE),
+            "--format",
+            "txt",
+            "-o",
+            str(out),
+            "--large-model",
+            str(_default_model),
         ],
         timeout=60,
     )
