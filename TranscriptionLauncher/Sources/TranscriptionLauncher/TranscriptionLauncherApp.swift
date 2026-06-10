@@ -7,6 +7,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+
+        Task {
+            do {
+                _ = try await EnvironmentSnapshot.capture()
+            } catch {
+                print("WARNING: Unable to capture login shell environment: \(error)")
+            }
+        }
     }
 }
 
