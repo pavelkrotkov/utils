@@ -2,6 +2,8 @@ import Testing
 import TranscriptionLauncherLib
 
 @Test
-func libraryModuleIsAvailable() {
-    #expect(Bool(true))
+func appMetadataProvidesDefaultDisplayName() {
+    let metadata = AppMetadata()
+
+    #expect(metadata.displayName == "Transcription Launcher")
 }

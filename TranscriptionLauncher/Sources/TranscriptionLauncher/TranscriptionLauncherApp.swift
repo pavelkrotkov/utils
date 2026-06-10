@@ -11,8 +11,10 @@ struct TranscriptionLauncherApp: App {
 }
 
 private struct ContentView: View {
+    private let metadata = AppMetadata()
+
     var body: some View {
-        Text("Transcription Launcher")
+        Text(metadata.displayName)
             .frame(minWidth: 360, minHeight: 180)
     }
 }
