@@ -1,8 +1,18 @@
 import SwiftUI
 import TranscriptionLauncherLib
 
+#if os(macOS)
+import AppKit
+#endif
+
 @main
 struct TranscriptionLauncherApp: App {
+    #if os(macOS)
+    init() {
+        NSApplication.shared.setActivationPolicy(.regular)
+    }
+    #endif
+
     var body: some Scene {
         WindowGroup {
             ContentView()
