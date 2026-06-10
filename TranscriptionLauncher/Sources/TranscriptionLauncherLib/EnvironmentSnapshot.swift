@@ -7,8 +7,9 @@ public enum EnvironmentSnapshot {
 
     public static func parse(_ rawOutput: String) -> Values {
         var values: Values = [:]
+        let separator: Character = rawOutput.contains("\0") ? "\0" : "\n"
 
-        for line in rawOutput.split(separator: "\n", omittingEmptySubsequences: false) {
+        for line in rawOutput.split(separator: separator, omittingEmptySubsequences: false) {
             guard let separatorIndex = line.firstIndex(of: "=") else {
                 continue
             }
@@ -51,26 +52,45 @@ public enum EnvironmentSnapshot {
             : "/bin/sh"
         process.executableURL = URL(fileURLWithPath: shellPath)
         process.arguments = shellPath == "/bin/zsh"
-            ? ["-l", "-c", "env"]
-            : ["-c", "env"]
+            ? ["-l", "-c", "env -0"]
+            : ["-c", "env -0"]
 
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
+        let fileManager = FileManager.default
+        let outputURL = fileManager.temporaryDirectory.appendingPathComponent(
+            "EnvironmentSnapshot-\(UUID().uuidString).out"
+        )
+        let errorURL = fileManager.temporaryDirectory.appendingPathComponent(
+            "EnvironmentSnapshot-\(UUID().uuidString).err"
+        )
 
-        let outputHandle = outputPipe.fileHandleForReading
-        let errorHandle = errorPipe.fileHandleForReading
+        guard fileManager.createFile(atPath: outputURL.path, contents: nil) else {
+            throw EnvironmentSnapshotError.temporaryFileFailed(path: outputURL.path)
+        }
+
+        guard fileManager.createFile(atPath: errorURL.path, contents: nil) else {
+            throw EnvironmentSnapshotError.temporaryFileFailed(path: errorURL.path)
+        }
+
+        let outputHandle = try FileHandle(forWritingTo: outputURL)
+        let errorHandle = try FileHandle(forWritingTo: errorURL)
         defer {
             try? outputHandle.close()
             try? errorHandle.close()
+            try? fileManager.removeItem(at: outputURL)
+            try? fileManager.removeItem(at: errorURL)
         }
+
+        process.standardOutput = outputHandle
+        process.standardError = errorHandle
 
         try process.run()
         process.waitUntilExit()
 
-        let outputData = outputHandle.readDataToEndOfFile()
-        let errorData = errorHandle.readDataToEndOfFile()
+        try outputHandle.close()
+        try errorHandle.close()
+
+        let outputData = try Data(contentsOf: outputURL)
+        let errorData = try Data(contentsOf: errorURL)
 
         guard process.terminationStatus == 0 else {
             let message = String(data: errorData, encoding: .utf8)?
@@ -116,4 +136,5 @@ private actor EnvironmentSnapshotCache {
 public enum EnvironmentSnapshotError: Error, Equatable {
     case captureFailed(status: Int32, stderr: String)
     case invalidUTF8Output
+    case temporaryFileFailed(path: String)
 }

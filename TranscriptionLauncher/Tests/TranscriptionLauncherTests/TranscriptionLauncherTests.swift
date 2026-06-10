@@ -26,6 +26,16 @@ func environmentSnapshotParsesValueContainingEquals() {
 }
 
 @Test
+func environmentSnapshotParsesNullDelimitedOutput() {
+    let values = EnvironmentSnapshot.parse("FIRST=one\0MULTILINE=line 1\nline 2\0")
+
+    #expect(values == [
+        "FIRST": "one",
+        "MULTILINE": "line 1\nline 2",
+    ])
+}
+
+@Test
 func environmentSnapshotParsesEmptyValue() {
     let values = EnvironmentSnapshot.parse("EMPTY_VAR=")
 
