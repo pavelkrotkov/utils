@@ -5,12 +5,20 @@ import TranscriptionLauncherLib
 import AppKit
 #endif
 
+#if os(macOS)
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+#endif
+
 @main
 struct TranscriptionLauncherApp: App {
     #if os(macOS)
-    init() {
-        NSApplication.shared.setActivationPolicy(.regular)
-    }
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     #endif
 
     var body: some Scene {
