@@ -46,19 +46,31 @@ public enum EnvironmentSnapshot {
 
     private static func captureUncached() throws -> Values {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-l", "-c", "env"]
+        let shellPath = FileManager.default.isExecutableFile(atPath: "/bin/zsh")
+            ? "/bin/zsh"
+            : "/bin/sh"
+        process.executableURL = URL(fileURLWithPath: shellPath)
+        process.arguments = shellPath == "/bin/zsh"
+            ? ["-l", "-c", "env"]
+            : ["-c", "env"]
 
         let outputPipe = Pipe()
         let errorPipe = Pipe()
         process.standardOutput = outputPipe
         process.standardError = errorPipe
 
+        let outputHandle = outputPipe.fileHandleForReading
+        let errorHandle = errorPipe.fileHandleForReading
+        defer {
+            try? outputHandle.close()
+            try? errorHandle.close()
+        }
+
         try process.run()
         process.waitUntilExit()
 
-        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        let outputData = outputHandle.readDataToEndOfFile()
+        let errorData = errorHandle.readDataToEndOfFile()
 
         guard process.terminationStatus == 0 else {
             let message = String(data: errorData, encoding: .utf8)?
