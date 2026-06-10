@@ -3,6 +3,10 @@ __pycache__/
 .DS_Store
 .venv/
 .env
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/
 .claude/
 AGENTS.md
 CLAUDE.md
