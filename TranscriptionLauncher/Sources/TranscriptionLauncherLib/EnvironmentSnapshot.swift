@@ -34,18 +34,24 @@ public enum EnvironmentSnapshot {
 
     public static func capture() async throws -> Values {
         try await cache.values {
-            try captureUncached()
+            try await captureUncached()
         }
     }
 
     @discardableResult
     public static func refresh() async throws -> Values {
         try await cache.refresh {
-            try captureUncached()
+            try await captureUncached()
         }
     }
 
-    private static func captureUncached() throws -> Values {
+    private static func captureUncached() async throws -> Values {
+        try await Task.detached(priority: .userInitiated) {
+            try captureUncachedBlocking()
+        }.value
+    }
+
+    private static func captureUncachedBlocking() throws -> Values {
         let process = Process()
         let shellPath = FileManager.default.isExecutableFile(atPath: "/bin/zsh")
             ? "/bin/zsh"
@@ -62,6 +68,10 @@ public enum EnvironmentSnapshot {
         let errorURL = fileManager.temporaryDirectory.appendingPathComponent(
             "EnvironmentSnapshot-\(UUID().uuidString).err"
         )
+        defer {
+            try? fileManager.removeItem(at: outputURL)
+            try? fileManager.removeItem(at: errorURL)
+        }
 
         guard fileManager.createFile(atPath: outputURL.path, contents: nil) else {
             throw EnvironmentSnapshotError.temporaryFileFailed(path: outputURL.path)
@@ -76,8 +86,6 @@ public enum EnvironmentSnapshot {
         defer {
             try? outputHandle.close()
             try? errorHandle.close()
-            try? fileManager.removeItem(at: outputURL)
-            try? fileManager.removeItem(at: errorURL)
         }
 
         process.standardOutput = outputHandle
@@ -85,9 +93,6 @@ public enum EnvironmentSnapshot {
 
         try process.run()
         process.waitUntilExit()
-
-        try outputHandle.close()
-        try errorHandle.close()
 
         let outputData = try Data(contentsOf: outputURL)
         let errorData = try Data(contentsOf: errorURL)
@@ -111,23 +116,44 @@ public enum EnvironmentSnapshot {
 
 private actor EnvironmentSnapshotCache {
     private var cachedValues: EnvironmentSnapshot.Values?
+    private var inFlightCapture: Task<EnvironmentSnapshot.Values, Error>?
 
     func values(
-        capture: @Sendable () throws -> EnvironmentSnapshot.Values
+        capture: @Sendable @escaping () async throws -> EnvironmentSnapshot.Values
     ) async throws -> EnvironmentSnapshot.Values {
         if let cachedValues {
             return cachedValues
         }
 
-        let values = try capture()
+        if let inFlightCapture {
+            return try await inFlightCapture.value
+        }
+
+        let task = Task {
+            try await capture()
+        }
+        inFlightCapture = task
+        defer {
+            inFlightCapture = nil
+        }
+
+        let values = try await task.value
         cachedValues = values
         return values
     }
 
     func refresh(
-        capture: @Sendable () throws -> EnvironmentSnapshot.Values
+        capture: @Sendable @escaping () async throws -> EnvironmentSnapshot.Values
     ) async throws -> EnvironmentSnapshot.Values {
-        let values = try capture()
+        let task = Task {
+            try await capture()
+        }
+        inFlightCapture = task
+        defer {
+            inFlightCapture = nil
+        }
+
+        let values = try await task.value
         cachedValues = values
         return values
     }
