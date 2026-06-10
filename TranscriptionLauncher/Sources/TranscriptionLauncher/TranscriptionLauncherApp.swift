@@ -1,11 +1,7 @@
 import SwiftUI
 import TranscriptionLauncherLib
-
-#if os(macOS)
 import AppKit
-#endif
 
-#if os(macOS)
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -13,13 +9,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 }
-#endif
 
 @main
 struct TranscriptionLauncherApp: App {
-    #if os(macOS)
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    #endif
 
     var body: some Scene {
         WindowGroup {

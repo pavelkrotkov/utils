@@ -1,0 +1,38 @@
+name: Swift
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "TranscriptionLauncher/**"
+      - ".github/workflows/swift.yml"
+  pull_request:
+    branches: [ main ]
+    paths:
+      - "TranscriptionLauncher/**"
+      - ".github/workflows/swift.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: TranscriptionLauncher
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Build
+        run: swift build
+
+      - name: Test
+        run: swift test
