@@ -8,11 +8,12 @@ import UniformTypeIdentifiers
 /// `CommandBuilder`, `OutputPathResolver`, and `ProcessRunner`.
 @MainActor
 final class LauncherModel: ObservableObject {
-    /// A run that is ready to start, captured before the overwrite
-    /// confirmation so the confirmed run uses exactly what was validated.
+    /// A validated run with its command fully built up front, so preset or
+    /// option changes made while the overwrite confirmation is showing (or
+    /// while the environment snapshot is being captured) cannot alter what
+    /// actually executes.
     struct PendingRun: Equatable {
-        let input: URL
-        let repoRoot: URL
+        let command: TranscriptionCommand
         let output: URL
     }
 
@@ -104,11 +105,20 @@ final class LauncherModel: ObservableObject {
             return
         }
 
+        let command = CommandBuilder.command(
+            for: selectedPreset,
+            input: input,
+            repoRoot: repoRoot,
+            whisperModelPath: selectedPreset.usesWhisperModel
+                ? nonEmpty(whisperModelPath) : nil,
+            vibevoiceContext: selectedPreset.usesVibeVoiceContext
+                ? nonEmpty(vibevoiceContext) : nil
+        )
         let output = OutputPathResolver.outputPath(
             for: selectedPreset.outputPathPreset,
             input: input
         )
-        let run = PendingRun(input: input, repoRoot: repoRoot, output: output)
+        let run = PendingRun(command: command, output: output)
         if FileManager.default.fileExists(atPath: output.path(percentEncoded: false)) {
             pendingOverwriteRun = run
         } else {
@@ -145,16 +155,7 @@ final class LauncherModel: ObservableObject {
         do {
             let environment = try await EnvironmentSnapshot.capture()
             isPreparing = false
-            let command = CommandBuilder.command(
-                for: selectedPreset,
-                input: run.input,
-                repoRoot: run.repoRoot,
-                whisperModelPath: selectedPreset.usesWhisperModel
-                    ? nonEmpty(whisperModelPath) : nil,
-                vibevoiceContext: selectedPreset.usesVibeVoiceContext
-                    ? nonEmpty(vibevoiceContext) : nil
-            )
-            let outputURL = try await runner.run(command: command, environment: environment)
+            let outputURL = try await runner.run(command: run.command, environment: environment)
             lastOutputURL = outputURL
             NSWorkspace.shared.activateFileViewerSelecting([outputURL])
         } catch is CancellationError {
