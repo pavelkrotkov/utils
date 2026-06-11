@@ -101,6 +101,16 @@ func parsesIndeterminateUpdate() {
 }
 
 @Test
+func parsesElapsedOnlyUpdate() {
+    let event = ProgressParser.parse("INFO: pyannote segmentation: elapsed 00:12, complete")
+
+    #expect(event == ProgressEvent(
+        stage: "pyannote segmentation",
+        detail: "elapsed 00:12, complete"
+    ))
+}
+
+@Test
 func parsesStageNameWithColon() {
     let event = ProgressParser.parse("INFO: whisper.cpp: ASR:  45.2%, elapsed 01:23, ETA 01:42")
 
