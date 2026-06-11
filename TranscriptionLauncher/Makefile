@@ -22,7 +22,7 @@ INSTALL_DIR ?= /Applications
 .PHONY: app install clean
 
 app:
-	./Scripts/make-app.sh $(CONFIGURATION)
+	./Scripts/make-app.sh "$(CONFIGURATION)"
 
 # Deliberately does not depend on `app`: installing to /Applications may be
 # run under sudo, and a sudo-triggered rebuild would leave root-owned
