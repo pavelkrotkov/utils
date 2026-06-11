@@ -77,7 +77,7 @@ func repoDetectorFindsRepoByMarkerFile() throws {
             .appendingPathComponent("two", isDirectory: true)
         try FileManager.default.createDirectory(at: nestedURL, withIntermediateDirectories: true)
         FileManager.default.createFile(
-            atPath: repoRoot.appendingPathComponent("audio_transcribe_openai.sh").path,
+            atPath: repoRoot.appendingPathComponent("audio_transcribe_openai.sh").path(percentEncoded: false),
             contents: Data()
         )
 
@@ -109,7 +109,7 @@ func repoDetectorStopsAtFilesystemRoot() {
 func repoDetectorFindsRepoWhenAppIsDirectlyInside() throws {
     try withTemporaryDirectory { repoRoot in
         FileManager.default.createFile(
-            atPath: repoRoot.appendingPathComponent("audio_transcribe_openai.sh").path,
+            atPath: repoRoot.appendingPathComponent("audio_transcribe_openai.sh").path(percentEncoded: false),
             contents: Data()
         )
 

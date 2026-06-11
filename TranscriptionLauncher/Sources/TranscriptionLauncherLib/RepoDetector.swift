@@ -36,7 +36,7 @@ public enum RepoDetector {
         let standardizedURL = url.standardizedFileURL
         var isDirectory: ObjCBool = false
 
-        if fileManager.fileExists(atPath: standardizedURL.path, isDirectory: &isDirectory),
+        if fileManager.fileExists(atPath: standardizedURL.path(percentEncoded: false), isDirectory: &isDirectory),
            !isDirectory.boolValue {
             return standardizedURL.deletingLastPathComponent().standardizedFileURL
         }
@@ -52,7 +52,7 @@ public enum RepoDetector {
         markerFileNames.contains { markerFileName in
             let markerURL = directoryURL.appendingPathComponent(markerFileName)
             var isDirectory: ObjCBool = false
-            return fileManager.fileExists(atPath: markerURL.path, isDirectory: &isDirectory)
+            return fileManager.fileExists(atPath: markerURL.path(percentEncoded: false), isDirectory: &isDirectory)
                 && !isDirectory.boolValue
         }
     }

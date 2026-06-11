@@ -46,7 +46,6 @@ struct TranscriptionLauncherApp: App {
 private struct ContentView: View {
     private let metadata = AppMetadata()
     @ObservedObject var repoRootStore: RepoRootStore
-    @State private var didPromptForRepoRoot = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -58,19 +57,17 @@ private struct ContentView: View {
         .padding()
         .frame(minWidth: 420, minHeight: 180, alignment: .leading)
         .onAppear {
-            guard !didPromptForRepoRoot else {
-                return
-            }
-
-            didPromptForRepoRoot = true
-            repoRootStore.promptForRepoRootIfNeeded()
+            repoRootStore.detectRepoRootIfNeeded(promptOnFailure: true)
         }
     }
 
     @ViewBuilder
     private var repoRootSummary: some View {
         if let repoRootURL = repoRootStore.repoRootURL {
-            LabeledContent("Repository Root", value: repoRootURL.path)
+            LabeledContent("Repository Root", value: repoRootURL.path(percentEncoded: false))
+        } else if repoRootStore.isDetectingRepoRoot {
+            Text("Detecting repository root...")
+                .foregroundStyle(.secondary)
         } else {
             Text("Repository root is not configured.")
                 .foregroundStyle(.secondary)
@@ -85,7 +82,7 @@ private struct SettingsView: View {
         Form {
             LabeledContent("Repository Root") {
                 HStack(spacing: 8) {
-                    Text(repoRootStore.repoRootURL?.path ?? "Not configured")
+                    Text(repoRootStore.repoRootDisplayPath)
                         .foregroundStyle(repoRootStore.repoRootURL == nil ? .secondary : .primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -104,28 +101,55 @@ private struct SettingsView: View {
 @MainActor
 private final class RepoRootStore: ObservableObject {
     @Published private(set) var repoRootURL: URL?
+    @Published private(set) var isDetectingRepoRoot = false
 
     private let defaults: UserDefaults
+    private let detectorStartURL: URL
+    private var didStartDetection = false
 
     init(
         defaults: UserDefaults = .standard,
         detectorStartURL: URL = Bundle.main.bundleURL
     ) {
         self.defaults = defaults
+        self.detectorStartURL = detectorStartURL
         self.repoRootURL = Self.loadRepoRoot(defaults: defaults)
-            ?? RepoDetector.findRepoRoot(startingFrom: detectorStartURL)
-
-        if let repoRootURL {
-            save(repoRootURL)
-        }
     }
 
-    func promptForRepoRootIfNeeded() {
+    var repoRootDisplayPath: String {
+        if let repoRootURL {
+            return repoRootURL.path(percentEncoded: false)
+        }
+
+        return isDetectingRepoRoot ? "Detecting..." : "Not configured"
+    }
+
+    func detectRepoRootIfNeeded(promptOnFailure: Bool = false) {
         guard repoRootURL == nil else {
             return
         }
 
-        chooseRepoRoot()
+        guard !didStartDetection else {
+            return
+        }
+
+        didStartDetection = true
+        isDetectingRepoRoot = true
+        let startURL = detectorStartURL
+
+        Task {
+            let detectedURL = await Task.detached(priority: .userInitiated) {
+                RepoDetector.findRepoRoot(startingFrom: startURL)
+            }.value
+
+            isDetectingRepoRoot = false
+
+            if let detectedURL {
+                save(detectedURL)
+            } else if promptOnFailure {
+                chooseRepoRoot()
+            }
+        }
     }
 
     func chooseRepoRoot() {
@@ -148,7 +172,7 @@ private final class RepoRootStore: ObservableObject {
     private func save(_ url: URL) {
         let standardizedURL = url.standardizedFileURL
         repoRootURL = standardizedURL
-        defaults.set(standardizedURL.path, forKey: DefaultsKeys.repoRootPath)
+        defaults.set(standardizedURL.path(percentEncoded: false), forKey: DefaultsKeys.repoRootPath)
     }
 
     private static func loadRepoRoot(defaults: UserDefaults) -> URL? {
