@@ -37,7 +37,9 @@ struct TranscriptionLauncherApp: App {
     @StateObject private var onboardingState = OnboardingState()
 
     var body: some Scene {
-        WindowGroup {
+        // A single Window (not WindowGroup) because the model, runner, and
+        // log are app-wide state; extra windows would all mirror it.
+        Window("Transcription Launcher", id: "main") {
             Group {
                 if onboardingState.isComplete {
                     MainView(

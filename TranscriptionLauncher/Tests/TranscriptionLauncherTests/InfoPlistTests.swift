@@ -5,7 +5,7 @@ import Testing
 /// the app registered for Finder's "Open With" menu on audio and video files.
 @Test
 func infoPlistDeclaresAudioAndMovieDocumentTypes() throws {
-    let plistURL = URL(fileURLWithPath: #filePath)
+    let plistURL = URL(filePath: #filePath)
         .deletingLastPathComponent()  // TranscriptionLauncherTests
         .deletingLastPathComponent()  // Tests
         .deletingLastPathComponent()  // TranscriptionLauncher
