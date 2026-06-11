@@ -16,16 +16,18 @@ func reportsExecutableFoundOnPathWithResolvedLocation() throws {
     try withTemporaryDirectory { directoryURL in
         let ffmpeg = directoryURL.appendingPathComponent("ffmpeg")
         FileManager.default.createFile(
-            atPath: ffmpeg.path,
+            atPath: ffmpeg.path(percentEncoded: false),
             contents: Data("#!/bin/sh\n".utf8),
             attributes: [.posixPermissions: 0o755]
         )
 
-        let items = DependencyChecker.check(environment: ["PATH": directoryURL.path])
+        let items = DependencyChecker.check(
+            environment: ["PATH": directoryURL.path(percentEncoded: false)]
+        )
 
         let ffmpegItem = try #require(items.first { $0.name == "ffmpeg" })
         #expect(ffmpegItem.isAvailable)
-        #expect(ffmpegItem.resolvedPath == ffmpeg.path)
+        #expect(ffmpegItem.resolvedPath == ffmpeg.path(percentEncoded: false))
         #expect(ffmpegItem.requirement == .localPresets)
 
         let uvItem = try #require(items.first { $0.name == "uv" })
