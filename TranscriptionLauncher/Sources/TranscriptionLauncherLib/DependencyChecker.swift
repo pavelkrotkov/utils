@@ -6,6 +6,7 @@ public enum DependencyChecker {
     public enum Requirement: Equatable, Sendable {
         case localPresets
         case cloudPresets
+        case speakerDiarization
     }
 
     public struct Item: Equatable, Sendable {
@@ -32,8 +33,17 @@ public enum DependencyChecker {
     /// Executables every local preset needs on `PATH`.
     public static let localExecutableNames = ["ffmpeg", "uv"]
 
+    /// The whisper binary the whisper local presets need, in lookup order:
+    /// current Homebrew formulae install `whisper-cli`, which
+    /// audio_transcribe_whisper.py accepts as a fallback for `whisper-cpp`.
+    public static let whisperExecutableNames = ["whisper-cpp", "whisper-cli"]
+
     /// Environment variables the cloud presets need.
     public static let cloudVariableNames = ["OPENAI_API_KEY"]
+
+    /// Environment variables speaker diarization needs: pyannote models are
+    /// fetched from Hugging Face during the diarization preset.
+    public static let diarizationVariableNames = ["HF_TOKEN"]
 
     /// Availability is advisory: a missing entry means the matching presets
     /// won't run, not that the app is unusable.
@@ -50,15 +60,41 @@ public enum DependencyChecker {
             ))
         }
 
+        var whisperURL: URL?
+        for name in whisperExecutableNames {
+            if let resolvedURL = ExecutableResolver.resolve(name, environment: environment) {
+                whisperURL = resolvedURL
+                break
+            }
+        }
+        items.append(Item(
+            name: "whisper-cpp",
+            requirement: .localPresets,
+            isAvailable: whisperURL != nil,
+            resolvedPath: whisperURL?.path(percentEncoded: false)
+        ))
+
         for name in cloudVariableNames {
-            let value = environment[name]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            items.append(Item(
-                name: name,
-                requirement: .cloudPresets,
-                isAvailable: !value.isEmpty
-            ))
+            items.append(variableItem(name, requirement: .cloudPresets, environment: environment))
+        }
+
+        for name in diarizationVariableNames {
+            items.append(variableItem(name, requirement: .speakerDiarization, environment: environment))
         }
 
         return items
+    }
+
+    private static func variableItem(
+        _ name: String,
+        requirement: Requirement,
+        environment: [String: String]
+    ) -> Item {
+        let value = environment[name]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return Item(
+            name: name,
+            requirement: requirement,
+            isAvailable: !value.isEmpty
+        )
     }
 }
