@@ -1,6 +1,12 @@
 import SwiftUI
 import TranscriptionLauncherLib
 import AppKit
+import OSLog
+
+private let environmentLogger = Logger(
+    subsystem: "com.pavelkrotkov.TranscriptionLauncher",
+    category: "environment"
+)
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -12,7 +18,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 _ = try await EnvironmentSnapshot.capture()
             } catch {
-                print("WARNING: Unable to capture login shell environment: \(error)")
+                environmentLogger.warning(
+                    "Unable to capture login shell environment: \(String(describing: error), privacy: .public)"
+                )
             }
         }
     }
