@@ -76,22 +76,18 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    nonisolated func userNotificationCenter(
+    // Satisfies the async protocol requirement from the main actor, where
+    // `UNNotificationResponse` is isolated in the macOS 15 SDK.
+    func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
-        // Extract the path before hopping to the main actor:
-        // UNNotificationResponse is not Sendable.
         let outputPath = response.notification.request.content
             .userInfo[Self.outputPathKey] as? String
-        await Self.handleClick(outputPath: outputPath)
-    }
-
-    private static func handleClick(outputPath: String?) {
         if let outputPath {
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: outputPath)])
         } else {
-            NSApp.activate(ignoringOtherApps: true)
+            NSApp.activate()
         }
     }
 }
