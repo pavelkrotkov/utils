@@ -1,3 +1,4 @@
+import Combine
 import Darwin
 import Foundation
 
@@ -142,9 +143,16 @@ public final class ProcessRunner: ObservableObject {
         return command.outputFile
     }
 
-    /// Requests termination of the running process; `run` then throws
+    /// Requests termination of the running process tree; `run` then throws
     /// `CancellationError`. SIGTERM is escalated to SIGKILL when the
     /// process has not exited after a grace period.
+    ///
+    /// `Process` does not make the child a process-group leader, so a
+    /// wrapper like a shell or `uv` that does not forward signals would
+    /// leave the real worker running. The descendant tree is therefore
+    /// snapshotted and signalled directly — best effort: workers spawned
+    /// between the snapshot and the signal are caught only when the
+    /// wrapper forwards or leads its own group.
     public func cancel() {
         guard isRunning, let process, process.isRunning else {
             return
@@ -152,17 +160,23 @@ public final class ProcessRunner: ObservableObject {
 
         isCancelled = true
         let pid = process.processIdentifier
-        Self.sendSignal(SIGTERM, to: pid)
+        // Snapshot before signalling: once the wrapper dies, orphaned
+        // descendants reparent to launchd and can no longer be discovered
+        // from the tree.
+        let descendants = Self.descendantPIDs(of: pid)
+        Self.signalTree(rootPID: pid, descendants: descendants, signal: SIGTERM)
 
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: Self.killGracePeriod)
-            guard let self,
-                  let current = self.process,
-                  current.processIdentifier == pid,
-                  current.isRunning else {
-                return
+            if let self,
+               let current = self.process,
+               current.processIdentifier == pid,
+               current.isRunning {
+                Self.signalTree(rootPID: pid, descendants: [], signal: SIGKILL)
             }
-            Self.sendSignal(SIGKILL, to: pid)
+            for survivor in descendants where kill(survivor, 0) == 0 {
+                kill(survivor, SIGKILL)
+            }
         }
     }
 
@@ -180,15 +194,58 @@ public final class ProcessRunner: ObservableObject {
         }
     }
 
-    /// Signals the whole process group when the child is its leader, so the
-    /// signal reaches grandchildren directly; otherwise signals just the
-    /// child and relies on parents like `uv` forwarding it.
-    private nonisolated static func sendSignal(_ signal: Int32, to pid: pid_t) {
-        if getpgid(pid) == pid {
-            kill(-pid, signal)
+    /// Signals the wrapper — through its whole process group when it is
+    /// the leader, which also covers children spawned after the descendant
+    /// snapshot — and then each snapshotted descendant individually.
+    private nonisolated static func signalTree(
+        rootPID: pid_t,
+        descendants: [pid_t],
+        signal: Int32
+    ) {
+        if getpgid(rootPID) == rootPID {
+            kill(-rootPID, signal)
         } else {
+            kill(rootPID, signal)
+        }
+
+        for pid in descendants {
             kill(pid, signal)
         }
+    }
+
+    /// Returns the PIDs of all live descendants of `rootPID`, discovered
+    /// by walking the parent links of the full process table.
+    private nonisolated static func descendantPIDs(of rootPID: pid_t) -> [pid_t] {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
+        var size = 0
+        guard sysctl(&mib, UInt32(mib.count), nil, &size, nil, 0) == 0, size > 0 else {
+            return []
+        }
+
+        // Headroom for processes spawned between the two sysctl calls.
+        var processes = [kinfo_proc](
+            repeating: kinfo_proc(),
+            count: size / MemoryLayout<kinfo_proc>.stride + 16
+        )
+        size = processes.count * MemoryLayout<kinfo_proc>.stride
+        guard sysctl(&mib, UInt32(mib.count), &processes, &size, nil, 0) == 0 else {
+            return []
+        }
+
+        var childrenByParent: [pid_t: [pid_t]] = [:]
+        for info in processes.prefix(size / MemoryLayout<kinfo_proc>.stride) {
+            childrenByParent[info.kp_eproc.e_ppid, default: []].append(info.kp_proc.p_pid)
+        }
+
+        var descendants: [pid_t] = []
+        var queue = [rootPID]
+        while let parent = queue.popLast() {
+            for child in childrenByParent[parent] ?? [] {
+                descendants.append(child)
+                queue.append(child)
+            }
+        }
+        return descendants
     }
 
     private nonisolated static func failureError(

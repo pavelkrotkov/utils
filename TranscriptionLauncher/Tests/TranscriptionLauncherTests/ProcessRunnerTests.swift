@@ -128,6 +128,40 @@ func testCancellationTerminatesChildProcessTree() async throws {
 
 @Test
 @MainActor
+func testCancellationTerminatesNonForwardingChildTree() async throws {
+    try await withTemporaryDirectory { directoryURL in
+        let runner = ProcessRunner()
+        // A wrapper that neither traps nor forwards SIGTERM: the worker
+        // must be killed by the runner's descendant sweep, not by the
+        // wrapper's cooperation.
+        let script = """
+        sleep 300 &
+        echo "child=$!"
+        wait
+        """
+        let command = shCommand(
+            script,
+            workingDirectory: directoryURL,
+            outputFile: directoryURL.appendingPathComponent("never.txt")
+        )
+
+        let runTask = Task {
+            try await runner.run(command: command, environment: shellEnvironment)
+        }
+        let reportedPID = try await reportedChildPID(in: runner)
+        let childPID = try #require(reportedPID)
+
+        runner.cancel()
+        await #expect(throws: CancellationError.self) {
+            try await runTask.value
+        }
+        let childGone = try await processGone(childPID)
+        #expect(childGone)
+    }
+}
+
+@Test
+@MainActor
 func testStderrStreamedToCallback() async throws {
     try await withTemporaryDirectory { directoryURL in
         let flag = directoryURL.appendingPathComponent("flag")
