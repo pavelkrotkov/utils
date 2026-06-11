@@ -77,23 +77,23 @@ public enum ProgressParser {
     }
 
     private static func parseUpdate(_ message: String) -> ProgressEvent? {
-        guard let match = message.wholeMatch(of: /(.+?): +(.+)/) else {
-            return nil
+        // Update parts always begin with a percentage or an elapsed/processed
+        // duration; anchoring on those disambiguates the stage separator from
+        // colons inside stage names or free-form messages.
+        if let match = message.wholeMatch(of: /(.+?): +(\d+(?:\.\d+)?)%,? *(.*)/) {
+            let detail = String(match.3)
+            return ProgressEvent(
+                stage: String(match.1),
+                percent: Double(match.2),
+                detail: detail.isEmpty ? nil : detail
+            )
         }
 
-        let stage = String(match.1)
-        let rest = String(match.2)
-
-        guard let percentMatch = rest.wholeMatch(of: /(\d+(?:\.\d+)?)%,? *(.*)/) else {
-            // Indeterminate update such as "processed 01:00, elapsed 02:00".
-            return ProgressEvent(stage: stage, detail: rest)
+        // Indeterminate update such as "processed 01:00, elapsed 02:00".
+        if let match = message.wholeMatch(of: /(.+?): +((?:elapsed|processed) .+)/) {
+            return ProgressEvent(stage: String(match.1), detail: String(match.2))
         }
 
-        let detail = String(percentMatch.2)
-        return ProgressEvent(
-            stage: stage,
-            percent: Double(percentMatch.1),
-            detail: detail.isEmpty ? nil : detail
-        )
+        return nil
     }
 }

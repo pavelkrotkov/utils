@@ -101,6 +101,24 @@ func parsesIndeterminateUpdate() {
 }
 
 @Test
+func parsesStageNameWithColon() {
+    let event = ProgressParser.parse("INFO: whisper.cpp: ASR:  45.2%, elapsed 01:23, ETA 01:42")
+
+    #expect(event == ProgressEvent(
+        stage: "whisper.cpp: ASR",
+        percent: 45.2,
+        detail: "elapsed 01:23, ETA 01:42"
+    ))
+}
+
+@Test
+func parsesInfoMessageWithColon() {
+    let event = ProgressParser.parse("INFO: Note: pyannote diarization is disabled")
+
+    #expect(event == ProgressEvent(stage: "Note: pyannote diarization is disabled"))
+}
+
+@Test
 func parsesLineWithTrailingNewline() {
     let event = ProgressParser.parse("INFO: ffmpeg conversion started\r\n")
 
