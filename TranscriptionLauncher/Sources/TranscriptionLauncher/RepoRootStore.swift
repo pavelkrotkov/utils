@@ -33,17 +33,23 @@ final class RepoRootStore: ObservableObject {
         return isDetectingRepoRoot ? "Detecting..." : "Not configured"
     }
 
-    func detectRepoRootIfNeeded(promptOnFailure: Bool = false) {
+    /// Silently tries detection when no root is configured. Onboarding owns
+    /// first-run prompting, so a failure here reports nothing.
+    func detectRepoRootIfNeeded() {
         guard repoRootURL == nil else {
             return
         }
 
-        autoDetectRepoRoot(promptOnFailure: promptOnFailure)
+        runDetection(reportFailure: false)
     }
 
     /// Runs `RepoDetector` and saves the result, replacing any previously
-    /// configured root.
-    func autoDetectRepoRoot(promptOnFailure: Bool = false) {
+    /// configured root; reports a validation message when nothing is found.
+    func autoDetectRepoRoot() {
+        runDetection(reportFailure: true)
+    }
+
+    private func runDetection(reportFailure: Bool) {
         guard detectionTask == nil else {
             return
         }
@@ -64,14 +70,10 @@ final class RepoRootStore: ObservableObject {
 
             if let detectedURL {
                 save(detectedURL)
-            } else if promptOnFailure {
-                repoRootValidationMessage = "Choose the utils repository root."
-                chooseRepoRoot()
-            } else if repoRootURL == nil {
-                repoRootValidationMessage = "Could not auto-detect the repository root."
-            } else {
-                repoRootValidationMessage =
-                    "Could not auto-detect the repository root; keeping the current one."
+            } else if reportFailure {
+                repoRootValidationMessage = repoRootURL == nil
+                    ? "Could not auto-detect the repository root."
+                    : "Could not auto-detect the repository root; keeping the current one."
             }
         }
     }

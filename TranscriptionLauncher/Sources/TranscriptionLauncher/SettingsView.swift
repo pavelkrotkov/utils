@@ -5,6 +5,7 @@ import TranscriptionLauncherLib
 struct SettingsView: View {
     @ObservedObject var repoRootStore: RepoRootStore
     @ObservedObject var model: LauncherModel
+    @ObservedObject var onboardingState: OnboardingState
     @State private var isRefreshingEnvironment = false
     @State private var environmentStatusMessage: String?
 
@@ -13,6 +14,10 @@ struct SettingsView: View {
             repoRootSection
             environmentSection
             presetOptionsSection
+
+            Button("Run Setup Again") {
+                onboardingState.restart()
+            }
         }
         .padding()
         .frame(minWidth: 560)

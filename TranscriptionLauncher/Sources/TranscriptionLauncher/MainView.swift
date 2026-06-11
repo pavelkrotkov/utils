@@ -22,7 +22,9 @@ struct MainView: View {
         .frame(minWidth: 520, minHeight: 460)
         .navigationTitle(metadata.displayName)
         .onAppear {
-            repoRootStore.detectRepoRootIfNeeded(promptOnFailure: true)
+            // Onboarding owns first-run prompting; if the user skipped repo
+            // selection there, don't force the panel open again here.
+            repoRootStore.detectRepoRootIfNeeded()
         }
         .alert(
             model.errorAlert?.title ?? "Error",
