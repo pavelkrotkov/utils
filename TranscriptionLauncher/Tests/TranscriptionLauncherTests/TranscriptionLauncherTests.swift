@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import TranscriptionLauncherLib
 
@@ -66,4 +67,65 @@ func environmentSnapshotSkipsShellFunctionExports() {
         "GOOD": "value",
         "ALSO_GOOD": "123",
     ])
+}
+
+@Test
+func repoDetectorFindsRepoByMarkerFile() throws {
+    try withTemporaryDirectory { repoRoot in
+        let nestedURL = repoRoot
+            .appendingPathComponent("one", isDirectory: true)
+            .appendingPathComponent("two", isDirectory: true)
+        try FileManager.default.createDirectory(at: nestedURL, withIntermediateDirectories: true)
+        FileManager.default.createFile(
+            atPath: repoRoot.appendingPathComponent("audio_transcribe_openai.sh").path,
+            contents: Data()
+        )
+
+        let foundURL = RepoDetector.findRepoRoot(startingFrom: nestedURL)
+
+        #expect(foundURL == repoRoot.standardizedFileURL)
+    }
+}
+
+@Test
+func repoDetectorReturnsNilWhenNotInRepo() throws {
+    try withTemporaryDirectory { directoryURL in
+        let foundURL = RepoDetector.findRepoRoot(startingFrom: directoryURL)
+
+        #expect(foundURL == nil)
+    }
+}
+
+@Test
+func repoDetectorStopsAtFilesystemRoot() {
+    let foundURL = RepoDetector.findRepoRoot(
+        startingFrom: URL(fileURLWithPath: "/", isDirectory: true)
+    )
+
+    #expect(foundURL == nil)
+}
+
+@Test
+func repoDetectorFindsRepoWhenAppIsDirectlyInside() throws {
+    try withTemporaryDirectory { repoRoot in
+        FileManager.default.createFile(
+            atPath: repoRoot.appendingPathComponent("audio_transcribe_openai.sh").path,
+            contents: Data()
+        )
+
+        let foundURL = RepoDetector.findRepoRoot(startingFrom: repoRoot)
+
+        #expect(foundURL == repoRoot.standardizedFileURL)
+    }
+}
+
+private func withTemporaryDirectory(_ body: (URL) throws -> Void) throws {
+    let directoryURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("RepoDetectorTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+    defer {
+        try? FileManager.default.removeItem(at: directoryURL)
+    }
+
+    try body(directoryURL.standardizedFileURL)
 }
