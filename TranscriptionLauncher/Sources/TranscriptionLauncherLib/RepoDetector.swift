@@ -24,7 +24,7 @@ public enum RepoDetector {
             }
 
             let parentURL = currentURL.deletingLastPathComponent().standardizedFileURL
-            if parentURL.path == currentURL.path {
+            if parentURL.path(percentEncoded: false) == currentURL.path(percentEncoded: false) {
                 return nil
             }
 
