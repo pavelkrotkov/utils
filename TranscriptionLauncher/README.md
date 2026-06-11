@@ -12,12 +12,21 @@ swift test
 
 ## Building the app bundle
 
-The package builds a plain command-line executable; `Scripts/make-app.sh`
-wraps it into a double-clickable `.app` (no Xcode project needed):
+The package builds a plain command-line executable; the `Makefile` wraps
+it into a double-clickable `.app` (no Xcode project needed):
+
+```sh
+make app          # Build release dist/TranscriptionLauncher.app
+make install      # Copy the built .app to /Applications (run make app first)
+make clean        # Remove build artifacts (dist/ and .build/)
+```
+
+`make app` delegates to `Scripts/make-app.sh`, which can also be invoked
+directly:
 
 ```sh
 Scripts/make-app.sh            # release build (default)
-Scripts/make-app.sh debug      # debug build
+Scripts/make-app.sh debug      # debug build (or: make app CONFIGURATION=debug)
 ```
 
 The script builds with SwiftPM, assembles `dist/TranscriptionLauncher.app`
