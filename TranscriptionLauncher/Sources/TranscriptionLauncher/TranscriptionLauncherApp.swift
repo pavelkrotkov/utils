@@ -10,6 +10,16 @@ private let environmentLogger = Logger(
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Files opened from Finder ("Open With", double-click) can arrive
+    /// before the SwiftUI scene attaches its handler; the buffer bridges
+    /// that gap.
+    let openedFiles = OpenURLBuffer()
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        NSApp.activate(ignoringOtherApps: true)
+        openedFiles.deliver(urls)
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
@@ -38,15 +48,22 @@ struct TranscriptionLauncherApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if onboardingState.isComplete {
-                MainView(
-                    repoRootStore: repoRootStore,
-                    model: launcherModel,
-                    runner: launcherModel.runner
-                )
-            } else {
-                OnboardingView(repoRootStore: repoRootStore) {
-                    onboardingState.markComplete()
+            Group {
+                if onboardingState.isComplete {
+                    MainView(
+                        repoRootStore: repoRootStore,
+                        model: launcherModel,
+                        runner: launcherModel.runner
+                    )
+                } else {
+                    OnboardingView(repoRootStore: repoRootStore) {
+                        onboardingState.markComplete()
+                    }
+                }
+            }
+            .onAppear {
+                appDelegate.openedFiles.handler = { [weak launcherModel] urls in
+                    launcherModel?.acceptDroppedFiles(urls)
                 }
             }
         }
