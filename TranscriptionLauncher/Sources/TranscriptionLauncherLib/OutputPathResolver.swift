@@ -18,6 +18,6 @@ public enum OutputPathResolver {
         let stem = input.deletingPathExtension().lastPathComponent
         return input.absoluteURL
             .deletingLastPathComponent()
-            .appendingPathComponent("\(stem).\(suffix)")
+            .appendingPathComponent("\(stem).\(suffix)", isDirectory: false)
     }
 }
