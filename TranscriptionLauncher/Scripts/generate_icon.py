@@ -51,7 +51,7 @@ def vertical_gradient(
 ) -> Image.Image:
     gradient = Image.new("RGB", (1, size))
     for y in range(size):
-        t = y / (size - 1)
+        t = y / max(size - 1, 1)
         gradient.putpixel(
             (0, y),
             tuple(round(top[c] + (bottom[c] - top[c]) * t) for c in range(3)),

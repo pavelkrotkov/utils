@@ -37,14 +37,15 @@ cp "$PACKAGE_DIR/Packaging/Info.plist" "$APP_DIR/Contents/Info.plist"
 printf 'APPL????' > "$APP_DIR/Contents/PkgInfo"
 
 echo "==> Building AppIcon.icns"
-ICONSET_DIR="$(mktemp -d)/AppIcon.iconset"
+TEMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TEMP_DIR"' EXIT
+ICONSET_DIR="$TEMP_DIR/AppIcon.iconset"
 mkdir -p "$ICONSET_DIR"
 # iconutil expects icon_<size>.png / icon_<size>@2x.png names, which is
 # exactly how the appiconset PNGs are named — copy everything but the
 # asset-catalog manifest.
 find "$APPICONSET" -name 'icon_*.png' -exec cp {} "$ICONSET_DIR/" \;
 iconutil -c icns "$ICONSET_DIR" -o "$APP_DIR/Contents/Resources/AppIcon.icns"
-rm -rf "$(dirname "$ICONSET_DIR")"
 
 # Ad-hoc signature: enough for local use; no entitlements on purpose —
 # the app is unsandboxed so it can run repo scripts and read/write
