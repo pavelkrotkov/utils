@@ -77,7 +77,8 @@ func testCancellationTerminatesProcess() async throws {
         let runTask = Task {
             try await runner.run(command: command, environment: shellEnvironment)
         }
-        #expect(try await waitUntil { runner.logLines.contains("started") })
+        let sawStarted = try await waitUntil { runner.logLines.contains("started") }
+        #expect(sawStarted)
         #expect(runner.isRunning)
 
         let cancelledAt = ContinuousClock.now
@@ -120,7 +121,8 @@ func testCancellationTerminatesChildProcessTree() async throws {
         await #expect(throws: CancellationError.self) {
             try await runTask.value
         }
-        #expect(try await processGone(childPID))
+        let childGone = try await processGone(childPID)
+        #expect(childGone)
     }
 }
 
@@ -147,7 +149,8 @@ func testStderrStreamedToCallback() async throws {
 
         // The line must arrive while the process is still running, i.e. it
         // is streamed rather than collected at exit.
-        #expect(try await waitUntil { collector.lines.contains("ready") })
+        let sawReady = try await waitUntil { collector.lines.contains("ready") }
+        #expect(sawReady)
         #expect(runner.isRunning)
 
         FileManager.default.createFile(atPath: flag.path, contents: nil)
@@ -222,7 +225,8 @@ func testSecondRunWhileRunningThrows() async throws {
         let runTask = Task {
             try await runner.run(command: first, environment: shellEnvironment)
         }
-        #expect(try await waitUntil { runner.isRunning })
+        let firstIsRunning = try await waitUntil { runner.isRunning }
+        #expect(firstIsRunning)
 
         await #expect(throws: ProcessRunnerError.alreadyRunning) {
             try await runner.run(command: second, environment: shellEnvironment)
@@ -272,7 +276,8 @@ func testCancellationTerminatesPythonChildUnderUV() async throws {
         await #expect(throws: CancellationError.self) {
             try await runTask.value
         }
-        #expect(try await processGone(childPID))
+        let childGone = try await processGone(childPID)
+        #expect(childGone)
     }
 }
 
