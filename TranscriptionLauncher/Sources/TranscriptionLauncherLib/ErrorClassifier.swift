@@ -29,7 +29,7 @@ public enum ErrorClassifier {
         return .unknown(stderr.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    private static let matchers: [(String) -> TranscriptionError?] = [
+    private static let matchers: [@Sendable (String) -> TranscriptionError?] = [
         matchMissingOpenAIKey,
         matchMissingHFToken,
         matchMissingModel,
