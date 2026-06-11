@@ -1,14 +1,16 @@
 import Foundation
 import Testing
 
-/// The package Info.plist (consumed by app bundle packaging, #66) must keep
-/// the app registered for Finder's "Open With" menu on audio and video files.
+/// The Info.plist that Scripts/make-app.sh ships in the .app bundle must
+/// keep the app registered for Finder's "Open With" menu on audio and
+/// video files.
 @Test
 func infoPlistDeclaresAudioAndMovieDocumentTypes() throws {
     let plistURL = URL(filePath: #filePath)
         .deletingLastPathComponent()  // TranscriptionLauncherTests
         .deletingLastPathComponent()  // Tests
         .deletingLastPathComponent()  // TranscriptionLauncher
+        .appendingPathComponent("Packaging")
         .appendingPathComponent("Info.plist")
     let data = try Data(contentsOf: plistURL)
     let plist = try #require(
