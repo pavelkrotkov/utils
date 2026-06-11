@@ -17,14 +17,26 @@ public enum RepoDetector {
         }
 
         var currentURL = directoryURL(for: startURL, fileManager: fileManager)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+        var visitedPaths = Set<String>()
 
         while true {
-            if containsMarkerFile(in: currentURL, markerFileNames: markerFileNames, fileManager: fileManager) {
+            let currentPath = currentURL.path(percentEncoded: false)
+            guard visitedPaths.insert(currentPath).inserted else {
+                return nil
+            }
+
+            if isUsableDirectory(currentURL, fileManager: fileManager),
+               containsMarkerFile(in: currentURL, markerFileNames: markerFileNames, fileManager: fileManager) {
                 return currentURL
             }
 
-            let parentURL = currentURL.deletingLastPathComponent().standardizedFileURL
-            if parentURL.path(percentEncoded: false) == currentURL.path(percentEncoded: false) {
+            let parentURL = currentURL
+                .deletingLastPathComponent()
+                .resolvingSymlinksInPath()
+                .standardizedFileURL
+            if parentURL.path(percentEncoded: false) == currentPath {
                 return nil
             }
 
@@ -42,6 +54,16 @@ public enum RepoDetector {
         }
 
         return standardizedURL
+    }
+
+    private static func isUsableDirectory(_ url: URL, fileManager: FileManager) -> Bool {
+        var isDirectory: ObjCBool = false
+        let path = url.path(percentEncoded: false)
+
+        return fileManager.fileExists(atPath: path, isDirectory: &isDirectory)
+            && isDirectory.boolValue
+            && fileManager.isReadableFile(atPath: path)
+            && fileManager.isExecutableFile(atPath: path)
     }
 
     private static func containsMarkerFile(

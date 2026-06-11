@@ -90,6 +90,7 @@ private struct SettingsView: View {
                     Button("Change...") {
                         repoRootStore.chooseRepoRoot()
                     }
+                    .disabled(repoRootStore.isDetectingRepoRoot || repoRootStore.isChoosingRepoRoot)
                 }
             }
         }
@@ -102,10 +103,11 @@ private struct SettingsView: View {
 private final class RepoRootStore: ObservableObject {
     @Published private(set) var repoRootURL: URL?
     @Published private(set) var isDetectingRepoRoot = false
+    @Published private(set) var isChoosingRepoRoot = false
 
     private let defaults: UserDefaults
     private let detectorStartURL: URL
-    private var didStartDetection = false
+    private var detectionTask: Task<URL?, Never>?
 
     init(
         defaults: UserDefaults = .standard,
@@ -129,20 +131,28 @@ private final class RepoRootStore: ObservableObject {
             return
         }
 
-        guard !didStartDetection else {
+        guard detectionTask == nil else {
             return
         }
 
-        didStartDetection = true
         isDetectingRepoRoot = true
         let startURL = detectorStartURL
-
-        Task {
-            let detectedURL = await Task.detached(priority: .userInitiated) {
+        let task = Task<URL?, Never> {
+            await Task.detached(priority: .userInitiated) {
                 RepoDetector.findRepoRoot(startingFrom: startURL)
             }.value
+        }
+        detectionTask = task
 
+        Task {
+            let detectedURL = await task.value
+
+            detectionTask = nil
             isDetectingRepoRoot = false
+
+            guard repoRootURL == nil else {
+                return
+            }
 
             if let detectedURL {
                 save(detectedURL)
@@ -153,6 +163,10 @@ private final class RepoRootStore: ObservableObject {
     }
 
     func chooseRepoRoot() {
+        guard !isChoosingRepoRoot else {
+            return
+        }
+
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -162,11 +176,23 @@ private final class RepoRootStore: ObservableObject {
         panel.prompt = "Choose"
         panel.directoryURL = repoRootURL
 
-        guard panel.runModal() == .OK, let selectedURL = panel.url else {
-            return
-        }
+        isChoosingRepoRoot = true
 
-        save(selectedURL)
+        panel.begin { [weak self] response in
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+
+                self.isChoosingRepoRoot = false
+
+                guard response == .OK, let selectedURL = panel.url else {
+                    return
+                }
+
+                self.save(selectedURL)
+            }
+        }
     }
 
     private func save(_ url: URL) {
