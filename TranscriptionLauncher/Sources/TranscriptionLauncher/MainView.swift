@@ -52,7 +52,7 @@ struct MainView: View {
     private var dropTarget: some View {
         DropTargetView(fileURL: model.inputFileURL, isTargeted: isDropTargeted)
             .dropDestination(for: URL.self) { urls, _ in
-                model.acceptDroppedFiles(urls)
+                model.acceptInputFiles(urls)
             } isTargeted: { targeted in
                 isDropTargeted = targeted
             }
