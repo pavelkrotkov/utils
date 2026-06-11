@@ -10,16 +10,6 @@ private let environmentLogger = Logger(
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    /// Files opened from Finder ("Open With", double-click) can arrive
-    /// before the SwiftUI scene attaches its handler; the buffer bridges
-    /// that gap.
-    let openedFiles = OpenURLBuffer()
-
-    func application(_ application: NSApplication, open urls: [URL]) {
-        NSApp.activate()
-        openedFiles.deliver(urls)
-    }
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate()
@@ -61,13 +51,11 @@ struct TranscriptionLauncherApp: App {
                     }
                 }
             }
-            .onAppear {
-                // Strong capture is deliberate: the model must stay reachable
-                // for as long as the delegate can deliver opened files, and no
-                // cycle exists because the model never references the delegate.
-                appDelegate.openedFiles.handler = { urls in
-                    launcherModel.acceptDroppedFiles(urls)
-                }
+            // Files opened from Finder ("Open With", double-click) arrive
+            // here once the document types in Info.plist are registered;
+            // SwiftUI reopens or creates the window as needed.
+            .onOpenURL { url in
+                launcherModel.acceptDroppedFiles([url])
             }
         }
         .commands {
