@@ -35,7 +35,7 @@ public enum CommandBuilder {
         precondition(repoRoot.isFileURL, "Repository root URL must be a file URL")
 
         let inputPath = input.path
-        let outputPath = input.deletingPathExtension().appendingPathExtension("txt").path
+        let outputPath = Self.outputPath(for: preset, input: input)
 
         switch preset {
         case .fastCloud:
@@ -88,6 +88,22 @@ public enum CommandBuilder {
                 repoRoot: repoRoot
             )
         }
+    }
+
+    /// Must stay in sync with the OutputPathResolver naming rules (#58):
+    /// `.txt` for plain transcripts, `.spk.txt` for diarized output,
+    /// `.vibevoice.txt` for VibeVoice output.
+    private static func outputPath(for preset: TranscriptionPreset, input: URL) -> String {
+        let suffix: String
+        switch preset {
+        case .privateLocalWithSpeakers:
+            suffix = ".spk.txt"
+        case .appleSiliconLocal:
+            suffix = ".vibevoice.txt"
+        case .fastCloud, .bestCloud, .compatibleCloud, .privateLocal:
+            suffix = ".txt"
+        }
+        return input.deletingPathExtension().path + suffix
     }
 
     private static func openAICommand(
