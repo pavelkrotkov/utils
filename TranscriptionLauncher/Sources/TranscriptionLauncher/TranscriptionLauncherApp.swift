@@ -55,7 +55,7 @@ struct TranscriptionLauncherApp: App {
             // here once the document types in Info.plist are registered;
             // SwiftUI reopens or creates the window as needed.
             .onOpenURL { url in
-                launcherModel.acceptDroppedFiles([url])
+                launcherModel.acceptInputFiles([url])
             }
         }
         .commands {

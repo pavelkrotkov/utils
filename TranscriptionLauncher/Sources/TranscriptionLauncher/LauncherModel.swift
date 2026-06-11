@@ -55,7 +55,7 @@ final class LauncherModel: ObservableObject {
     /// Accepts the first dropped or Finder-opened file when it is an
     /// existing audio or video file; otherwise explains why it was rejected.
     @discardableResult
-    func acceptDroppedFiles(_ urls: [URL]) -> Bool {
+    func acceptInputFiles(_ urls: [URL]) -> Bool {
         guard let url = urls.first else {
             return false
         }
