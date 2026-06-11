@@ -89,16 +89,20 @@ struct SettingsView: View {
     }
 
     private func refreshEnvironment() {
+        guard !isRefreshingEnvironment else {
+            return
+        }
+
         isRefreshingEnvironment = true
         environmentStatusMessage = nil
         Task {
+            defer { isRefreshingEnvironment = false }
             do {
                 _ = try await EnvironmentSnapshot.refresh()
                 environmentStatusMessage = "Environment refreshed."
             } catch {
                 environmentStatusMessage = "Refresh failed: \(String(describing: error))"
             }
-            isRefreshingEnvironment = false
         }
     }
 

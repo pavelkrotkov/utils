@@ -20,6 +20,9 @@ final class LauncherModel: ObservableObject {
     @Published private(set) var lastOutputURL: URL?
     @Published var errorAlert: ErrorPresentation?
     @Published var pendingOverwriteRun: PendingRun?
+    /// True while the environment snapshot is being captured, before
+    /// `runner.isRunning` flips; lets the UI show feedback for that phase.
+    @Published private(set) var isPreparing = false
 
     @Published var selectedPreset: TranscriptionPreset {
         didSet { defaults.set(selectedPreset.defaultsValue, forKey: DefaultsKeys.selectedPreset) }
@@ -34,6 +37,11 @@ final class LauncherModel: ObservableObject {
     let runner = ProcessRunner()
 
     private let defaults: UserDefaults
+    /// The in-flight run, spanning environment capture and the process run.
+    /// Guarding on this instead of `runner.isRunning` closes the window
+    /// before `runner.run` starts, where a second Run click would otherwise
+    /// launch a duplicate task.
+    private var runTask: Task<Void, Never>?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -75,7 +83,7 @@ final class LauncherModel: ObservableObject {
     /// Validates the run and starts it, first setting `pendingOverwriteRun`
     /// for confirmation when the output file already exists.
     func requestRun(repoRoot: URL?) {
-        guard !runner.isRunning, let input = inputFileURL else {
+        guard runTask == nil, let input = inputFileURL else {
             return
         }
 
@@ -109,9 +117,15 @@ final class LauncherModel: ObservableObject {
     }
 
     func start(_ run: PendingRun) {
+        guard runTask == nil else {
+            return
+        }
+
         lastOutputURL = nil
-        Task {
+        isPreparing = true
+        runTask = Task {
             await perform(run)
+            runTask = nil
         }
     }
 
@@ -127,8 +141,10 @@ final class LauncherModel: ObservableObject {
     }
 
     private func perform(_ run: PendingRun) async {
+        defer { isPreparing = false }
         do {
             let environment = try await EnvironmentSnapshot.capture()
+            isPreparing = false
             let command = CommandBuilder.command(
                 for: selectedPreset,
                 input: run.input,
