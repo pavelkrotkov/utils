@@ -71,7 +71,9 @@ private struct ContentView: View {
         .padding()
         .frame(minWidth: 420, minHeight: 180, alignment: .leading)
         .onAppear {
-            repoRootStore.detectRepoRootIfNeeded(promptOnFailure: true)
+            // Onboarding owns first-run prompting; if the user skipped repo
+            // selection there, don't force the panel open again here.
+            repoRootStore.detectRepoRootIfNeeded()
         }
     }
 
@@ -154,7 +156,7 @@ final class RepoRootStore: ObservableObject {
         return isDetectingRepoRoot ? "Detecting..." : "Not configured"
     }
 
-    func detectRepoRootIfNeeded(promptOnFailure: Bool = false) {
+    func detectRepoRootIfNeeded() {
         guard repoRootURL == nil else {
             return
         }
@@ -185,9 +187,6 @@ final class RepoRootStore: ObservableObject {
 
             if let detectedURL {
                 save(detectedURL)
-            } else if promptOnFailure {
-                repoRootValidationMessage = "Choose the utils repository root."
-                chooseRepoRoot()
             }
         }
     }

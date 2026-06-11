@@ -46,7 +46,7 @@ public enum DependencyChecker {
                 name: name,
                 requirement: .localPresets,
                 isAvailable: resolvedURL != nil,
-                resolvedPath: resolvedURL?.path
+                resolvedPath: resolvedURL?.path(percentEncoded: false)
             ))
         }
 
