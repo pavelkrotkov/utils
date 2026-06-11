@@ -80,6 +80,18 @@ func classifierDetectsAPIError() {
 }
 
 @Test
+func classifierIncludesAPIErrorDetailLine() {
+    let stderr = """
+    Error: OpenAI API request failed (HTTP 429).
+    API error (insufficient_quota): You exceeded your current quota.
+    """
+
+    let expected = "OpenAI API request failed (HTTP 429). "
+        + "API error (insufficient_quota): You exceeded your current quota."
+    #expect(ErrorClassifier.classify(stderr) == .apiError(expected))
+}
+
+@Test
 func classifierPassesUnknownErrorThrough() {
     let stderr = "Traceback (most recent call last):\n  something exploded\n"
 

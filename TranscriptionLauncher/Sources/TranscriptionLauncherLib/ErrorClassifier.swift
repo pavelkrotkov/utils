@@ -26,6 +26,10 @@ public enum ErrorClassifier {
             }
         }
 
+        if let apiError = matchAPIError(lines) {
+            return apiError
+        }
+
         return .unknown(stderr.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
@@ -37,7 +41,6 @@ public enum ErrorClassifier {
         matchCommandNotFound,
         matchMissingPythonPackage,
         matchUnsupportedHardware,
-        matchAPIError,
     ]
 
     private static func matchMissingOpenAIKey(_ line: String) -> TranscriptionError? {
@@ -117,15 +120,25 @@ public enum ErrorClassifier {
         return .unsupportedHardware("VibeVoice requires Apple Silicon")
     }
 
-    private static func matchAPIError(_ line: String) -> TranscriptionError? {
-        guard line.contains("OpenAI API request failed (HTTP") else {
+    private static func matchAPIError(_ lines: [String]) -> TranscriptionError? {
+        guard let statusIndex = lines.firstIndex(where: {
+            $0.contains("OpenAI API request failed (HTTP")
+        }) else {
             return nil
         }
 
-        var message = line
+        var message = lines[statusIndex]
         for prefix in ["Error: ", "ERROR: "] where message.hasPrefix(prefix) {
             message = String(message.dropFirst(prefix.count))
         }
+
+        // audio_transcribe_openai.sh follows the status line with a detail
+        // line like "API error (insufficient_quota): ..." when the response
+        // body is parseable; include it so the actionable message survives.
+        if let detail = lines[(statusIndex + 1)...].first(where: { $0.hasPrefix("API error") }) {
+            message += " \(detail)"
+        }
+
         return .apiError(message)
     }
 
