@@ -5,6 +5,7 @@ __pycache__/
 .env
 .build/
 .swiftpm/
+TranscriptionLauncher/dist/
 DerivedData/
 xcuserdata/
 .claude/
