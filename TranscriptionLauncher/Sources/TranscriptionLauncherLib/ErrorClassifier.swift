@@ -1,6 +1,6 @@
 import Foundation
 
-public enum TranscriptionError: Equatable, Sendable {
+public enum TranscriptionError: Error, Equatable, Sendable {
     case missingAPIKey(String)
     case missingDependency(String)
     case missingModel(String)
