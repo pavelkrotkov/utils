@@ -52,8 +52,8 @@ final class LauncherModel: ObservableObject {
         self.vibevoiceContext = defaults.string(forKey: DefaultsKeys.vibevoiceContext) ?? ""
     }
 
-    /// Accepts the first dropped file when it is an existing audio or video
-    /// file; otherwise explains why the drop was rejected.
+    /// Accepts the first dropped or Finder-opened file when it is an
+    /// existing audio or video file; otherwise explains why it was rejected.
     @discardableResult
     func acceptDroppedFiles(_ urls: [URL]) -> Bool {
         guard let url = urls.first else {
