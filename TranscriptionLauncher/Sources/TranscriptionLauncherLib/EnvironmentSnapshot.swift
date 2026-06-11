@@ -46,9 +46,15 @@ public enum EnvironmentSnapshot {
     }
 
     private static func captureUncached() async throws -> Values {
-        try await Task.detached(priority: .userInitiated) {
-            try captureUncachedBlocking()
-        }.value
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    continuation.resume(returning: try captureUncachedBlocking())
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
     }
 
     private static func captureUncachedBlocking() throws -> Values {
@@ -58,7 +64,7 @@ public enum EnvironmentSnapshot {
             : "/bin/sh"
         process.executableURL = URL(fileURLWithPath: shellPath)
         process.arguments = shellPath == "/bin/zsh"
-            ? ["-l", "-c", "env -0"]
+            ? ["-l", "-i", "-c", "env -0"]
             : ["-c", "env -0"]
 
         let fileManager = FileManager.default
@@ -81,18 +87,28 @@ public enum EnvironmentSnapshot {
             throw EnvironmentSnapshotError.temporaryFileFailed(path: errorURL.path)
         }
 
-        let outputHandle = try FileHandle(forWritingTo: outputURL)
-        let errorHandle = try FileHandle(forWritingTo: errorURL)
+        let openedOutputHandle = try FileHandle(forWritingTo: outputURL)
+        var outputHandle: FileHandle? = openedOutputHandle
         defer {
-            try? outputHandle.close()
-            try? errorHandle.close()
+            try? outputHandle?.close()
         }
 
-        process.standardOutput = outputHandle
-        process.standardError = errorHandle
+        let openedErrorHandle = try FileHandle(forWritingTo: errorURL)
+        var errorHandle: FileHandle? = openedErrorHandle
+        defer {
+            try? errorHandle?.close()
+        }
+
+        process.standardOutput = openedOutputHandle
+        process.standardError = openedErrorHandle
 
         try process.run()
-        process.waitUntilExit()
+        try waitUntilExit(process, timeoutSeconds: 10)
+
+        try outputHandle?.close()
+        outputHandle = nil
+        try errorHandle?.close()
+        errorHandle = nil
 
         let outputData = try Data(contentsOf: outputURL)
         let errorData = try Data(contentsOf: errorURL)
@@ -112,11 +128,26 @@ public enum EnvironmentSnapshot {
 
         return parse(output)
     }
+
+    private static func waitUntilExit(_ process: Process, timeoutSeconds: TimeInterval) throws {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+
+        while process.isRunning {
+            if Date() >= deadline {
+                process.terminate()
+                process.waitUntilExit()
+                throw EnvironmentSnapshotError.captureTimedOut
+            }
+
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+    }
 }
 
 private actor EnvironmentSnapshotCache {
     private var cachedValues: EnvironmentSnapshot.Values?
     private var inFlightCapture: Task<EnvironmentSnapshot.Values, Error>?
+    private var currentCaptureID: UUID?
 
     func values(
         capture: @Sendable @escaping () async throws -> EnvironmentSnapshot.Values
@@ -132,13 +163,20 @@ private actor EnvironmentSnapshotCache {
         let task = Task {
             try await capture()
         }
+        let captureID = UUID()
+        currentCaptureID = captureID
         inFlightCapture = task
         defer {
-            inFlightCapture = nil
+            if currentCaptureID == captureID {
+                inFlightCapture = nil
+                currentCaptureID = nil
+            }
         }
 
         let values = try await task.value
-        cachedValues = values
+        if currentCaptureID == captureID {
+            cachedValues = values
+        }
         return values
     }
 
@@ -148,19 +186,27 @@ private actor EnvironmentSnapshotCache {
         let task = Task {
             try await capture()
         }
+        let captureID = UUID()
+        currentCaptureID = captureID
         inFlightCapture = task
         defer {
-            inFlightCapture = nil
+            if currentCaptureID == captureID {
+                inFlightCapture = nil
+                currentCaptureID = nil
+            }
         }
 
         let values = try await task.value
-        cachedValues = values
+        if currentCaptureID == captureID {
+            cachedValues = values
+        }
         return values
     }
 }
 
 public enum EnvironmentSnapshotError: Error, Equatable {
     case captureFailed(status: Int32, stderr: String)
+    case captureTimedOut
     case invalidUTF8Output
     case temporaryFileFailed(path: String)
 }
