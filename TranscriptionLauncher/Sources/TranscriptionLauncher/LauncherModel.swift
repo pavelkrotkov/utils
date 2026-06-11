@@ -37,6 +37,7 @@ final class LauncherModel: ObservableObject {
 
     let runner = ProcessRunner()
 
+    private let notifications = NotificationManager()
     private let defaults: UserDefaults
     /// The in-flight run, spanning environment capture and the process run.
     /// Guarding on this instead of `runner.isRunning` closes the window
@@ -157,11 +158,21 @@ final class LauncherModel: ObservableObject {
             isPreparing = false
             let outputURL = try await runner.run(command: run.command, environment: environment)
             lastOutputURL = outputURL
-            NSWorkspace.shared.activateFileViewerSelecting([outputURL])
+            if NSApp.isActive {
+                NSWorkspace.shared.activateFileViewerSelecting([outputURL])
+            } else {
+                // The user is in another app: don't steal focus by opening
+                // Finder; notify instead, and reveal on click.
+                notifications.notifySuccess(output: outputURL)
+            }
         } catch is CancellationError {
             // The user cancelled; the partial log stays visible.
         } catch {
-            errorAlert = ErrorPresentation(error: error)
+            let presentation = ErrorPresentation(error: error)
+            errorAlert = presentation
+            if !NSApp.isActive {
+                notifications.notifyFailure(message: presentation.message)
+            }
         }
     }
 
