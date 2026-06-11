@@ -101,6 +101,13 @@ func parsesIndeterminateUpdate() {
 }
 
 @Test
+func parsesLineWithTrailingNewline() {
+    let event = ProgressParser.parse("INFO: ffmpeg conversion started\r\n")
+
+    #expect(event == ProgressEvent(stage: "ffmpeg conversion", isStart: true))
+}
+
+@Test
 func ignoresErrorLine() {
     let event = ProgressParser.parse("ERROR: Whisper model not found: /tmp/model.bin")
 

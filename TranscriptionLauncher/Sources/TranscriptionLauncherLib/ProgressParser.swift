@@ -35,7 +35,7 @@ public struct ProgressEvent: Equatable, Sendable {
 ///     INFO: <free-form message>
 public enum ProgressParser {
     public static func parse(_ line: String) -> ProgressEvent? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.hasPrefix(infoPrefix) else {
             return nil
         }
