@@ -16,13 +16,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let openedFiles = OpenURLBuffer()
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         openedFiles.deliver(urls)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
 
         // Warm the snapshot cache so the first run doesn't pay for a login
         // shell launch.
