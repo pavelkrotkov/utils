@@ -10,6 +10,8 @@ public enum TranscriptionPreset: CaseIterable, Equatable, Sendable {
 }
 
 public struct TranscriptionCommand: Equatable, Sendable {
+    /// Absolute path, or a bare command name (e.g. `uv`) that the process
+    /// runner must resolve against the captured login-shell PATH.
     public let executable: String
     public let arguments: [String]
     public let workingDirectory: URL
@@ -29,6 +31,9 @@ public enum CommandBuilder {
         whisperModelPath: String? = nil,
         vibevoiceContext: String? = nil
     ) -> TranscriptionCommand {
+        precondition(input.isFileURL, "Input URL must be a file URL")
+        precondition(repoRoot.isFileURL, "Repository root URL must be a file URL")
+
         let inputPath = input.path
         let outputPath = input.deletingPathExtension().appendingPathExtension("txt").path
 
