@@ -89,7 +89,22 @@ final class NotificationManager: NSObject, @preconcurrency UNUserNotificationCen
         if let outputPath {
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: outputPath)])
         } else {
-            NSApp.activate()
+            bringAppToFront()
+        }
+    }
+
+    /// Activation alone does not restore a minimized launcher window or
+    /// recreate one that was closed while the run kept going, which would
+    /// leave the failure alert with no window to appear in.
+    private func bringAppToFront() {
+        NSApp.activate()
+        for window in NSApp.windows where window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
+        if !NSApp.windows.contains(where: { $0.isVisible && $0.canBecomeMain }) {
+            // Ask for a reopen exactly as a Dock-icon click would; SwiftUI
+            // responds by recreating the WindowGroup window.
+            _ = NSApp.delegate?.applicationShouldHandleReopen?(NSApp, hasVisibleWindows: false)
         }
     }
 }
