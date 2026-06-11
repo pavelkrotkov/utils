@@ -13,7 +13,7 @@ public enum ErrorClassifier {
     public static func classify(_ stderr: String) -> TranscriptionError {
         let lines = stderr
             .split(separator: "\n", omittingEmptySubsequences: true)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
 
         // Matchers are ordered from most to least specific. Every line is
         // checked against a matcher before moving to the next one, so the
@@ -66,7 +66,7 @@ public enum ErrorClassifier {
             return nil
         }
 
-        let name = binary.components(separatedBy: "/").last ?? binary
+        let name = binary.split(separator: "/").last.map(String.init) ?? binary
         if name.hasPrefix("whisper") {
             return .missingDependency("whisper-cpp")
         }

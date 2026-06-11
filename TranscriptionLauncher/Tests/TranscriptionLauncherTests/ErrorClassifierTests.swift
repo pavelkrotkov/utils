@@ -107,3 +107,10 @@ func classifierPrefersMoreSpecificMatchOverLaterGenericOne() {
 
     #expect(ErrorClassifier.classify(stderr) == .missingModel("ggml-large-v3.bin"))
 }
+
+@Test
+func classifierHandlesWindowsLineEndingsDuringExtraction() {
+    let stderr = "INFO: Converting input...\r\nERROR: Whisper model not found: /opt/models/ggml-large-v3.bin\r\n"
+
+    #expect(ErrorClassifier.classify(stderr) == .missingModel("/opt/models/ggml-large-v3.bin"))
+}
