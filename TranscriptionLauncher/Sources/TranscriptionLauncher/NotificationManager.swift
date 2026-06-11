@@ -15,8 +15,12 @@ private let notificationLogger = Logger(
 ///
 /// Callers decide *whether* to notify (only when the app is not frontmost);
 /// this type owns permission, delivery, and click handling.
+// The delegate conformance is @preconcurrency: the SDK declares the
+// requirements nonisolated but delivers them on the main thread (and marks
+// `UNNotificationContent.userInfo` @MainActor), so the main-actor methods
+// witness them with a runtime isolation check instead of sending checks.
 @MainActor
-final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
+final class NotificationManager: NSObject, @preconcurrency UNUserNotificationCenterDelegate {
     /// `userInfo` key carrying the output file path of a successful run.
     static let outputPathKey = "outputPath"
 
@@ -76,8 +80,6 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    // Satisfies the async protocol requirement from the main actor, where
-    // `UNNotificationResponse` is isolated in the macOS 15 SDK.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
