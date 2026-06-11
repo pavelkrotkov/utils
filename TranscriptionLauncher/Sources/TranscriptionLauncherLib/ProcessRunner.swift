@@ -70,7 +70,10 @@ public final class ProcessRunner: ObservableObject {
         process.standardError = stderrPipe
 
         let exitLatch = ExitLatch()
-        process.terminationHandler = { _ in
+        // Explicitly @Sendable: Foundation invokes the handler on a
+        // background queue, so the closure must not inherit this method's
+        // main-actor isolation or the runtime isolation check traps.
+        process.terminationHandler = { @Sendable _ in
             exitLatch.signal()
         }
 
@@ -179,7 +182,7 @@ public final class ProcessRunner: ObservableObject {
     /// Signals the whole process group when the child is its leader, so the
     /// signal reaches grandchildren directly; otherwise signals just the
     /// child and relies on parents like `uv` forwarding it.
-    private static func sendSignal(_ signal: Int32, to pid: pid_t) {
+    private nonisolated static func sendSignal(_ signal: Int32, to pid: pid_t) {
         if getpgid(pid) == pid {
             kill(-pid, signal)
         } else {
@@ -187,7 +190,7 @@ public final class ProcessRunner: ObservableObject {
         }
     }
 
-    private static func failureError(
+    private nonisolated static func failureError(
         stderr: String,
         reason: Process.TerminationReason,
         status: Int32
@@ -205,41 +208,39 @@ public final class ProcessRunner: ObservableObject {
     /// Returns a stream of output lines from both pipes, finishing when
     /// both reach end-of-file, plus an idempotent `forceFinish` that stops
     /// reading early when a lingering grandchild holds a pipe open.
-    private static func lineStream(
+    private nonisolated static func lineStream(
         stdout: FileHandle,
         stderr: FileHandle
     ) -> (lines: AsyncStream<OutputLine>, forceFinish: () -> Void) {
         let (stream, continuation) = AsyncStream.makeStream(of: OutputLine.self)
-        let drained = DispatchGroup()
-        readLines(from: stdout, isStderr: false, drained: drained, into: continuation)
-        readLines(from: stderr, isStderr: true, drained: drained, into: continuation)
-        drained.notify(queue: .global()) {
-            continuation.finish()
-        }
+        let tracker = StreamTracker(continuation: continuation)
+        readLines(from: stdout, isStderr: false, tracker: tracker, into: continuation)
+        readLines(from: stderr, isStderr: true, tracker: tracker, into: continuation)
 
         return (stream, {
             stdout.readabilityHandler = nil
             stderr.readabilityHandler = nil
-            continuation.finish()
+            tracker.forceFinish()
         })
     }
 
-    private static func readLines(
+    private nonisolated static func readLines(
         from handle: FileHandle,
         isStderr: Bool,
-        drained: DispatchGroup,
+        tracker: StreamTracker,
         into continuation: AsyncStream<OutputLine>.Continuation
     ) {
-        drained.enter()
         let accumulator = LineAccumulator()
-        handle.readabilityHandler = { handle in
+        // Explicitly @Sendable for the same reason as terminationHandler:
+        // the handler runs on a background queue.
+        handle.readabilityHandler = { @Sendable handle in
             let data = handle.availableData
             guard !data.isEmpty else {
                 if let line = accumulator.buffer.finish() {
                     continuation.yield(OutputLine(text: line, isStderr: isStderr))
                 }
                 handle.readabilityHandler = nil
-                drained.leave()
+                tracker.streamReachedEndOfFile()
                 return
             }
 
@@ -259,6 +260,45 @@ private struct OutputLine: Sendable {
 /// invokes serially per handle.
 private final class LineAccumulator: @unchecked Sendable {
     var buffer = LineBuffer()
+}
+
+/// Finishes the line-stream continuation once both pipes reach end-of-file,
+/// or immediately on `forceFinish`. A lock-guarded counter is used instead
+/// of `DispatchGroup` because `forceFinish` would leave a group permanently
+/// unbalanced, which is an error to deallocate.
+private final class StreamTracker: @unchecked Sendable {
+    private let lock = NSLock()
+    private var remainingStreams = 2
+    private var isFinished = false
+    private let continuation: AsyncStream<OutputLine>.Continuation
+
+    init(continuation: AsyncStream<OutputLine>.Continuation) {
+        self.continuation = continuation
+    }
+
+    func streamReachedEndOfFile() {
+        finish(force: false)
+    }
+
+    func forceFinish() {
+        finish(force: true)
+    }
+
+    private func finish(force: Bool) {
+        lock.lock()
+        if !force {
+            remainingStreams -= 1
+        }
+        let shouldFinish = !isFinished && (force || remainingStreams == 0)
+        if shouldFinish {
+            isFinished = true
+        }
+        lock.unlock()
+
+        if shouldFinish {
+            continuation.finish()
+        }
+    }
 }
 
 /// A one-shot latch that, unlike `AsyncStream` iteration, is immune to task
