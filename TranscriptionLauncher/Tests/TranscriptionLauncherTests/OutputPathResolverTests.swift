@@ -82,10 +82,11 @@ func allPresetsProduceAbsolutePaths() {
 
 @Test
 func relativeInputProducesAbsoluteOutput() {
-    let input = URL(fileURLWithPath: "rec.m4a")
+    let baseURL = URL(fileURLWithPath: "/tmp")
+    let input = URL(fileURLWithPath: "rec.m4a", relativeTo: baseURL)
 
     let output = OutputPathResolver.outputPath(for: .fastCloud, input: input)
 
-    #expect(output.path.hasPrefix("/"))
+    #expect(output.path == "/tmp/rec.txt")
     #expect(output.lastPathComponent == "rec.txt")
 }
