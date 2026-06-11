@@ -17,7 +17,7 @@ it into a double-clickable `.app` (no Xcode project needed):
 
 ```sh
 make app          # Build release dist/TranscriptionLauncher.app
-make install      # Copy the .app to /Applications
+make install      # Copy the built .app to /Applications (run make app first)
 make clean        # Remove build artifacts (dist/ and .build/)
 ```
 

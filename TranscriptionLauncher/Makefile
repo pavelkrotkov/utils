@@ -7,7 +7,7 @@
 #
 # Targets:
 #   make app      Build the release .app bundle into dist/
-#   make install  Copy the .app to /Applications
+#   make install  Copy the built .app to /Applications (run `make app` first)
 #   make clean    Remove build artifacts (dist/ and .build/)
 #
 # `make app` delegates to Scripts/make-app.sh, which builds with SwiftPM,
@@ -24,7 +24,11 @@ INSTALL_DIR ?= /Applications
 app:
 	./Scripts/make-app.sh $(CONFIGURATION)
 
-install: app
+# Deliberately does not depend on `app`: installing to /Applications may be
+# run under sudo, and a sudo-triggered rebuild would leave root-owned
+# artifacts in .build/ and dist/ that break later non-sudo builds.
+install:
+	@test -d "$(APP)" || { echo "Error: $(APP) not found. Run 'make app' first." >&2; exit 1; }
 	@test -n "$(INSTALL_DIR)" || { echo "Error: INSTALL_DIR must not be empty" >&2; exit 1; }
 	rm -rf "$(INSTALL_DIR)/$(APP_NAME).app"
 	ditto "$(APP)" "$(INSTALL_DIR)/$(APP_NAME).app"
