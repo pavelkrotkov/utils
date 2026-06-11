@@ -26,7 +26,6 @@ public final class ProcessRunner: ObservableObject {
 
     private var process: Process?
     private var isCancelled = false
-    private var pumpFinished = false
     private var stderrTranscript: [String] = []
 
     public init() {}
@@ -50,7 +49,8 @@ public final class ProcessRunner: ObservableObject {
 
         guard let executableURL = ExecutableResolver.resolve(
             command.executable,
-            environment: environment
+            environment: environment,
+            workingDirectory: command.workingDirectory
         ) else {
             throw TranscriptionError.missingDependency(
                 URL(fileURLWithPath: command.executable).lastPathComponent
@@ -78,7 +78,6 @@ public final class ProcessRunner: ObservableObject {
         }
 
         isCancelled = false
-        pumpFinished = false
         progress = nil
         logLines = []
         stderrTranscript = []
@@ -101,7 +100,6 @@ public final class ProcessRunner: ObservableObject {
             for await line in lines {
                 self.consume(line: line, onLine: onLine)
             }
-            self.pumpFinished = true
         }
 
         // The latch ignores task cancellation: once launched, the process
@@ -115,12 +113,15 @@ public final class ProcessRunner: ObservableObject {
             }
         }
 
-        let drainDeadline = ContinuousClock.now + Self.drainGracePeriod
-        while !pumpFinished, ContinuousClock.now < drainDeadline {
-            try? await Task.sleep(for: .milliseconds(20))
+        // Bound the wait for end-of-file: orphaned grandchildren can hold
+        // the pipe write ends open indefinitely. `forceFinish` is
+        // idempotent, so firing after a natural finish is harmless.
+        let drainTimeout = Task { @MainActor in
+            try? await Task.sleep(for: Self.drainGracePeriod)
+            forceFinish()
         }
-        forceFinish()
         await pump.value
+        drainTimeout.cancel()
 
         if isCancelled || Task.isCancelled {
             throw CancellationError()
