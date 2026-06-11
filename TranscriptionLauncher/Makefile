@@ -22,9 +22,10 @@ INSTALL_DIR ?= /Applications
 .PHONY: app install clean
 
 app:
-	Scripts/make-app.sh $(CONFIGURATION)
+	./Scripts/make-app.sh $(CONFIGURATION)
 
 install: app
+	@test -n "$(INSTALL_DIR)" || { echo "Error: INSTALL_DIR must not be empty" >&2; exit 1; }
 	rm -rf "$(INSTALL_DIR)/$(APP_NAME).app"
 	ditto "$(APP)" "$(INSTALL_DIR)/$(APP_NAME).app"
 	@echo "Installed $(INSTALL_DIR)/$(APP_NAME).app"
