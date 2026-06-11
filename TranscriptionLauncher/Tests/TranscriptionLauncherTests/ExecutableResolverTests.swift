@@ -24,6 +24,28 @@ func resolvesBareNameFromPathDirectories() throws {
 }
 
 @Test
+func resolvesRelativePathAgainstWorkingDirectory() throws {
+    try withTemporaryDirectory { directoryURL in
+        let binDirectory = directoryURL.appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: binDirectory, withIntermediateDirectories: true)
+        let tool = binDirectory.appendingPathComponent("mytool")
+        FileManager.default.createFile(
+            atPath: tool.path,
+            contents: Data("#!/bin/sh\n".utf8),
+            attributes: [.posixPermissions: 0o755]
+        )
+
+        let resolved = ExecutableResolver.resolve(
+            "bin/mytool",
+            environment: [:],
+            workingDirectory: directoryURL
+        )
+
+        #expect(resolved?.path == tool.path)
+    }
+}
+
+@Test
 func returnsNilForBareNameAbsentFromPath() throws {
     try withTemporaryDirectory { directoryURL in
         let resolved = ExecutableResolver.resolve(
