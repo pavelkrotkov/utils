@@ -143,6 +143,21 @@ func testVibevoiceContextOmittedWhenNil() {
 }
 
 @Test
+func testOutputFileMatchesOutputArgument() {
+    let fast = CommandBuilder.command(for: .fastCloud, input: input, repoRoot: repoRoot)
+    let speakers = CommandBuilder.command(
+        for: .privateLocalWithSpeakers,
+        input: input,
+        repoRoot: repoRoot
+    )
+    let vibevoice = CommandBuilder.command(for: .appleSiliconLocal, input: input, repoRoot: repoRoot)
+
+    #expect(fast.outputFile.path == "/Users/me/Recordings/meeting.txt")
+    #expect(speakers.outputFile.path == "/Users/me/Recordings/meeting.spk.txt")
+    #expect(vibevoice.outputFile.path == "/Users/me/Recordings/meeting.vibevoice.txt")
+}
+
+@Test
 func testCustomWhisperModelPath() {
     let command = CommandBuilder.command(
         for: .privateLocal,
