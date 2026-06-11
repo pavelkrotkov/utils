@@ -53,4 +53,5 @@ jobs:
           --exclude "audio_transcript.py"
           --exclude "pdf_convert_llamaparse.py"
           --exclude "test_audio_common.py"
+          --exclude "TranscriptionLauncher/Scripts/generate_icon.py"
           .
