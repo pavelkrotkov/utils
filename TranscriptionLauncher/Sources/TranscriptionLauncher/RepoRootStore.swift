@@ -137,8 +137,10 @@ final class RepoRootStore: ObservableObject {
             .resolvingSymlinksInPath()
             .standardizedFileURL
 
+        // Treat an invalid root as unconfigured for this session but keep
+        // the saved path: the failure may be temporary, such as an
+        // unmounted external drive.
         guard RepoDetector.isRepoRoot(savedURL) else {
-            defaults.removeObject(forKey: DefaultsKeys.repoRootPath)
             return nil
         }
 
