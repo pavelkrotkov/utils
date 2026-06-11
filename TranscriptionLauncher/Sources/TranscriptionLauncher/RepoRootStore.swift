@@ -51,10 +51,8 @@ final class RepoRootStore: ObservableObject {
         repoRootValidationMessage = nil
         isDetectingRepoRoot = true
         let startURL = detectorStartURL
-        let task = Task<URL?, Never> {
-            await Task.detached(priority: .userInitiated) {
-                RepoDetector.findRepoRoot(startingFrom: startURL)
-            }.value
+        let task = Task.detached(priority: .userInitiated) {
+            RepoDetector.findRepoRoot(startingFrom: startURL)
         }
         detectionTask = task
 

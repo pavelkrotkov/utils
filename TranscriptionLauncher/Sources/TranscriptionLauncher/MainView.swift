@@ -69,15 +69,16 @@ struct MainView: View {
                 }
             }
         }
-        .disabled(runner.isRunning)
+        .disabled(runner.isRunning || model.isPreparing)
     }
 
     private var controls: some View {
         HStack {
-            if runner.isRunning {
+            if runner.isRunning || model.isPreparing {
                 Button("Cancel", role: .destructive) {
                     model.cancel()
                 }
+                .disabled(model.isPreparing)
             } else {
                 Button("Run") {
                     model.requestRun(repoRoot: repoRootStore.repoRootURL)
@@ -98,7 +99,15 @@ struct MainView: View {
 
     @ViewBuilder
     private var progressSection: some View {
-        if runner.isRunning {
+        if model.isPreparing {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Preparing environment...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } else if runner.isRunning {
             let progress = runner.progress
             if let progress, let percent = progress.percent {
                 ProgressView(value: percent, total: 100) {
