@@ -34,17 +34,35 @@ struct TranscriptionLauncherApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var repoRootStore = RepoRootStore()
     @StateObject private var launcherModel = LauncherModel()
+    @StateObject private var onboardingState = OnboardingState()
 
     var body: some Scene {
         WindowGroup {
-            MainView(
-                repoRootStore: repoRootStore,
-                model: launcherModel,
-                runner: launcherModel.runner
-            )
+            if onboardingState.isComplete {
+                MainView(
+                    repoRootStore: repoRootStore,
+                    model: launcherModel,
+                    runner: launcherModel.runner
+                )
+            } else {
+                OnboardingView(repoRootStore: repoRootStore) {
+                    onboardingState.markComplete()
+                }
+            }
+        }
+        .commands {
+            CommandGroup(after: .help) {
+                Button("Run Setup Again") {
+                    onboardingState.restart()
+                }
+            }
         }
         Settings {
-            SettingsView(repoRootStore: repoRootStore, model: launcherModel)
+            SettingsView(
+                repoRootStore: repoRootStore,
+                model: launcherModel,
+                onboardingState: onboardingState
+            )
         }
     }
 }
