@@ -97,6 +97,35 @@ func repoDetectorReturnsNilWhenNotInRepo() throws {
 }
 
 @Test
+func repoDetectorDoesNotUseGenericPyprojectAsRepoMarker() throws {
+    try withTemporaryDirectory { directoryURL in
+        FileManager.default.createFile(
+            atPath: directoryURL.appendingPathComponent("pyproject.toml").path(percentEncoded: false),
+            contents: Data()
+        )
+
+        let foundURL = RepoDetector.findRepoRoot(startingFrom: directoryURL)
+
+        #expect(foundURL == nil)
+    }
+}
+
+@Test
+func repoDetectorValidatesExactRepoRoot() throws {
+    try withTemporaryDirectory { repoRoot in
+        let nestedURL = repoRoot.appendingPathComponent("nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: nestedURL, withIntermediateDirectories: true)
+        FileManager.default.createFile(
+            atPath: repoRoot.appendingPathComponent("audio_common.py").path(percentEncoded: false),
+            contents: Data()
+        )
+
+        #expect(RepoDetector.isRepoRoot(repoRoot))
+        #expect(!RepoDetector.isRepoRoot(nestedURL))
+    }
+}
+
+@Test
 func repoDetectorStopsAtFilesystemRoot() {
     let foundURL = RepoDetector.findRepoRoot(
         startingFrom: URL(fileURLWithPath: "/", isDirectory: true)
