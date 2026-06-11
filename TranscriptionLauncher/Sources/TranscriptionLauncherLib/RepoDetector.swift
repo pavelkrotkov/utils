@@ -4,7 +4,6 @@ public enum RepoDetector {
     public static let defaultMarkerFileNames = [
         "audio_transcribe_openai.sh",
         "audio_common.py",
-        "pyproject.toml",
     ]
 
     public static func findRepoRoot(
@@ -42,6 +41,22 @@ public enum RepoDetector {
 
             currentURL = parentURL
         }
+    }
+
+    public static func isRepoRoot(
+        _ url: URL,
+        markerFileNames: [String] = defaultMarkerFileNames,
+        fileManager: FileManager = .default
+    ) -> Bool {
+        guard !markerFileNames.isEmpty else {
+            return false
+        }
+
+        let rootURL = directoryURL(for: url, fileManager: fileManager)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+        return isUsableDirectory(rootURL, fileManager: fileManager)
+            && containsMarkerFile(in: rootURL, markerFileNames: markerFileNames, fileManager: fileManager)
     }
 
     private static func directoryURL(for url: URL, fileManager: FileManager) -> URL {

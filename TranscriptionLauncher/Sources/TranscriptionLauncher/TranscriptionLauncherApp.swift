@@ -65,6 +65,9 @@ private struct ContentView: View {
     private var repoRootSummary: some View {
         if let repoRootURL = repoRootStore.repoRootURL {
             LabeledContent("Repository Root", value: repoRootURL.path(percentEncoded: false))
+        } else if let validationMessage = repoRootStore.repoRootValidationMessage {
+            Text(validationMessage)
+                .foregroundStyle(.red)
         } else if repoRootStore.isDetectingRepoRoot {
             Text("Detecting repository root...")
                 .foregroundStyle(.secondary)
@@ -93,6 +96,11 @@ private struct SettingsView: View {
                     .disabled(repoRootStore.isDetectingRepoRoot || repoRootStore.isChoosingRepoRoot)
                 }
             }
+
+            if let validationMessage = repoRootStore.repoRootValidationMessage {
+                Text(validationMessage)
+                    .foregroundStyle(.red)
+            }
         }
         .padding()
         .frame(minWidth: 520, minHeight: 120)
@@ -104,6 +112,7 @@ private final class RepoRootStore: ObservableObject {
     @Published private(set) var repoRootURL: URL?
     @Published private(set) var isDetectingRepoRoot = false
     @Published private(set) var isChoosingRepoRoot = false
+    @Published private(set) var repoRootValidationMessage: String?
 
     private let defaults: UserDefaults
     private let detectorStartURL: URL
@@ -135,6 +144,7 @@ private final class RepoRootStore: ObservableObject {
             return
         }
 
+        repoRootValidationMessage = nil
         isDetectingRepoRoot = true
         let startURL = detectorStartURL
         let task = Task<URL?, Never> {
@@ -157,6 +167,7 @@ private final class RepoRootStore: ObservableObject {
             if let detectedURL {
                 save(detectedURL)
             } else if promptOnFailure {
+                repoRootValidationMessage = "Choose the utils repository root."
                 chooseRepoRoot()
             }
         }
@@ -166,6 +177,8 @@ private final class RepoRootStore: ObservableObject {
         guard !isChoosingRepoRoot else {
             return
         }
+
+        repoRootValidationMessage = nil
 
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -190,14 +203,22 @@ private final class RepoRootStore: ObservableObject {
                     return
                 }
 
+                guard RepoDetector.isRepoRoot(selectedURL) else {
+                    self.repoRootValidationMessage =
+                        "This folder does not look like the utils repository root. " +
+                        "Choose a folder containing audio_transcribe_openai.sh or audio_common.py."
+                    return
+                }
+
                 self.save(selectedURL)
             }
         }
     }
 
     private func save(_ url: URL) {
-        let standardizedURL = url.standardizedFileURL
+        let standardizedURL = url.resolvingSymlinksInPath().standardizedFileURL
         repoRootURL = standardizedURL
+        repoRootValidationMessage = nil
         defaults.set(standardizedURL.path(percentEncoded: false), forKey: DefaultsKeys.repoRootPath)
     }
 
@@ -207,7 +228,16 @@ private final class RepoRootStore: ObservableObject {
             return nil
         }
 
-        return URL(fileURLWithPath: savedPath, isDirectory: true).standardizedFileURL
+        let savedURL = URL(fileURLWithPath: savedPath, isDirectory: true)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+
+        guard RepoDetector.isRepoRoot(savedURL) else {
+            defaults.removeObject(forKey: DefaultsKeys.repoRootPath)
+            return nil
+        }
+
+        return savedURL
     }
 }
 
