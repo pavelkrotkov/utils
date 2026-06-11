@@ -12,7 +12,7 @@ private let environmentLogger = Logger(
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
 
         // Warm the snapshot cache so the first run doesn't pay for a login
         // shell launch.
@@ -37,17 +37,27 @@ struct TranscriptionLauncherApp: App {
     @StateObject private var onboardingState = OnboardingState()
 
     var body: some Scene {
-        WindowGroup {
-            if onboardingState.isComplete {
-                MainView(
-                    repoRootStore: repoRootStore,
-                    model: launcherModel,
-                    runner: launcherModel.runner
-                )
-            } else {
-                OnboardingView(repoRootStore: repoRootStore) {
-                    onboardingState.markComplete()
+        // A single Window (not WindowGroup) because the model, runner, and
+        // log are app-wide state; extra windows would all mirror it.
+        Window("Transcription Launcher", id: "main") {
+            Group {
+                if onboardingState.isComplete {
+                    MainView(
+                        repoRootStore: repoRootStore,
+                        model: launcherModel,
+                        runner: launcherModel.runner
+                    )
+                } else {
+                    OnboardingView(repoRootStore: repoRootStore) {
+                        onboardingState.markComplete()
+                    }
                 }
+            }
+            // Files opened from Finder ("Open With", double-click) arrive
+            // here once the document types in Info.plist are registered;
+            // SwiftUI reopens or creates the window as needed.
+            .onOpenURL { url in
+                launcherModel.acceptInputFiles([url])
             }
         }
         .commands {
