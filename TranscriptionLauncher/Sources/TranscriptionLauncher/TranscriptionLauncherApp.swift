@@ -32,13 +32,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct TranscriptionLauncherApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var repoRootStore = RepoRootStore()
+    @StateObject private var onboardingState = OnboardingState()
 
     var body: some Scene {
         WindowGroup {
-            ContentView(repoRootStore: repoRootStore)
+            if onboardingState.isComplete {
+                ContentView(repoRootStore: repoRootStore)
+            } else {
+                OnboardingView(repoRootStore: repoRootStore) {
+                    onboardingState.markComplete()
+                }
+            }
+        }
+        .commands {
+            CommandGroup(after: .help) {
+                Button("Run Setup Again") {
+                    onboardingState.restart()
+                }
+            }
         }
         Settings {
-            SettingsView(repoRootStore: repoRootStore)
+            SettingsView(repoRootStore: repoRootStore, onboardingState: onboardingState)
         }
     }
 }
@@ -80,6 +94,7 @@ private struct ContentView: View {
 
 private struct SettingsView: View {
     @ObservedObject var repoRootStore: RepoRootStore
+    @ObservedObject var onboardingState: OnboardingState
 
     var body: some View {
         Form {
@@ -101,6 +116,10 @@ private struct SettingsView: View {
                 Text(validationMessage)
                     .foregroundStyle(.red)
             }
+
+            Button("Run Setup Again") {
+                onboardingState.restart()
+            }
         }
         .padding()
         .frame(minWidth: 520, minHeight: 120)
@@ -108,7 +127,7 @@ private struct SettingsView: View {
 }
 
 @MainActor
-private final class RepoRootStore: ObservableObject {
+final class RepoRootStore: ObservableObject {
     @Published private(set) var repoRootURL: URL?
     @Published private(set) var isDetectingRepoRoot = false
     @Published private(set) var isChoosingRepoRoot = false
@@ -241,6 +260,7 @@ private final class RepoRootStore: ObservableObject {
     }
 }
 
-private enum DefaultsKeys {
+enum DefaultsKeys {
     static let repoRootPath = "repoRootPath"
+    static let hasCompletedOnboarding = "hasCompletedOnboarding"
 }
