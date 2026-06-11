@@ -76,19 +76,16 @@ public enum CommandBuilder {
                 whisperModelPath: whisperModelPath
             )
         case .appleSiliconLocal:
-            var arguments = [
-                "run", repoRoot.appendingPathComponent("audio_transcribe_vibevoice.py").path,
-                inputPath,
-                "--format", "txt",
-                "-o", outputPath,
-            ]
+            var options = ["--format", "txt"]
             if let vibevoiceContext {
-                arguments += ["--context", vibevoiceContext]
+                options += ["--context", vibevoiceContext]
             }
-            return TranscriptionCommand(
-                executable: "uv",
-                arguments: arguments,
-                workingDirectory: repoRoot
+            return uvCommand(
+                scriptName: "audio_transcribe_vibevoice.py",
+                options: options,
+                inputPath: inputPath,
+                outputPath: outputPath,
+                repoRoot: repoRoot
             )
         }
     }
@@ -113,15 +110,32 @@ public enum CommandBuilder {
         repoRoot: URL,
         whisperModelPath: String?
     ) -> TranscriptionCommand {
+        var options = options
+        if let whisperModelPath {
+            options += ["--large-model", whisperModelPath]
+        }
+        return uvCommand(
+            scriptName: "audio_transcribe_whisper.py",
+            options: options,
+            inputPath: inputPath,
+            outputPath: outputPath,
+            repoRoot: repoRoot
+        )
+    }
+
+    private static func uvCommand(
+        scriptName: String,
+        options: [String],
+        inputPath: String,
+        outputPath: String,
+        repoRoot: URL
+    ) -> TranscriptionCommand {
         var arguments = [
-            "run", repoRoot.appendingPathComponent("audio_transcribe_whisper.py").path,
+            "run", repoRoot.appendingPathComponent(scriptName).path,
             inputPath,
         ]
         arguments += options
         arguments += ["-o", outputPath]
-        if let whisperModelPath {
-            arguments += ["--large-model", whisperModelPath]
-        }
         return TranscriptionCommand(
             executable: "uv",
             arguments: arguments,

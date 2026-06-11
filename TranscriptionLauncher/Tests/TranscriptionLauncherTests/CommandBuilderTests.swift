@@ -130,8 +130,8 @@ func testVibevoiceContextInjected() {
         "run", "/Users/me/utils/audio_transcribe_vibevoice.py",
         "/Users/me/Recordings/meeting.m4a",
         "--format", "txt",
-        "-o", "/Users/me/Recordings/meeting.txt",
         "--context", "Team standup about the launcher",
+        "-o", "/Users/me/Recordings/meeting.txt",
     ])
 }
 
@@ -155,8 +155,8 @@ func testCustomWhisperModelPath() {
         "run", "/Users/me/utils/audio_transcribe_whisper.py",
         "/Users/me/Recordings/meeting.m4a",
         "--format", "txt",
-        "-o", "/Users/me/Recordings/meeting.txt",
         "--large-model", "/models/ggml-large-v3.bin",
+        "-o", "/Users/me/Recordings/meeting.txt",
     ])
 }
 
