@@ -62,8 +62,11 @@ struct TranscriptionLauncherApp: App {
                 }
             }
             .onAppear {
-                appDelegate.openedFiles.handler = { [weak launcherModel] urls in
-                    launcherModel?.acceptDroppedFiles(urls)
+                // Strong capture is deliberate: the model must stay reachable
+                // for as long as the delegate can deliver opened files, and no
+                // cycle exists because the model never references the delegate.
+                appDelegate.openedFiles.handler = { urls in
+                    launcherModel.acceptDroppedFiles(urls)
                 }
             }
         }
