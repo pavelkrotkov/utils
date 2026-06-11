@@ -71,7 +71,7 @@ func testPrivateLocalWithSpeakersPreset() {
         "run", "/Users/me/utils/audio_transcribe_whisper.py",
         "/Users/me/Recordings/meeting.m4a",
         "--diarization",
-        "-o", "/Users/me/Recordings/meeting.txt",
+        "-o", "/Users/me/Recordings/meeting.spk.txt",
     ])
     #expect(command.workingDirectory == repoRoot)
 }
@@ -85,7 +85,7 @@ func testAppleSiliconLocalPreset() {
         "run", "/Users/me/utils/audio_transcribe_vibevoice.py",
         "/Users/me/Recordings/meeting.m4a",
         "--format", "txt",
-        "-o", "/Users/me/Recordings/meeting.txt",
+        "-o", "/Users/me/Recordings/meeting.vibevoice.txt",
     ])
     #expect(command.workingDirectory == repoRoot)
 }
@@ -131,7 +131,7 @@ func testVibevoiceContextInjected() {
         "/Users/me/Recordings/meeting.m4a",
         "--format", "txt",
         "--context", "Team standup about the launcher",
-        "-o", "/Users/me/Recordings/meeting.txt",
+        "-o", "/Users/me/Recordings/meeting.vibevoice.txt",
     ])
 }
 
