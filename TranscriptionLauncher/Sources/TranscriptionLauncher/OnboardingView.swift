@@ -50,7 +50,7 @@ struct OnboardingView: View {
             stepContent
         }
         .padding(24)
-        .frame(minWidth: 480, minHeight: 280, alignment: .topLeading)
+        .frame(minWidth: 480, minHeight: 400, alignment: .topLeading)
         .task {
             await captureEnvironment()
         }
@@ -108,8 +108,10 @@ struct OnboardingView: View {
     private var dependenciesStep: some View {
         Text("Here's what's available for the transcription presets:")
 
-        ForEach(dependencyItems, id: \.name) { item in
-            dependencyRow(item)
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(dependencyItems, id: \.name) { item in
+                dependencyRow(item)
+            }
         }
 
         if let environmentWarning {
@@ -145,9 +147,15 @@ struct OnboardingView: View {
     }
 
     private func detailText(for item: DependencyChecker.Item) -> String {
-        let purpose = item.requirement == .localPresets
-            ? "Needed for local presets"
-            : "Needed for cloud presets"
+        let purpose: String
+        switch item.requirement {
+        case .localPresets:
+            purpose = "Needed for local presets"
+        case .cloudPresets:
+            purpose = "Needed for cloud presets"
+        case .speakerDiarization:
+            purpose = "Needed for the speaker-labeled local preset"
+        }
 
         if let resolvedPath = item.resolvedPath {
             return "\(purpose) — found at \(resolvedPath)"
