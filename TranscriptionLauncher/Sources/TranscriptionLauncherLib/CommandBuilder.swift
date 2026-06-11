@@ -15,11 +15,20 @@ public struct TranscriptionCommand: Equatable, Sendable {
     public let executable: String
     public let arguments: [String]
     public let workingDirectory: URL
+    /// File the command writes the transcript to; the process runner
+    /// verifies it exists after a successful exit.
+    public let outputFile: URL
 
-    public init(executable: String, arguments: [String], workingDirectory: URL) {
+    public init(
+        executable: String,
+        arguments: [String],
+        workingDirectory: URL,
+        outputFile: URL
+    ) {
         self.executable = executable
         self.arguments = arguments
         self.workingDirectory = workingDirectory
+        self.outputFile = outputFile
     }
 }
 
@@ -115,7 +124,8 @@ public enum CommandBuilder {
         TranscriptionCommand(
             executable: repoRoot.appendingPathComponent("audio_transcribe_openai.sh").path,
             arguments: ["--model", model, inputPath, outputPath],
-            workingDirectory: repoRoot
+            workingDirectory: repoRoot,
+            outputFile: URL(fileURLWithPath: outputPath, isDirectory: false)
         )
     }
 
@@ -155,7 +165,8 @@ public enum CommandBuilder {
         return TranscriptionCommand(
             executable: "uv",
             arguments: arguments,
-            workingDirectory: repoRoot
+            workingDirectory: repoRoot,
+            outputFile: URL(fileURLWithPath: outputPath, isDirectory: false)
         )
     }
 }
