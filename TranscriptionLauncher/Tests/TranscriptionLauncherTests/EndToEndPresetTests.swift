@@ -9,74 +9,87 @@ import TranscriptionLauncherLib
 // that executes the stub scripts with /bin/sh, so the `uv run <script>`
 // presets exercise the same wrapper shape as production.
 
-@Test
-@MainActor
-func endToEndEveryPresetWritesItsTranscriptNextToInput() async throws {
-    let expectations: [(TranscriptionPreset, String)] = [
-        (.fastCloud, "meeting.txt"),
-        (.bestCloud, "meeting.txt"),
-        (.compatibleCloud, "meeting.txt"),
-        (.privateLocal, "meeting.txt"),
-        (.privateLocalWithSpeakers, "meeting.spk.txt"),
-        (.appleSiliconLocal, "meeting.vibevoice.txt"),
-    ]
+private struct PresetExpectation: Sendable, CustomTestStringConvertible {
+    let preset: TranscriptionPreset
+    let expectedName: String
 
-    for (preset, expectedName) in expectations {
-        try await withE2EFixture { fixture in
-            let input = try fixture.makeInput(named: "meeting.m4a")
-            let expectedOutput = input.deletingLastPathComponent()
-                .appendingPathComponent(expectedName, isDirectory: false)
-            let command = CommandBuilder.command(
-                for: preset,
-                input: input,
-                repoRoot: fixture.repoRoot
-            )
-
-            let result = try await ProcessRunner().run(
-                command: command,
-                environment: fixture.environment
-            )
-
-            #expect(result.path == expectedOutput.path)
-            let transcript = try String(contentsOf: expectedOutput, encoding: .utf8)
-            #expect(transcript.contains("transcript"))
-        }
+    var testDescription: String {
+        "\(preset) -> \(expectedName)"
     }
 }
 
-@Test
+@Test(arguments: [
+    PresetExpectation(preset: .fastCloud, expectedName: "meeting.txt"),
+    PresetExpectation(preset: .bestCloud, expectedName: "meeting.txt"),
+    PresetExpectation(preset: .compatibleCloud, expectedName: "meeting.txt"),
+    PresetExpectation(preset: .privateLocal, expectedName: "meeting.txt"),
+    PresetExpectation(preset: .privateLocalWithSpeakers, expectedName: "meeting.spk.txt"),
+    PresetExpectation(preset: .appleSiliconLocal, expectedName: "meeting.vibevoice.txt"),
+])
 @MainActor
-func endToEndEdgeCaseFilenames() async throws {
-    let expectations: [(input: String, output: String)] = [
-        ("my recording (1).m4a", "my recording (1).txt"),
-        ("café interview.m4a", "café interview.txt"),
-        ("recording", "recording.txt"),
-        ("my.podcast.ep3.m4a", "my.podcast.ep3.txt"),
-    ]
+func endToEndEveryPresetWritesItsTranscriptNextToInput(
+    _ expectation: PresetExpectation
+) async throws {
+    try await withE2EFixture { fixture in
+        let input = try fixture.makeInput(named: "meeting.m4a")
+        let expectedOutput = input.deletingLastPathComponent()
+            .appendingPathComponent(expectation.expectedName, isDirectory: false)
+        let command = CommandBuilder.command(
+            for: expectation.preset,
+            input: input,
+            repoRoot: fixture.repoRoot
+        )
 
-    // Cover both execution paths: the shell script invoked directly
-    // (fastCloud) and the Python script wrapped in `uv run` (privateLocal).
-    for preset: TranscriptionPreset in [.fastCloud, .privateLocal] {
-        for expectation in expectations {
-            try await withE2EFixture { fixture in
-                let input = try fixture.makeInput(named: expectation.input)
-                let expectedOutput = input.deletingLastPathComponent()
-                    .appendingPathComponent(expectation.output, isDirectory: false)
-                let command = CommandBuilder.command(
-                    for: preset,
-                    input: input,
-                    repoRoot: fixture.repoRoot
-                )
+        let result = try await ProcessRunner().run(
+            command: command,
+            environment: fixture.environment
+        )
 
-                let result = try await ProcessRunner().run(
-                    command: command,
-                    environment: fixture.environment
-                )
+        #expect(result.path == expectedOutput.path)
+        let transcript = try String(contentsOf: expectedOutput, encoding: .utf8)
+        #expect(transcript.contains("transcript"))
+    }
+}
 
-                #expect(result.path == expectedOutput.path)
-                #expect(FileManager.default.fileExists(atPath: expectedOutput.path))
-            }
-        }
+private struct FilenameExpectation: Sendable, CustomTestStringConvertible {
+    let input: String
+    let output: String
+
+    var testDescription: String {
+        "\(input) -> \(output)"
+    }
+}
+
+// Cover both execution paths: the shell script invoked directly
+// (fastCloud) and the Python script wrapped in `uv run` (privateLocal).
+@Test(arguments: [TranscriptionPreset.fastCloud, .privateLocal], [
+    FilenameExpectation(input: "my recording (1).m4a", output: "my recording (1).txt"),
+    FilenameExpectation(input: "café interview.m4a", output: "café interview.txt"),
+    FilenameExpectation(input: "recording", output: "recording.txt"),
+    FilenameExpectation(input: "my.podcast.ep3.m4a", output: "my.podcast.ep3.txt"),
+])
+@MainActor
+func endToEndEdgeCaseFilenames(
+    preset: TranscriptionPreset,
+    expectation: FilenameExpectation
+) async throws {
+    try await withE2EFixture { fixture in
+        let input = try fixture.makeInput(named: expectation.input)
+        let expectedOutput = input.deletingLastPathComponent()
+            .appendingPathComponent(expectation.output, isDirectory: false)
+        let command = CommandBuilder.command(
+            for: preset,
+            input: input,
+            repoRoot: fixture.repoRoot
+        )
+
+        let result = try await ProcessRunner().run(
+            command: command,
+            environment: fixture.environment
+        )
+
+        #expect(result.path == expectedOutput.path)
+        #expect(FileManager.default.fileExists(atPath: expectedOutput.path))
     }
 }
 
@@ -196,72 +209,74 @@ func endToEndCancelledUVRunCleansUpTempFiles() async throws {
     }
 }
 
-@Test
+private struct FailureScenario: Sendable, CustomTestStringConvertible {
+    let preset: TranscriptionPreset
+    let script: String
+    let stderr: String
+    let expected: TranscriptionError
+
+    var testDescription: String {
+        stderr
+    }
+}
+
+// Each stderr line is verbatim from the real script named in the
+// scenario; the classified error is what the UI renders as a friendly
+// message (ErrorPresentation).
+@Test(arguments: [
+    FailureScenario(
+        preset: .fastCloud,
+        script: "audio_transcribe_openai.sh",
+        stderr: "Error: OPENAI_API_KEY is not set.",
+        expected: .missingAPIKey("OPENAI_API_KEY")
+    ),
+    FailureScenario(
+        preset: .privateLocalWithSpeakers,
+        script: "audio_transcribe_whisper.py",
+        stderr: "ERROR: Failed to load both pyannote/speaker-diarization pipelines.",
+        expected: .missingAPIKey("HF_TOKEN")
+    ),
+    FailureScenario(
+        preset: .privateLocal,
+        script: "audio_transcribe_whisper.py",
+        stderr: "ERROR: Whisper model not found: /models/ggml-large-v3.bin",
+        expected: .missingModel("/models/ggml-large-v3.bin")
+    ),
+    FailureScenario(
+        preset: .privateLocal,
+        script: "audio_transcribe_whisper.py",
+        stderr: "ERROR: ffmpeg binary not found or not executable: /opt/homebrew/bin/ffmpeg",
+        expected: .missingDependency("ffmpeg")
+    ),
+    FailureScenario(
+        preset: .appleSiliconLocal,
+        script: "audio_transcribe_vibevoice.py",
+        stderr: "ERROR: mlx-audio/VibeVoice-ASR is intended for Apple Silicon Macs (Darwin arm64).",
+        expected: .unsupportedHardware("VibeVoice requires Apple Silicon")
+    ),
+])
 @MainActor
-func endToEndScriptFailuresSurfaceFriendlyErrors() async throws {
-    // Each stderr line is verbatim from the real script named in the
-    // scenario; the classified error is what the UI renders as a friendly
-    // message (ErrorPresentation).
-    let scenarios: [(
-        preset: TranscriptionPreset,
-        script: String,
-        stderr: String,
-        expected: TranscriptionError
-    )] = [
-        (
-            .fastCloud,
-            "audio_transcribe_openai.sh",
-            "Error: OPENAI_API_KEY is not set.",
-            .missingAPIKey("OPENAI_API_KEY")
-        ),
-        (
-            .privateLocalWithSpeakers,
-            "audio_transcribe_whisper.py",
-            "ERROR: Failed to load both pyannote/speaker-diarization pipelines.",
-            .missingAPIKey("HF_TOKEN")
-        ),
-        (
-            .privateLocal,
-            "audio_transcribe_whisper.py",
-            "ERROR: Whisper model not found: /models/ggml-large-v3.bin",
-            .missingModel("/models/ggml-large-v3.bin")
-        ),
-        (
-            .privateLocal,
-            "audio_transcribe_whisper.py",
-            "ERROR: ffmpeg binary not found or not executable: /opt/homebrew/bin/ffmpeg",
-            .missingDependency("ffmpeg")
-        ),
-        (
-            .appleSiliconLocal,
-            "audio_transcribe_vibevoice.py",
-            "ERROR: mlx-audio/VibeVoice-ASR is intended for Apple Silicon Macs (Darwin arm64).",
-            .unsupportedHardware("VibeVoice requires Apple Silicon")
-        ),
-    ]
+func endToEndScriptFailuresSurfaceFriendlyErrors(_ scenario: FailureScenario) async throws {
+    try await withE2EFixture { fixture in
+        try fixture.installScript(
+            named: scenario.script,
+            body: """
+            echo '\(scenario.stderr)' >&2
+            exit 1
+            """
+        )
+        let input = try fixture.makeInput(named: "meeting.m4a")
+        let command = CommandBuilder.command(
+            for: scenario.preset,
+            input: input,
+            repoRoot: fixture.repoRoot
+        )
 
-    for scenario in scenarios {
-        try await withE2EFixture { fixture in
-            try fixture.installScript(
-                named: scenario.script,
-                body: """
-                echo '\(scenario.stderr)' >&2
-                exit 1
-                """
+        await #expect(throws: scenario.expected) {
+            try await ProcessRunner().run(
+                command: command,
+                environment: fixture.environment
             )
-            let input = try fixture.makeInput(named: "meeting.m4a")
-            let command = CommandBuilder.command(
-                for: scenario.preset,
-                input: input,
-                repoRoot: fixture.repoRoot
-            )
-
-            await #expect(throws: scenario.expected) {
-                try await ProcessRunner().run(
-                    command: command,
-                    environment: fixture.environment
-                )
-            }
         }
     }
 }
@@ -404,8 +419,10 @@ private func withE2EFixture(
     }
 
     // Fake `uv run <script> <args...>`: executes the stub script with
-    // /bin/sh so the `.py` stubs can be plain shell scripts while keeping
-    // the wrapper-process shape of the real `uv`.
+    // /bin/sh so the `.py` stubs can be plain shell scripts. The shim stays
+    // alive as the script's parent — it must not `exec` — so cancellation
+    // tests cover the real `uv` shape: a wrapper process whose child is
+    // only reachable through the runner's descendant sweep.
     try installExecutable(
         at: fixture.binDirectory.appendingPathComponent("uv", isDirectory: false),
         contents: """
@@ -413,7 +430,7 @@ private func withE2EFixture(
         [ "$1" = "run" ] && shift
         script="$1"
         shift
-        exec /bin/sh "$script" "$@"
+        /bin/sh "$script" "$@"
         """
     )
 
