@@ -133,7 +133,9 @@ func endToEndCancelledCloudRunLeavesNoOutput() async throws {
         // throws before the explicit cancel below.
         defer { runTask.cancel() }
         let sawStarted = try await waitUntil { runner.logLines.contains("started") }
-        #expect(sawStarted)
+        // Fail fast: without the marker the process may not be running and
+        // awaiting the task below could hang for the stub's full sleep.
+        try #require(sawStarted, "stub did not print 'started' within the timeout")
 
         runner.cancel()
         await #expect(throws: CancellationError.self) {
@@ -179,7 +181,9 @@ func endToEndCancelledUVRunCleansUpTempFiles() async throws {
         let tempCreated = try await waitUntil {
             runner.logLines.contains("tmp=\(tempFile.path)")
         }
-        #expect(tempCreated)
+        // Fail fast: without the marker the process may not be running and
+        // awaiting the task below could hang for the stub's full sleep.
+        try #require(tempCreated, "stub did not create its temp file within the timeout")
 
         runner.cancel()
         await #expect(throws: CancellationError.self) {
