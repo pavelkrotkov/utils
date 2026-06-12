@@ -129,6 +129,9 @@ func endToEndCancelledCloudRunLeavesNoOutput() async throws {
         let runTask = Task {
             try await runner.run(command: command, environment: fixture.environment)
         }
+        // Guarantees the child process is torn down even when the test
+        // throws before the explicit cancel below.
+        defer { runTask.cancel() }
         let sawStarted = try await waitUntil { runner.logLines.contains("started") }
         #expect(sawStarted)
 
@@ -170,6 +173,9 @@ func endToEndCancelledUVRunCleansUpTempFiles() async throws {
         let runTask = Task {
             try await runner.run(command: command, environment: fixture.environment)
         }
+        // Guarantees the child process is torn down even when the test
+        // throws before the explicit cancel below.
+        defer { runTask.cancel() }
         let tempCreated = try await waitUntil {
             runner.logLines.contains("tmp=\(tempFile.path)")
         }
@@ -458,5 +464,7 @@ private func waitUntil(
         }
         try await Task.sleep(for: .milliseconds(20))
     }
-    return false
+    // One last check so a condition that became true during the final
+    // sleep is not reported as a timeout.
+    return condition()
 }
