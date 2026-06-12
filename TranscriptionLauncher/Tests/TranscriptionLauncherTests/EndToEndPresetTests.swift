@@ -27,7 +27,7 @@ private struct PresetExpectation: Sendable, CustomTestStringConvertible {
     PresetExpectation(preset: .appleSiliconLocal, expectedName: "meeting.vibevoice.txt"),
 ])
 @MainActor
-func endToEndEveryPresetWritesItsTranscriptNextToInput(
+private func endToEndEveryPresetWritesItsTranscriptNextToInput(
     _ expectation: PresetExpectation
 ) async throws {
     try await withE2EFixture { fixture in
@@ -69,7 +69,7 @@ private struct FilenameExpectation: Sendable, CustomTestStringConvertible {
     FilenameExpectation(input: "my.podcast.ep3.m4a", output: "my.podcast.ep3.txt"),
 ])
 @MainActor
-func endToEndEdgeCaseFilenames(
+private func endToEndEdgeCaseFilenames(
     preset: TranscriptionPreset,
     expectation: FilenameExpectation
 ) async throws {
@@ -256,7 +256,9 @@ private struct FailureScenario: Sendable, CustomTestStringConvertible {
     ),
 ])
 @MainActor
-func endToEndScriptFailuresSurfaceFriendlyErrors(_ scenario: FailureScenario) async throws {
+private func endToEndScriptFailuresSurfaceFriendlyErrors(
+    _ scenario: FailureScenario
+) async throws {
     try await withE2EFixture { fixture in
         try fixture.installScript(
             named: scenario.script,
