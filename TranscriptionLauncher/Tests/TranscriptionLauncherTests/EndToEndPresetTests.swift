@@ -183,7 +183,8 @@ func endToEndCancelledUVRunCleansUpTempFiles() async throws {
             input: input,
             repoRoot: fixture.repoRoot
         )
-        let tempFile = URL(fileURLWithPath: input.path + ".partial", isDirectory: false)
+        // Mirrors the stub's `tmp="$1.partial"`.
+        let tempFile = input.appendingPathExtension("partial")
 
         let runTask = Task {
             try await runner.run(command: command, environment: fixture.environment)
