@@ -33,7 +33,7 @@ class RunWhisperCommandTest(unittest.TestCase):
     def test_explicit_max_context_can_restore_whisper_default(self) -> None:
         cmd, _ = self.capture_run_whisper_command(-1)
 
-        self.assert_flag_value(cmd, "-mc", "-1")
+        self.assertNotIn("-mc", cmd)
 
     def test_required_whisper_flags_are_preserved(self) -> None:
         cmd, output_stem = self.capture_run_whisper_command()

@@ -693,7 +693,8 @@ def run_whisper(
         cmd.append("-pp")  # print progress
 
     cmd.extend(["-l", language])
-    cmd.extend(["-mc", str(max_context)])
+    if max_context != -1:
+        cmd.extend(["-mc", str(max_context)])
 
     if verbose:
         print(f"INFO: Running whisper-cpp: {' '.join(cmd)}", file=sys.stderr)
