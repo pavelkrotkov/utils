@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import argparse
 import tempfile
 import unittest
 from collections.abc import Callable, Sequence
@@ -6,6 +7,21 @@ from pathlib import Path
 from unittest.mock import patch
 
 import audio_transcribe_whisper as whisper
+
+
+class ParseMaxContextTest(unittest.TestCase):
+    def test_accepts_whisper_default_and_non_negative_values(self) -> None:
+        self.assertEqual(-1, whisper.parse_max_context("-1"))
+        self.assertEqual(0, whisper.parse_max_context("0"))
+        self.assertEqual(128, whisper.parse_max_context("128"))
+
+    def test_rejects_values_below_negative_one(self) -> None:
+        with self.assertRaises(argparse.ArgumentTypeError):
+            whisper.parse_max_context("-2")
+
+    def test_rejects_non_integer_values(self) -> None:
+        with self.assertRaises(argparse.ArgumentTypeError):
+            whisper.parse_max_context("default")
 
 
 class RunWhisperCommandTest(unittest.TestCase):
