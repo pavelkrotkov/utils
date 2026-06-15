@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import sys
 import tempfile
 import unittest
 from collections.abc import Callable, Sequence
@@ -100,6 +101,58 @@ class RunWhisperCommandTest(unittest.TestCase):
         flag_index = cmd.index(flag)
         self.assertLess(flag_index + 1, len(cmd))
         self.assertEqual(value, cmd[flag_index + 1])
+
+
+class MainMaxContextWiringTest(unittest.TestCase):
+    def test_main_passes_cli_max_context_to_run_whisper(self) -> None:
+        captured_max_context: list[int] = []
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            input_path = temp_path / "input.m4a"
+            model_path = temp_path / "model.bin"
+            output_path = temp_path / "transcript.txt"
+            input_path.write_bytes(b"audio")
+            model_path.write_bytes(b"model")
+
+            def fake_run_whisper(
+                audio_path: Path,
+                json_path: Path,
+                whisper_bin: str,
+                model_path: Path,
+                threads: int,
+                language: str,
+                verbose: bool,
+                progress: whisper.ProgressReporter | None = None,
+                max_context: int = whisper.DEFAULT_MAX_CONTEXT,
+            ) -> None:
+                del audio_path, whisper_bin, model_path, threads, language, verbose, progress
+                captured_max_context.append(max_context)
+                json_path.write_text(
+                    '{"text": "ok", "segments": [{"text": "ok"}]}',
+                    encoding="utf-8",
+                )
+
+            argv = [
+                "audio_transcribe_whisper.py",
+                str(input_path),
+                "--no-ffmpeg",
+                "--no-progress",
+                "--large-model",
+                str(model_path),
+                "--max-context",
+                "64",
+                "-o",
+                str(output_path),
+            ]
+
+            with (
+                patch.object(sys, "argv", argv),
+                patch.object(whisper, "run_whisper", fake_run_whisper),
+            ):
+                whisper.main()
+
+        self.assertEqual([64], captured_max_context)
 
 
 class MergeAsrTurnsTest(unittest.TestCase):
