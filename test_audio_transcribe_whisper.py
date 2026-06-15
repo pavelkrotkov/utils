@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import tempfile
 import unittest
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from unittest.mock import patch
 
 import audio_transcribe_whisper as whisper
 
@@ -13,7 +15,7 @@ class RunWhisperCommandTest(unittest.TestCase):
         self.assert_flag_value(cmd, "-mc", "0")
 
     def test_explicit_max_context_can_restore_whisper_default(self) -> None:
-        cmd, _ = self.capture_run_whisper_command(max_context=-1)
+        cmd, _ = self.capture_run_whisper_command(-1)
 
         self.assert_flag_value(cmd, "-mc", "-1")
 
@@ -27,9 +29,8 @@ class RunWhisperCommandTest(unittest.TestCase):
         self.assert_flag_value(cmd, "-l", "en")
         self.assertIn("-oj", cmd)
 
-    def capture_run_whisper_command(self, **kwargs: object) -> tuple[list[str], str]:
+    def capture_run_whisper_command(self, max_context: int = 0) -> tuple[list[str], str]:
         captured_commands: list[list[str]] = []
-        original_run_with_progress = whisper.run_with_progress
 
         with tempfile.TemporaryDirectory() as temp_dir:
             json_path = Path(temp_dir) / "whisper.json"
@@ -37,27 +38,43 @@ class RunWhisperCommandTest(unittest.TestCase):
             json_path.write_text("{}", encoding="utf-8")
 
             def fake_run_with_progress(
-                cmd: list[str], *args: object, **kwargs: object
+                cmd: Sequence[str],
+                label: str,
+                parse_progress_line: Callable[[str], float | None],
+                *,
+                reporter: whisper.ProgressReporter | None = None,
+                verbose: bool = False,
+                start_detail: str | None = None,
+                finish_detail: str | None = None,
+                missing_binary_label: str | None = None,
+                force_final_percent: bool = False,
+                popen_factory: Callable[..., object] | None = None,
             ) -> list[str]:
-                del args, kwargs
+                del (
+                    label,
+                    parse_progress_line,
+                    reporter,
+                    verbose,
+                    start_detail,
+                    finish_detail,
+                    missing_binary_label,
+                    force_final_percent,
+                    popen_factory,
+                )
                 captured_commands.append(list(cmd))
                 return []
 
-            whisper.run_with_progress = fake_run_with_progress
-            try:
-                run_kwargs = {
-                    "audio_path": Path("/tmp/audio.wav"),
-                    "json_path": json_path,
-                    "whisper_bin": "whisper-cli",
-                    "model_path": Path("/tmp/model.bin"),
-                    "threads": 4,
-                    "language": "en",
-                    "verbose": False,
-                }
-                run_kwargs.update(kwargs)
-                whisper.run_whisper(**run_kwargs)
-            finally:
-                whisper.run_with_progress = original_run_with_progress
+            with patch.object(whisper, "run_with_progress", fake_run_with_progress):
+                whisper.run_whisper(
+                    audio_path=Path("/tmp/audio.wav"),
+                    json_path=json_path,
+                    whisper_bin="whisper-cli",
+                    model_path=Path("/tmp/model.bin"),
+                    threads=4,
+                    language="en",
+                    verbose=False,
+                    max_context=max_context,
+                )
 
         self.assertEqual(1, len(captured_commands))
         return captured_commands[0], output_stem
