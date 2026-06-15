@@ -654,6 +654,17 @@ def resolve_whisper_bin(whisper_bin: str, verbose: bool = False) -> str:
     return whisper_bin
 
 
+def parse_max_context(value: str) -> int:
+    """Argparse type for whisper-cpp max-context values."""
+    try:
+        max_context = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be -1 or a non-negative integer") from None
+    if max_context < -1:
+        raise argparse.ArgumentTypeError("must be -1 or a non-negative integer")
+    return max_context
+
+
 def run_whisper(
     audio_path: Path,
     json_path: Path,
@@ -751,7 +762,7 @@ def main() -> None:
     parser.add_argument("--language", default="auto", help="Language code (default: auto)")
     parser.add_argument(
         "--max-context",
-        type=int,
+        type=parse_max_context,
         default=0,
         help=(
             "Maximum text context tokens to carry between decode windows "
