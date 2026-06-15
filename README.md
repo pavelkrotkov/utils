@@ -179,7 +179,14 @@ Local whisper-cpp (plain transcript by default):
 ```bash
 uv run ./audio_transcribe_whisper.py interview.m4a
 uv run ./audio_transcribe_whisper.py interview.m4a --format srt
+uv run ./audio_transcribe_whisper.py interview.m4a --max-context -1
 ```
+
+The local whisper-cpp wrapper defaults to `--max-context 0`, which disables
+rolling text context between decode windows and reduces hallucination loops on
+dictation or meeting audio with long pauses. For clean, continuous speech where
+context carryover may improve accuracy, punctuation, or casing, use
+`--max-context -1` to restore whisper-cpp's default behavior.
 
 Apple Silicon VibeVoice-ASR via MLX (structured JSON by default):
 

@@ -56,6 +56,8 @@ from audio_common import (
 )
 from audio_transcript import TranscriptSegment, emit_transcript
 
+DEFAULT_MAX_CONTEXT = 0
+
 # ───────────────────────────────────────────────────────────────────────────────
 # Environment setup
 # ───────────────────────────────────────────────────────────────────────────────
@@ -674,7 +676,7 @@ def run_whisper(
     language: str,
     verbose: bool,
     progress: ProgressReporter | None = None,
-    max_context: int = 0,
+    max_context: int = DEFAULT_MAX_CONTEXT,
 ) -> None:
     """Run whisper-cpp to produce JSON output."""
     cmd = [
@@ -764,10 +766,11 @@ def main() -> None:
     parser.add_argument(
         "--max-context",
         type=parse_max_context,
-        default=0,
+        default=DEFAULT_MAX_CONTEXT,
         help=(
             "Maximum text context tokens to carry between decode windows "
-            "(default: 0 to reduce hallucination loops; use -1 for whisper-cpp default)"
+            f"(default: {DEFAULT_MAX_CONTEXT} to reduce hallucination loops; "
+            "use -1 for whisper-cpp default)"
         ),
     )
     parser.add_argument("--no-ffmpeg", action="store_true", help="Skip ffmpeg pre-conversion")
