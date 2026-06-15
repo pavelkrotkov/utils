@@ -36,7 +36,9 @@ class RunWhisperCommandTest(unittest.TestCase):
             output_stem = str(json_path.with_suffix(""))
             json_path.write_text("{}", encoding="utf-8")
 
-            def fake_run_with_progress(cmd: list[str], *args: object, **kwargs: object) -> list[str]:
+            def fake_run_with_progress(
+                cmd: list[str], *args: object, **kwargs: object
+            ) -> list[str]:
                 del args, kwargs
                 captured_commands.append(list(cmd))
                 return []
