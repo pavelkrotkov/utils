@@ -23,9 +23,15 @@ Dependencies:
 Usage Examples:
   ./audio_transcribe_whisper.py input.m4a
   ./audio_transcribe_whisper.py input.m4a --format srt
+  ./audio_transcribe_whisper.py input.m4a --max-context -1
   ./audio_transcribe_whisper.py input.m4a --diarization --speakers "Alice,Bob" --num-speakers 2
   ./audio_transcribe_whisper.py input.m4a --diarization --style breaks
   ./audio_transcribe_whisper.py input.m4a --diarization --no-ffmpeg --pyannote-model pyannote/speaker-diarization-community-1
+
+By default, this wrapper passes `-mc 0` to whisper-cpp to avoid rolling-context
+hallucination loops on dictation or meeting audio with long pauses. Use
+`--max-context -1` to restore whisper-cpp's default context behavior when
+continuity across decode windows is more important than hallucination risk.
 """
 
 import argparse
@@ -49,6 +55,8 @@ from audio_common import (
     run_with_progress,
 )
 from audio_transcript import TranscriptSegment, emit_transcript
+
+DEFAULT_MAX_CONTEXT = 0
 
 # ───────────────────────────────────────────────────────────────────────────────
 # Environment setup
@@ -648,6 +656,17 @@ def resolve_whisper_bin(whisper_bin: str, verbose: bool = False) -> str:
     return whisper_bin
 
 
+def parse_max_context(value: str) -> int:
+    """Argparse type for whisper-cpp max-context values."""
+    try:
+        max_context = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be -1 or a non-negative integer") from None
+    if max_context < -1:
+        raise argparse.ArgumentTypeError("must be -1 or a non-negative integer")
+    return max_context
+
+
 def run_whisper(
     audio_path: Path,
     json_path: Path,
@@ -657,6 +676,7 @@ def run_whisper(
     language: str,
     verbose: bool,
     progress: ProgressReporter | None = None,
+    max_context: int = DEFAULT_MAX_CONTEXT,
 ) -> None:
     """Run whisper-cpp to produce JSON output."""
     cmd = [
@@ -675,6 +695,8 @@ def run_whisper(
         cmd.append("-pp")  # print progress
 
     cmd.extend(["-l", language])
+    if max_context != -1:
+        cmd.extend(["-mc", str(max_context)])
 
     if verbose:
         print(f"INFO: Running whisper-cpp: {' '.join(cmd)}", file=sys.stderr)
@@ -741,6 +763,16 @@ def main() -> None:
         "--threads", type=int, default=os.cpu_count(), help="Number of threads for whisper-cpp"
     )
     parser.add_argument("--language", default="auto", help="Language code (default: auto)")
+    parser.add_argument(
+        "--max-context",
+        type=parse_max_context,
+        default=DEFAULT_MAX_CONTEXT,
+        help=(
+            "Maximum text context tokens to carry between decode windows "
+            f"(default: {DEFAULT_MAX_CONTEXT} to reduce hallucination loops; "
+            "use -1 for whisper-cpp default)"
+        ),
+    )
     parser.add_argument("--no-ffmpeg", action="store_true", help="Skip ffmpeg pre-conversion")
     parser.add_argument(
         "--diarization",
@@ -851,6 +883,7 @@ def main() -> None:
             args.language,
             args.verbose,
             progress,
+            max_context=args.max_context,
         )
 
         # Step 3: Load ASR results
