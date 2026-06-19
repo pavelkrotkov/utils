@@ -98,10 +98,15 @@ def find_cover(book_dir: Path) -> Path | None:
     except OSError as e:
         log("WARNING", f"cannot read directory {book_dir.name} for cover: {e}")
         return None
-    return next(
-        (f for f in entries if f.is_file() and f.suffix.lower() in COVER_EXTS),
-        None,
-    )
+    images = [f for f in entries if f.is_file() and f.suffix.lower() in COVER_EXTS]
+    if not images:
+        return None
+    # Prefer conventional cover names over the alphabetical first (cover over back).
+    for preferred in ("cover", "front", "folder"):
+        for img in images:
+            if preferred in img.stem.lower():
+                return img
+    return min(images, key=lambda p: p.name.lower())
 
 
 def write_concat_list(tmp_dir: Path, audio_files: list[Path]) -> Path:
@@ -131,15 +136,18 @@ def write_ffmetadata(
         f.write(f"album={escape_meta(book_title)}\n")
         f.write("genre=Audiobook\n\n")
 
-        pos_ms = 0
+        # Accumulate as float and round each boundary so truncation can't drift
+        # over many tracks; chapters stay contiguous (each START == prior END).
+        cumulative_ms = 0.0
         for title, duration in zip(chapters, durations, strict=True):
-            end_ms = pos_ms + int(duration * 1000)
+            start_ms = round(cumulative_ms)
+            cumulative_ms += duration * 1000
+            end_ms = round(cumulative_ms)
             f.write("[CHAPTER]\n")
             f.write("TIMEBASE=1/1000\n")
-            f.write(f"START={pos_ms}\n")
+            f.write(f"START={start_ms}\n")
             f.write(f"END={end_ms}\n")
             f.write(f"title={escape_meta(title)}\n\n")
-            pos_ms = end_ms
     return meta_file
 
 
@@ -250,8 +258,10 @@ def default_output_dir(input_dir: Path, single: bool) -> Path:
 
 
 def require_binary(name: str) -> None:
-    if not shutil.which(name):
-        log("ERROR", f"required binary not found on PATH: {name} (try: brew install ffmpeg)")
+    # which() only searches PATH; also accept an explicit path (e.g. --ffmpeg-bin
+    # ./bin/ffmpeg), matching probe_media_duration in audio_common.py.
+    if not shutil.which(name) and not Path(name).exists():
+        log("ERROR", f"required binary not found: {name} (try: brew install ffmpeg)")
         sys.exit(1)
 
 
