@@ -52,16 +52,18 @@ def log(level: str, message: str) -> None:
 
 def natural_key(path: Path) -> list:
     """Sort key that handles embedded numbers correctly (01, 02, ... 10)."""
-    parts = re.split(r"(\d+)", path.stem.lower())
+    # Use .name, not .stem: stem treats text after a dot as a suffix, so a
+    # directory like "1.5 Special" would sort on "1" and could collide.
+    parts = re.split(r"(\d+)", path.name.lower())
     return [int(p) if p.isdigit() else p for p in parts]
 
 
 def clean_title(stem: str) -> str:
     """Extract a human-readable chapter title from an audio filename stem."""
-    # Strip leading disc-track pattern: "1-02 " or "4-12 "
-    stem = re.sub(r"^\d+-\d+\s+", "", stem)
-    # Strip leading track number: "01 " or "1 "
-    stem = re.sub(r"^\d+\s+", "", stem)
+    # Strip leading disc-track pattern: "1-02 ", "4-12 - ", "1-02. "
+    stem = re.sub(r"^\d+-\d+[-.\s]+", "", stem)
+    # Strip leading track number plus any separator: "01 ", "01 - ", "1. "
+    stem = re.sub(r"^\d+[-.\s]+", "", stem)
     # If there's a " - " separator, take the last segment as the chapter title
     if " - " in stem:
         stem = stem.rsplit(" - ", 1)[-1]
@@ -78,16 +80,26 @@ def escape_meta(value: str) -> str:
 
 def find_audio_files(book_dir: Path) -> list[Path]:
     """Return the book's audio tracks in natural order."""
+    try:
+        entries = list(book_dir.iterdir())
+    except OSError as e:
+        log("WARNING", f"cannot read directory {book_dir.name}: {e}")
+        return []
     return sorted(
-        (f for f in book_dir.iterdir() if f.suffix.lower() in AUDIO_EXTS),
+        (f for f in entries if f.is_file() and f.suffix.lower() in AUDIO_EXTS),
         key=natural_key,
     )
 
 
 def find_cover(book_dir: Path) -> Path | None:
     """Return the first cover image in the folder, if any."""
+    try:
+        entries = sorted(book_dir.iterdir())
+    except OSError as e:
+        log("WARNING", f"cannot read directory {book_dir.name} for cover: {e}")
+        return None
     return next(
-        (f for f in sorted(book_dir.iterdir()) if f.suffix.lower() in COVER_EXTS),
+        (f for f in entries if f.is_file() and f.suffix.lower() in COVER_EXTS),
         None,
     )
 
@@ -96,7 +108,9 @@ def write_concat_list(tmp_dir: Path, audio_files: list[Path]) -> Path:
     concat_file = tmp_dir / "concat.txt"
     with open(concat_file, "w", encoding="utf-8") as f:
         for p in audio_files:
-            escaped = str(p).replace("'", "'\\''")
+            # as_posix() so the concat demuxer gets forward slashes; on Windows
+            # str(p) would emit backslashes, which ffmpeg treats as escapes.
+            escaped = p.as_posix().replace("'", "'\\''")
             f.write(f"file '{escaped}'\n")
     return concat_file
 
@@ -214,8 +228,13 @@ def collect_books(input_dir: Path, single: bool, book_filter: str | None) -> lis
     if single:
         return [input_dir]
 
+    try:
+        entries = list(input_dir.iterdir())
+    except OSError as e:
+        log("ERROR", f"cannot read collection directory {input_dir}: {e}")
+        return []
     book_dirs = sorted(
-        (d for d in input_dir.iterdir() if d.is_dir() and find_audio_files(d)),
+        (d for d in entries if d.is_dir() and find_audio_files(d)),
         key=natural_key,
     )
     if book_filter:
