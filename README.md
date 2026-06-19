@@ -7,6 +7,7 @@ and TIDAL import.
 
 - PDF to Markdown conversion (Mathpix SDK, Docling, LlamaParse, PyMuPDF4LLM, or local marker).
 - Markdown splitting into per-section or per-subsection files.
+- Audiobook (M4B) conversion from folders of audio tracks, with chapters and cover art.
 - Audio transcription (OpenAI API, local whisper-cpp with optional pyannote diarization, or MLX VibeVoice-ASR on Apple Silicon).
 - TIDAL playlist import from Gramophone-style MHTML/Markdown pages.
 
@@ -102,6 +103,26 @@ Behavior:
 - Ignores matching headings inside fenced code blocks.
 
 ## Audio & Music Tools
+
+### Audiobook (M4B) Conversion
+
+Convert folders of audio tracks into chaptered M4B audiobooks (one chapter per
+track, natural-sorted, with embedded cover art). By default every immediate
+subfolder of the input is its own book; use `--single` for one book. Tracks that
+ffprobe reports as unreadable or zero-length (e.g. partial re-downloads) are
+skipped automatically.
+
+```bash
+# A whole collection -> one .m4b per subfolder (output to a sibling dir):
+uv run ./audio_folder_to_m4b.py "/path/to/Audiobook Collection"
+
+# A single book folder, with author metadata:
+uv run ./audio_folder_to_m4b.py "/path/to/Some Book" --single --artist "Author Name"
+
+# Filter to specific books, or preview without encoding:
+uv run ./audio_folder_to_m4b.py "/path/to/Collection" --book Pandas
+uv run ./audio_folder_to_m4b.py "/path/to/Collection" --dry-run
+```
 
 ### TIDAL Import
 
