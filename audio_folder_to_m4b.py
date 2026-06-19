@@ -86,8 +86,14 @@ def find_audio_files(book_dir: Path) -> list[Path]:
     except OSError as e:
         log("WARNING", f"cannot read directory {book_dir.name}: {e}")
         return []
+    # Skip dotfiles: our own ".<book>.tmp.m4b" encode temp (if a prior run was
+    # interrupted) and macOS AppleDouble/junk would otherwise scan as tracks.
     return sorted(
-        (f for f in entries if f.is_file() and f.suffix.lower() in AUDIO_EXTS),
+        (
+            f
+            for f in entries
+            if f.is_file() and not f.name.startswith(".") and f.suffix.lower() in AUDIO_EXTS
+        ),
         key=natural_key,
     )
 
@@ -99,7 +105,11 @@ def find_cover(book_dir: Path) -> Path | None:
     except OSError as e:
         log("WARNING", f"cannot read directory {book_dir.name} for cover: {e}")
         return None
-    images = [f for f in entries if f.is_file() and f.suffix.lower() in COVER_EXTS]
+    images = [
+        f
+        for f in entries
+        if f.is_file() and not f.name.startswith(".") and f.suffix.lower() in COVER_EXTS
+    ]
     if not images:
         return None
     preferred = ("cover", "front", "folder")
