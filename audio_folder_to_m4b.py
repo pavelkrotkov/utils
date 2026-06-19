@@ -160,6 +160,7 @@ def process_book(
     overwrite: bool,
     ffmpeg_bin: str,
     ffprobe_bin: str,
+    timeout: float | None,
 ) -> bool:
     book_name = book_dir.name
     output_file = output_dir / f"{book_name}.m4b"
@@ -221,7 +222,12 @@ def process_book(
 
         total_mins = int(sum(durations) / 60)
         log("INFO", f"encoding {total_mins} min -> {output_file.name}...")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            log("ERROR", f"ffmpeg timed out after {timeout}s for {book_name}")
+            output_file.unlink(missing_ok=True)
+            return False
         if result.returncode != 0:
             log("ERROR", f"ffmpeg failed for {book_name}:\n{result.stderr[-3000:]}")
             output_file.unlink(missing_ok=True)
@@ -290,6 +296,12 @@ def main() -> None:
         "--overwrite", action="store_true", help="Re-encode books even if the .m4b already exists"
     )
     parser.add_argument("--dry-run", action="store_true", help="List books without converting")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="Per-book ffmpeg timeout in seconds (default: no limit)",
+    )
     parser.add_argument("--ffmpeg-bin", default="ffmpeg", help="Path to the ffmpeg binary")
     parser.add_argument("--ffprobe-bin", default="ffprobe", help="Path to the ffprobe binary")
     args = parser.parse_args()
@@ -330,6 +342,7 @@ def main() -> None:
             overwrite=args.overwrite,
             ffmpeg_bin=args.ffmpeg_bin,
             ffprobe_bin=args.ffprobe_bin,
+            timeout=args.timeout,
         ):
             ok += 1
         else:
