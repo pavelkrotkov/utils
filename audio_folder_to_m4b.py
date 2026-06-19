@@ -161,6 +161,28 @@ def write_ffmetadata(
     return meta_file
 
 
+def probe_audio_stream(path: Path, ffprobe_bin: str) -> str | None:
+    """Return 'codec,sample_rate,channels' for the first audio stream, or None."""
+    cmd = [
+        ffprobe_bin,
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=codec_name,sample_rate,channels",
+        "-of",
+        "csv=p=0",
+        str(path),
+    ]
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return None
+    lines = result.stdout.strip().splitlines()
+    return lines[0] if lines else None
+
+
 def process_book(
     book_dir: Path,
     output_dir: Path,
@@ -179,7 +201,9 @@ def process_book(
         log("INFO", f"skip (already exists): {output_file.name}")
         return True
 
-    audio_files = find_audio_files(book_dir)
+    # Drop the output .m4b itself if it lives in the input folder (.m4b is in
+    # AUDIO_EXTS), so an --overwrite rerun can't fold the old book back in.
+    audio_files = [f for f in find_audio_files(book_dir) if f.resolve() != output_file.resolve()]
     if not audio_files:
         log("WARNING", f"no audio files found in {book_dir.name}")
         return False
@@ -189,6 +213,7 @@ def process_book(
     log("INFO", f"probing {len(audio_files)} track(s) in {book_dir.name}...")
     usable_files: list[Path] = []
     durations: list[float] = []
+    stream_params: set[str] = set()
     for af in audio_files:
         duration = probe_media_duration(af, ffprobe_bin, verbose=True)
         if duration is None:
@@ -196,9 +221,23 @@ def process_book(
             continue
         usable_files.append(af)
         durations.append(duration)
+        params = probe_audio_stream(af, ffprobe_bin)
+        if params is not None:
+            stream_params.add(params)
 
     if not usable_files:
         log("ERROR", f"no usable audio tracks in {book_dir.name}")
+        return False
+
+    # The concat demuxer needs uniform streams; mixed codec/rate/channels make
+    # ffmpeg emit a garbled file while still exiting 0, so refuse up front.
+    if len(stream_params) > 1:
+        log(
+            "ERROR",
+            f"{book_name}: tracks have mismatched audio streams "
+            f"({', '.join(sorted(stream_params))}); convert them to a common "
+            "codec/sample-rate/channels first",
+        )
         return False
 
     chapter_titles = [clean_title(f.stem) for f in usable_files]
@@ -228,7 +267,11 @@ def process_book(
 
         cmd += map_args
         cmd += ["-c:a", "aac", "-b:a", bitrate, "-c:v", "copy", "-movflags", "+faststart"]
-        cmd.append(str(output_file))
+        # Encode to a temp file in the output dir and swap into place only on
+        # success, so a failure (or --timeout) never destroys an existing book.
+        # Keep the .m4b suffix so ffmpeg still infers the muxer from it.
+        tmp_output = output_dir / f".{output_file.stem}.tmp{output_file.suffix}"
+        cmd.append(str(tmp_output))
 
         total_mins = int(sum(durations) / 60)
         log("INFO", f"encoding {total_mins} min -> {output_file.name}...")
@@ -236,12 +279,13 @@ def process_book(
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             log("ERROR", f"ffmpeg timed out after {timeout}s for {book_name}")
-            output_file.unlink(missing_ok=True)
+            tmp_output.unlink(missing_ok=True)
             return False
         if result.returncode != 0:
             log("ERROR", f"ffmpeg failed for {book_name}:\n{result.stderr[-3000:]}")
-            output_file.unlink(missing_ok=True)
+            tmp_output.unlink(missing_ok=True)
             return False
+        os.replace(tmp_output, output_file)
 
     print(output_file)
     return True
