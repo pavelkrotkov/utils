@@ -32,6 +32,7 @@ Requires ffmpeg/ffprobe on PATH (``brew install ffmpeg``).
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import subprocess
@@ -101,10 +102,16 @@ def find_cover(book_dir: Path) -> Path | None:
     images = [f for f in entries if f.is_file() and f.suffix.lower() in COVER_EXTS]
     if not images:
         return None
-    # Prefer conventional cover names over the alphabetical first (cover over back).
-    for preferred in ("cover", "front", "folder"):
+    preferred = ("cover", "front", "folder")
+    # Exact conventional stem first (cover.jpg beats back_cover.jpg)...
+    for name in preferred:
         for img in images:
-            if preferred in img.stem.lower():
+            if img.stem.lower() == name:
+                return img
+    # ...then a substring match, then the alphabetically-first image.
+    for name in preferred:
+        for img in images:
+            if name in img.stem.lower():
                 return img
     return min(images, key=lambda p: p.name.lower())
 
@@ -113,9 +120,12 @@ def write_concat_list(tmp_dir: Path, audio_files: list[Path]) -> Path:
     concat_file = tmp_dir / "concat.txt"
     with open(concat_file, "w", encoding="utf-8") as f:
         for p in audio_files:
-            # as_posix() so the concat demuxer gets forward slashes; on Windows
-            # str(p) would emit backslashes, which ffmpeg treats as escapes.
-            escaped = p.as_posix().replace("'", "'\\''")
+            # resolve() to an absolute path: the manifest lives in a tempdir and
+            # ffmpeg resolves relative concat entries against the manifest's dir,
+            # not the cwd, so a relative INPUT would not be found otherwise.
+            # as_posix() so the demuxer gets forward slashes (on Windows str(p)
+            # would emit backslashes, which ffmpeg treats as escapes).
+            escaped = p.resolve().as_posix().replace("'", "'\\''")
             f.write(f"file '{escaped}'\n")
     return concat_file
 
@@ -265,10 +275,13 @@ def default_output_dir(input_dir: Path, single: bool) -> Path:
 
 def require_binary(name: str) -> None:
     # which() only searches PATH; also accept an explicit path (e.g. --ffmpeg-bin
-    # ./bin/ffmpeg), matching probe_media_duration in audio_common.py.
-    if not shutil.which(name) and not Path(name).exists():
-        log("ERROR", f"required binary not found: {name} (try: brew install ffmpeg)")
-        sys.exit(1)
+    # ./bin/ffmpeg), but require an executable file so a directory or non-exec
+    # path fails here with a clear message instead of deep inside subprocess.
+    p = Path(name)
+    if shutil.which(name) or (p.is_file() and os.access(p, os.X_OK)):
+        return
+    log("ERROR", f"required binary not found or not executable: {name} (try: brew install ffmpeg)")
+    sys.exit(1)
 
 
 def main() -> None:
