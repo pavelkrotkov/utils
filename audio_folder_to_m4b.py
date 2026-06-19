@@ -219,11 +219,15 @@ def process_book(
         if duration is None:
             log("WARNING", f"skipping unreadable/zero-length track: {af.name}")
             continue
+        # Duration is format-level, so a video-only file (e.g. a stray .mp4)
+        # passes it; require an actual audio stream or the -map 0:a encode fails.
+        params = probe_audio_stream(af, ffprobe_bin)
+        if params is None:
+            log("WARNING", f"skipping track with no audio stream: {af.name}")
+            continue
         usable_files.append(af)
         durations.append(duration)
-        params = probe_audio_stream(af, ffprobe_bin)
-        if params is not None:
-            stream_params.add(params)
+        stream_params.add(params)
 
     if not usable_files:
         log("ERROR", f"no usable audio tracks in {book_dir.name}")
@@ -291,7 +295,9 @@ def process_book(
     return True
 
 
-def collect_books(input_dir: Path, single: bool, book_filter: str | None) -> list[Path]:
+def collect_books(
+    input_dir: Path, single: bool, book_filter: str | None, output_dir: Path
+) -> list[Path]:
     """Return the list of book folders to process."""
     if single:
         return [input_dir]
@@ -301,8 +307,11 @@ def collect_books(input_dir: Path, single: bool, book_filter: str | None) -> lis
     except OSError as e:
         log("ERROR", f"cannot read collection directory {input_dir}: {e}")
         return []
+    # Skip the output dir itself: when it sits inside the collection its prior
+    # .m4b outputs match AUDIO_EXTS, so it would otherwise scan as a "book".
+    out_resolved = output_dir.resolve()
     book_dirs = sorted(
-        (d for d in entries if d.is_dir() and find_audio_files(d)),
+        (d for d in entries if d.is_dir() and d.resolve() != out_resolved and find_audio_files(d)),
         key=natural_key,
     )
     if book_filter:
@@ -367,15 +376,15 @@ def main() -> None:
         log("ERROR", f"input directory not found: {args.input}")
         sys.exit(1)
 
-    book_dirs = collect_books(args.input, args.single, args.book)
+    output_dir = args.output_dir or default_output_dir(args.input, args.single)
+
+    book_dirs = collect_books(args.input, args.single, args.book, output_dir)
     if not book_dirs:
         log(
             "ERROR",
             "no book folders with audio found" + (f" matching '{args.book}'" if args.book else ""),
         )
         sys.exit(1)
-
-    output_dir = args.output_dir or default_output_dir(args.input, args.single)
 
     if args.dry_run:
         log("INFO", f"{len(book_dirs)} book(s) | output: {output_dir}")
