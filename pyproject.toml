@@ -30,10 +30,10 @@ show_missing = true
 
 [dependency-groups]
 dev = [
-    "pip-audit>=2.10.0",
+    "pip-audit>=2.10.1",
     "pre-commit>=4.6.0",
-    "pytest>=9.0.3",
+    "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
-    "ruff>=0.15.14",
-    "ty>=0.0.39",
+    "ruff>=0.15.18",
+    "ty>=0.0.51",
 ]
