@@ -45,7 +45,19 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("input", type=Path, help="Input audio/media file")
+    parser.add_argument(
+        "input",
+        type=Path,
+        nargs="?",
+        default=None,
+        help="Input audio/media file (required unless --from-json is used)",
+    )
+    parser.add_argument(
+        "--from-json",
+        type=Path,
+        metavar="JSON",
+        help="Convert an existing VibeVoice JSON to another format without re-transcribing",
+    )
     parser.add_argument(
         "-o",
         "--output",
@@ -265,6 +277,25 @@ def _bool_env(name: str) -> bool:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+
+    if args.from_json and args.input:
+        parser.error("--from-json and input are mutually exclusive")
+    if not args.from_json and not args.input:
+        parser.error("input is required unless --from-json is used")
+
+    if args.from_json:
+        if args.format == "json":
+            parser.error("--format must be txt, srt, or vtt when using --from-json")
+        if not args.from_json.exists() or not args.from_json.is_file():
+            print(f"ERROR: JSON file not found: {args.from_json}", file=sys.stderr)
+            sys.exit(1)
+
+        out_path = args.output if args.output else args.from_json.with_suffix(f".{args.format}")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        segments = load_vibevoice_segments(args.from_json)
+        out_path.write_text(emit_transcript(segments, args.format) + "\n", encoding="utf-8")
+        print(f"Transcript written to: {out_path}")
+        return
 
     ensure_apple_silicon()
 
