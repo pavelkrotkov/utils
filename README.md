@@ -216,6 +216,10 @@ uv run ./audio_transcribe_vibevoice.py interview.m4a
 uv run ./audio_transcribe_vibevoice.py interview.m4a --context "speaker names, acronyms"
 uv run ./audio_transcribe_vibevoice.py interview.m4a --format vtt -o interview.vtt
 uv run ./audio_transcribe_vibevoice.py interview.m4a --format txt -o interview.txt
+
+# Re-format an existing JSON transcript without re-transcribing:
+uv run ./audio_transcribe_vibevoice.py --from-json interview.vibevoice.json --format vtt
+uv run ./audio_transcribe_vibevoice.py --from-json interview.vibevoice.json --format srt -o interview.srt
 ```
 
 Enable pyannote speaker diarization when speaker labels are needed:
@@ -232,7 +236,9 @@ Whisper and VibeVoice share the same local `txt`, `srt`, and `vtt` transcript
 emitters. Whisper defaults to `diarized-txt` output when `--diarization` is
 enabled. The VibeVoice script defaults to `mlx-community/VibeVoice-ASR-4bit`,
 writes `<input>.vibevoice.json`, supports `json`, `txt`, `srt`, and `vtt`, and
-downloads the model through Hugging Face on first use.
+downloads the model through Hugging Face on first use. Use
+`--from-json <file>.vibevoice.json --format <fmt>` to convert an existing JSON
+transcript to `txt`, `srt`, or `vtt` without re-running ASR.
 
 ## Notes
 
