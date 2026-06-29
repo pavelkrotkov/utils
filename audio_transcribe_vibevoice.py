@@ -280,9 +280,7 @@ def _bool_env(name: str) -> bool:
     return value.lower() in {"1", "true", "yes", "on"}
 
 
-def _warn_if_speakers_ignored(
-    segments: list[TranscriptSegment], output_format: str
-) -> None:
+def _warn_if_speakers_ignored(segments: list[TranscriptSegment], output_format: str) -> None:
     if output_format in _DIARIZED_FORMATS:
         return
     if any(s.speaker is not None for s in segments):
