@@ -286,9 +286,10 @@ def _warn_if_speakers_ignored(
     if output_format in _DIARIZED_FORMATS:
         return
     if any(s.speaker is not None for s in segments):
+        formats_str = " or ".join(sorted(_DIARIZED_FORMATS))
         print(
-            "NOTE: transcript contains speaker labels;"
-            " use --format diarized-txt to include them.",
+            f"NOTE: transcript contains speaker labels;"
+            f" use --format {formats_str} to include them.",
             file=sys.stderr,
         )
 
@@ -304,10 +305,8 @@ def main() -> None:
 
     if args.from_json:
         if args.format == "json":
-            parser.error(
-                "--format must be txt, srt, vtt, diarized-txt, or diarized-breaks"
-                " when using --from-json"
-            )
+            allowed = ", ".join(f for f in SUPPORTED_FORMATS if f != "json")
+            parser.error(f"--format must be one of {allowed} when using --from-json")
         if not args.from_json.exists() or not args.from_json.is_file():
             print(f"ERROR: JSON file not found: {args.from_json}", file=sys.stderr)
             sys.exit(1)
