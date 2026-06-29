@@ -237,8 +237,8 @@ emitters. Whisper defaults to `diarized-txt` output when `--diarization` is
 enabled. The VibeVoice script defaults to `mlx-community/VibeVoice-ASR-4bit`,
 writes `<input>.vibevoice.json`, supports `json`, `txt`, `srt`, and `vtt`, and
 downloads the model through Hugging Face on first use. Use
-`--from-json <file>.vibevoice.json --format <fmt>` to convert an existing JSON
-transcript to `txt`, `srt`, or `vtt` without re-running ASR.
+`--from-json <input>.vibevoice.json --format <fmt>` (where `<fmt>` is `txt`, `srt`, or `vtt`) to convert an existing JSON
+transcript without re-running ASR.
 
 ## Notes
 
