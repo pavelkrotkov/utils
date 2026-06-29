@@ -36,7 +36,12 @@ from audio_common import (
 from audio_transcript import TranscriptSegment, emit_transcript
 
 DEFAULT_MODEL = "mlx-community/VibeVoice-ASR-4bit"
-SUPPORTED_FORMATS = ("json", "txt", "srt", "vtt")
+SUPPORTED_FORMATS = ("json", "txt", "srt", "vtt", "diarized-txt", "diarized-breaks")
+_DIARIZED_FORMATS = frozenset({"diarized-txt", "diarized-breaks"})
+
+
+def _format_file_ext(output_format: str) -> str:
+    return "txt" if output_format in _DIARIZED_FORMATS else output_format
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -114,13 +119,14 @@ def resolve_output_paths(
     output_path: Path | None,
     output_format: str,
 ) -> tuple[Path, Path, Path]:
+    ext = _format_file_ext(output_format)
     if output_path is None:
-        final_path = input_path.with_name(f"{input_path.stem}.vibevoice.{output_format}")
+        final_path = input_path.with_name(f"{input_path.stem}.vibevoice.{ext}")
     else:
         final_path = output_path
 
     final_path.parent.mkdir(parents=True, exist_ok=True)
-    suffix = f".{output_format}"
+    suffix = f".{ext}"
     if final_path.name.lower().endswith(suffix):
         mlx_stem = Path(str(final_path)[: -len(suffix)])
     else:
@@ -274,6 +280,19 @@ def _bool_env(name: str) -> bool:
     return value.lower() in {"1", "true", "yes", "on"}
 
 
+def _warn_if_speakers_ignored(
+    segments: list[TranscriptSegment], output_format: str
+) -> None:
+    if output_format in _DIARIZED_FORMATS:
+        return
+    if any(s.speaker is not None for s in segments):
+        print(
+            "NOTE: transcript contains speaker labels;"
+            " use --format diarized-txt to include them.",
+            file=sys.stderr,
+        )
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -285,14 +304,19 @@ def main() -> None:
 
     if args.from_json:
         if args.format == "json":
-            parser.error("--format must be txt, srt, or vtt when using --from-json")
+            parser.error(
+                "--format must be txt, srt, vtt, diarized-txt, or diarized-breaks"
+                " when using --from-json"
+            )
         if not args.from_json.exists() or not args.from_json.is_file():
             print(f"ERROR: JSON file not found: {args.from_json}", file=sys.stderr)
             sys.exit(1)
 
-        out_path = args.output if args.output else args.from_json.with_suffix(f".{args.format}")
+        ext = _format_file_ext(args.format)
+        out_path = args.output if args.output else args.from_json.with_suffix(f".{ext}")
         out_path.parent.mkdir(parents=True, exist_ok=True)
         segments = load_vibevoice_segments(args.from_json)
+        _warn_if_speakers_ignored(segments, args.format)
         out_path.write_text(emit_transcript(segments, args.format) + "\n", encoding="utf-8")
         print(f"Transcript written to: {out_path}")
         return
@@ -377,6 +401,7 @@ def main() -> None:
     else:
         try:
             segments = load_vibevoice_segments(generated_path)
+            _warn_if_speakers_ignored(segments, args.format)
             final_path.write_text(emit_transcript(segments, args.format) + "\n", encoding="utf-8")
         finally:
             generated_path.unlink(missing_ok=True)
