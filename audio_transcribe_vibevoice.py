@@ -234,9 +234,11 @@ def _segment_from_raw(raw: Any) -> TranscriptSegment:
 
     start = 0.0 if start is None else start
     end = start if end is None or end < start else end
-    speaker = raw.get("speaker") or raw.get("speaker_id") or raw.get("speaker_label")
+    speaker = next(
+        (raw[k] for k in ("speaker", "speaker_id", "speaker_label") if k in raw), None
+    )
     return TranscriptSegment(
-        start=start, end=end, text=text, speaker=str(speaker) if speaker else None
+        start=start, end=end, text=text, speaker=str(speaker) if speaker is not None else None
     )
 
 
