@@ -201,11 +201,10 @@ def _json_array_candidates(s: str) -> list[Any]:
         return [parsed]
     except (json.JSONDecodeError, ValueError):
         pass
-    last_brace = s.rfind("}")
-    if last_brace >= 0:
+    pos = len(s)
+    while (pos := s.rfind("}", 0, pos)) >= 0:
         try:
-            parsed = json.loads(s[: last_brace + 1] + "]")
-            return [parsed]
+            return [json.loads(s[: pos + 1] + "]")]
         except (json.JSONDecodeError, ValueError):
             pass
     return []
@@ -251,7 +250,7 @@ def _segment_from_raw(raw: Any) -> TranscriptSegment:
         return TranscriptSegment(start=0.0, end=0.0, text=str(raw))
 
     # Older mlx-audio versions used capitalized keys (Start, End, Speaker, Content).
-    if any(k[0].isupper() for k in raw):
+    if any(k[:1].isupper() for k in raw):
         raw = {k.lower(): v for k, v in raw.items()}
 
     text = _extract_text(raw)
