@@ -181,6 +181,34 @@ def _extract_raw_segments(data: Any) -> list[Any]:
             if nested:
                 return nested
 
+    # Older mlx-audio versions serialized the segment array as a JSON string in "text".
+    # The string may be truncated mid-object; recover complete segments up to last '}'.
+    for key in ("text", "content"):
+        value = data.get(key)
+        if not isinstance(value, str):
+            continue
+        for candidate in _json_array_candidates(value):
+            if isinstance(candidate, list) and _looks_like_segment_list(candidate):
+                return candidate
+
+    return []
+
+
+def _json_array_candidates(s: str) -> list[Any]:
+    """Yield parseable JSON array candidates, including a truncation-recovery fallback."""
+    if not s.lstrip().startswith("["):
+        return []
+    try:
+        parsed = json.loads(s)
+        return [parsed]
+    except (json.JSONDecodeError, ValueError):
+        pass
+    pos = len(s)
+    while (pos := s.rfind("}", 0, pos)) >= 0:
+        try:
+            return [json.loads(s[: pos + 1] + "]")]
+        except (json.JSONDecodeError, ValueError):
+            pass
     return []
 
 
@@ -212,7 +240,8 @@ def _looks_like_segment(value: Any) -> bool:
         "speaker_id",
         "speaker_label",
     }
-    return any(key in value for key in segment_keys)
+    value_keys_lower = {k.lower() for k in value}
+    return bool(value_keys_lower & segment_keys)
 
 
 def _segment_from_raw(raw: Any) -> TranscriptSegment:
@@ -221,6 +250,10 @@ def _segment_from_raw(raw: Any) -> TranscriptSegment:
 
     if not isinstance(raw, dict):
         return TranscriptSegment(start=0.0, end=0.0, text=str(raw))
+
+    # Older mlx-audio versions used capitalized keys (Start, End, Speaker, Content).
+    if any(k[:1].isupper() for k in raw):
+        raw = {k.lower(): v for k, v in raw.items()}
 
     text = _extract_text(raw)
     start = _extract_time(raw, "start", "start_time", "begin", "ts", "t0")
