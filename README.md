@@ -220,8 +220,8 @@ uv run ./audio_transcribe_vibevoice.py interview.m4a --format txt -o interview.t
 # Re-format an existing JSON transcript without re-transcribing:
 uv run ./audio_transcribe_vibevoice.py --from-json interview.vibevoice.json --format vtt
 uv run ./audio_transcribe_vibevoice.py --from-json interview.vibevoice.json --format srt -o interview.srt
-uv run ./audio_transcribe_vibevoice.py --from-json interview.vibevoice.json --format diarized-txt
-uv run ./audio_transcribe_vibevoice.py --from-json interview.vibevoice.json --format diarized-breaks
+uv run ./audio_transcribe_vibevoice.py --from-json interview.vibevoice.json --format diarized-txt -o interview.diarized.txt
+uv run ./audio_transcribe_vibevoice.py --from-json interview.vibevoice.json --format diarized-breaks -o interview.breaks.txt
 ```
 
 Enable pyannote speaker diarization when speaker labels are needed:
@@ -242,7 +242,7 @@ writes `<input>.vibevoice.json`, supports `json`, `txt`, `srt`, `vtt`,
 (paragraphs separated by `--- speaker change ---` markers), and downloads the
 model through Hugging Face on first use. Use
 `--from-json <input>.vibevoice.json --format <fmt>` to convert an existing JSON
-transcript to any of those formats without re-running ASR.
+transcript to any of the other formats without re-running ASR.
 
 ## Notes
 
