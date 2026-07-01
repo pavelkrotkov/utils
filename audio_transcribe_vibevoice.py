@@ -196,6 +196,8 @@ def _extract_raw_segments(data: Any) -> list[Any]:
 
 def _json_array_candidates(s: str) -> list[Any]:
     """Yield parseable JSON array candidates, including a truncation-recovery fallback."""
+    if not s.lstrip().startswith("["):
+        return []
     try:
         parsed = json.loads(s)
         return [parsed]
