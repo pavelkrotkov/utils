@@ -128,11 +128,47 @@ class RunWithProgressTest(unittest.TestCase):
 
         self.assertEqual([("threaded stage", None)], reporter.started)
         self.assertIn(
-            ("threaded stage", 7.5, 100.0, "still running"),
+            ("threaded stage", None, None, "still running"),
             reporter.updates,
         )
-        self.assertEqual(100.0, reporter.percentages[-1])
+        self.assertEqual([], reporter.percentages)
         self.assertEqual([("threaded stage", None)], reporter.finished)
+
+    def test_threaded_progress_reports_rough_time_left_when_expected(self) -> None:
+        reporter = RecordingReporter()
+
+        def delayed_noop() -> None:
+            time.sleep(0.55)
+
+        run_threaded_with_periodic_progress(
+            delayed_noop,
+            reporter=reporter,
+            label="threaded stage",
+            interval=0.01,
+            expected_seconds=120.0,
+        )
+
+        details = [detail for _, _, _, detail in reporter.updates]
+        self.assertTrue(any(detail and "left (rough estimate)" in detail for detail in details))
+
+    def test_threaded_progress_notes_when_past_the_rough_estimate(self) -> None:
+        reporter = RecordingReporter()
+
+        def delayed_noop() -> None:
+            time.sleep(0.55)
+
+        run_threaded_with_periodic_progress(
+            delayed_noop,
+            reporter=reporter,
+            label="threaded stage",
+            interval=0.01,
+            expected_seconds=0.1,
+        )
+
+        self.assertIn(
+            ("threaded stage", None, None, "running longer than the rough estimate"),
+            reporter.updates,
+        )
 
 
 class ConvertToPcm16kMonoTest(unittest.TestCase):
