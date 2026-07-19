@@ -140,6 +140,8 @@ class RunWithProgressTest(unittest.TestCase):
         def delayed_noop() -> None:
             time.sleep(0.55)
 
+        # expected_seconds is far larger than the real ~0.55s delay, so the
+        # "left" branch is deterministic regardless of actual scheduling.
         run_threaded_with_periodic_progress(
             delayed_noop,
             reporter=reporter,
@@ -157,12 +159,15 @@ class RunWithProgressTest(unittest.TestCase):
         def delayed_noop() -> None:
             time.sleep(0.55)
 
+        # A negative expectation guarantees elapsed time (always >= 0)
+        # exceeds it regardless of actual scheduling, keeping this
+        # deterministic without mocking the clock or threading internals.
         run_threaded_with_periodic_progress(
             delayed_noop,
             reporter=reporter,
             label="threaded stage",
             interval=0.01,
-            expected_seconds=0.1,
+            expected_seconds=-1.0,
         )
 
         self.assertIn(

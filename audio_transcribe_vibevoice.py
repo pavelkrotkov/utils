@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import platform
@@ -370,8 +371,11 @@ def main() -> None:
     try:
         # mlx-audio 0.4.5 has a circular import: stt.generate imports
         # stt.models, whose glmasr/voxtral modules import back from
-        # stt.generate. Loading stt.models first breaks the cycle.
-        import mlx_audio.stt.models  # noqa: F401
+        # stt.generate. Loading stt.models first breaks the cycle. Swallow
+        # failures here so other mlx-audio versions without this submodule
+        # (or with the cycle already fixed) still reach the real import below.
+        with contextlib.suppress(ImportError):
+            import mlx_audio.stt.models  # noqa: F401
         from mlx_audio.stt.generate import generate_transcription
     except ImportError as exc:
         print(f"ERROR: Missing required Python package: {exc}", file=sys.stderr)
