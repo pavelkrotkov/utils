@@ -382,8 +382,13 @@ def run_threaded_with_periodic_progress(
     reporter: ProgressReporter,
     label: str,
     interval: float,
+    expected_seconds: float | None = None,
 ) -> None:
-    """Run blocking Python work while periodically emitting indeterminate progress."""
+    """Run blocking Python work while periodically reporting elapsed time.
+
+    The wrapped call gives no progress feedback, so updates only show honest
+    elapsed time — plus a rough time-left hint when expected_seconds is given.
+    """
     done = threading.Event()
     error: list[BaseException] = []
 
@@ -396,25 +401,22 @@ def run_threaded_with_periodic_progress(
             done.set()
 
     reporter.start(label)
+    start = time.monotonic()
     thread = threading.Thread(target=target, daemon=True)
     thread.start()
 
-    ticks = 0
     while not done.wait(max(0.5, interval)):
-        ticks += 1
-        percent = min(95.0, 5.0 + ticks * 2.5)
-        reporter.update(
-            label,
-            completed=percent,
-            total=100.0,
-            detail="still running",
-            force=True,
-            show_count=False,
-        )
+        elapsed = time.monotonic() - start
+        if expected_seconds is None:
+            detail = "still running"
+        elif elapsed < expected_seconds:
+            detail = f"~{format_duration(expected_seconds - elapsed)} left (rough estimate)"
+        else:
+            detail = "running longer than the rough estimate"
+        reporter.update(label, detail=detail, force=True, show_count=False)
 
     thread.join()
     if error:
         raise error[0]
 
-    reporter.update(label, completed=100.0, total=100.0, force=True, show_count=False)
     reporter.finish(label)

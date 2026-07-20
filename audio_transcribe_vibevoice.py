@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import platform
@@ -31,11 +32,15 @@ from typing import Any
 from audio_common import (
     ProgressReporter,
     convert_to_pcm16k_mono,
+    format_duration,
+    probe_media_duration,
     run_threaded_with_periodic_progress,
 )
 from audio_transcript import TranscriptSegment, emit_transcript
 
 DEFAULT_MODEL = "mlx-community/VibeVoice-ASR-4bit"
+# Observed on Apple Silicon: transcription takes roughly 4x the audio duration.
+REALTIME_FACTOR = 4.0
 SUPPORTED_FORMATS = ("json", "txt", "srt", "vtt", "diarized-txt", "diarized-breaks")
 _DIARIZED_FORMATS = frozenset({"diarized-txt", "diarized-breaks"})
 
@@ -364,6 +369,13 @@ def main() -> None:
     os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
     try:
+        # mlx-audio 0.4.5 has a circular import: stt.generate imports
+        # stt.models, whose glmasr/voxtral modules import back from
+        # stt.generate. Loading stt.models first breaks the cycle. Swallow
+        # failures here so other mlx-audio versions without this submodule
+        # (or with the cycle already fixed) still reach the real import below.
+        with contextlib.suppress(ImportError):
+            import mlx_audio.stt.models  # noqa: F401
         from mlx_audio.stt.generate import generate_transcription
     except ImportError as exc:
         print(f"ERROR: Missing required Python package: {exc}", file=sys.stderr)
@@ -379,9 +391,16 @@ def main() -> None:
 
     progress = None if args.no_progress else ProgressReporter(interval=args.progress_interval)
     pre_convert = args.pre_convert_pcm16k or _bool_env("VIBEVOICE_PRECONVERT_PCM16K")
+    audio_seconds = probe_media_duration(args.input, "ffprobe", args.verbose) if progress else None
+    expected_seconds = audio_seconds * REALTIME_FACTOR if audio_seconds else None
     if progress:
         progress.info(f"Transcribing with {args.model}")
         progress.info(f"Writing {args.format.upper()} to {final_path}")
+        if audio_seconds:
+            progress.info(
+                f"Audio duration {format_duration(audio_seconds)}; expect roughly "
+                f"{format_duration(expected_seconds)} (~{REALTIME_FACTOR:g}x realtime)"
+            )
     else:
         print(f"INFO: Transcribing with {args.model}", file=sys.stderr)
         print(f"INFO: Writing {args.format.upper()} to {final_path}", file=sys.stderr)
@@ -417,6 +436,7 @@ def main() -> None:
                     reporter=progress,
                     label="VibeVoice ASR",
                     interval=args.progress_interval,
+                    expected_seconds=expected_seconds,
                 )
             else:
                 transcribe()
