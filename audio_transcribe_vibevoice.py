@@ -391,7 +391,7 @@ def main() -> None:
 
     progress = None if args.no_progress else ProgressReporter(interval=args.progress_interval)
     pre_convert = args.pre_convert_pcm16k or _bool_env("VIBEVOICE_PRECONVERT_PCM16K")
-    audio_seconds = probe_media_duration(args.input, "ffprobe", args.verbose)
+    audio_seconds = probe_media_duration(args.input, "ffprobe", args.verbose) if progress else None
     expected_seconds = audio_seconds * REALTIME_FACTOR if audio_seconds else None
     if progress:
         progress.info(f"Transcribing with {args.model}")
