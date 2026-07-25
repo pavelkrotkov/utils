@@ -31,9 +31,9 @@ show_missing = true
 [dependency-groups]
 dev = [
     "pip-audit>=2.10.1",
-    "pre-commit>=4.6.0",
+    "pre-commit>=4.6.1",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
-    "ruff>=0.15.18",
-    "ty>=0.0.51",
+    "ruff>=0.16.0",
+    "ty>=0.0.63",
 ]
