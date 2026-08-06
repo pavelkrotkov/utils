@@ -1,6 +1,6 @@
 from datetime import date
 
-from simplifi_runtime.subscriptions import _is_recurring, _series, analyse
+from simplifi_runtime.subscriptions import _is_recurring, _series, analyse, summary
 
 
 def _charges(payee, amounts, *, month0=1, state="CLEARED"):
@@ -42,3 +42,23 @@ def test_projected_rows_do_not_sustain_a_subscription_series():
 
     assert series.charges == []
     assert len(series.projected) == 3
+
+
+def test_historical_projections_do_not_hide_a_lapsed_series():
+    charges = _charges("subscription", [31.98] * 3, month0=1)
+    historical_projection = _charges("subscription", [31.98], month0=4, state="PENDING")
+    historical_projection[0]["scheduled_model_id"] = "scheduled-1"
+
+    findings = analyse(charges + historical_projection, today=date(2026, 12, 1))
+
+    assert "ghost" not in {finding.kind for finding in findings}
+    assert "lapsed" in {finding.kind for finding in findings}
+
+
+def test_lapsed_series_are_not_counted_as_live():
+    old = _charges("old_subscription", [10.00] * 3, month0=1)
+    active = _charges("active_subscription", [10.00] * 3, month0=9)
+
+    result = summary(old + active, today=date(2026, 12, 1))
+
+    assert result.startswith("1 live subscriptions")

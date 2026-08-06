@@ -200,16 +200,23 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Prioritized]:
     # --- subscription_creep -------------------------------------------------
     # The CSV's Recurring flag is set on only 8 of 1,641 rows, so cadence is
     # inferred from date spacing instead: >=4 charges, roughly monthly.
-    for canon, dates in merchant_dates.items():
+    for canon in merchant_dates:
+        series = sorted(
+            (
+                r
+                for r in scored
+                if r["payee_canonical"] == canon
+                and r["kind"] in {"spend", "fee"}
+                and r["amount_minor_units"] < 0
+            ),
+            key=lambda x: x["posted_on"],
+        )
+        dates = [_d(r["posted_on"]) for r in series]
         if len(dates) < 4:
             continue
         gaps = [(b - a).days for a, b in pairwise(sorted(dates))]
         if not gaps or not (26 <= statistics.median(gaps) <= 34):
             continue
-        series = sorted(
-            (r for r in scored if r["payee_canonical"] == canon),
-            key=lambda x: x["posted_on"],
-        )
         amounts = [abs(r["amount_minor_units"]) for r in series]
         for i in range(1, len(series)):
             prior = amounts[:i]
@@ -289,6 +296,8 @@ def activity_staleness(rows: list[dict], today: date | None = None) -> list[dict
     today = today or date.today()
     last: dict[str, date] = {}
     for r in rows:
+        if not is_settled(r) or r["posted_on"] > today.isoformat():
+            continue
         d = _d(r["posted_on"])
         name = r["account_name"]
         if name not in last or d > last[name]:

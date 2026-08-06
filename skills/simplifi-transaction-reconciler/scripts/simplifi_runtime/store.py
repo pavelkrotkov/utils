@@ -27,6 +27,7 @@ class Store:
         self.migrations_dir = Path(migrations_dir or Path(__file__).with_name("migrations"))
         self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
+        self._run_sources: dict[int, str] = {}
         self.conn.execute("PRAGMA foreign_keys = ON")
         self._migrate()
 
@@ -56,17 +57,20 @@ class Store:
             " algorithm_version, ruleset_version) VALUES (?, ?, ?, ?, ?)",
             (_now(), source, source_detail, ALGORITHM_VERSION, RULESET_VERSION),
         )
-        self.conn.commit()
         if cur.lastrowid is None:
             raise sqlite3.DatabaseError("SQLite did not return a run ID")
-        return int(cur.lastrowid)
+        run_id = int(cur.lastrowid)
+        self._run_sources[run_id] = source
+        return run_id
 
     def finish_run(self, run_id: int, outcome: str, row_count: int) -> None:
         self.conn.execute(
             "UPDATE runs SET finished_at = ?, outcome = ?, row_count = ? WHERE id = ?",
             (_now(), outcome, row_count, run_id),
         )
-        self.conn.commit()
+
+    def rollback(self) -> None:
+        self.conn.rollback()
 
     # --- transactions -------------------------------------------------------
 
@@ -97,15 +101,36 @@ class Store:
 
     def upsert_version(self, run_id: int, record: dict) -> str:
         """Append a version if the content hash changed. Returns 'new'|'changed'|'same'."""
+        source = self._run_sources.get(run_id)
+        if source is None:
+            row = self.conn.execute("SELECT source FROM runs WHERE id = ?", (run_id,)).fetchone()
+            if row is None:
+                raise sqlite3.DatabaseError(f"unknown run ID: {run_id}")
+            source = str(row["source"])
+
         txid = record["transaction_id"]
+        if record.get("is_deleted"):
+            result = self.conn.execute(
+                "UPDATE transaction_version SET is_current = 0 "
+                "WHERE transaction_id = ? AND source = ? AND is_current = 1",
+                (txid, source),
+            )
+            return "deleted" if result.rowcount else "deleted_missing"
+
         shash = self.source_hash(record)
         row = self.conn.execute(
-            "SELECT id, source_hash FROM transaction_version"
-            " WHERE transaction_id = ? AND is_current = 1",
-            (txid,),
+            "SELECT id, source_hash, algorithm_version, ruleset_version "
+            "FROM transaction_version WHERE transaction_id = ? AND source = ? "
+            "AND is_current = 1",
+            (txid, source),
         ).fetchone()
 
-        if row and row["source_hash"] == shash:
+        if (
+            row
+            and row["source_hash"] == shash
+            and row["algorithm_version"] == ALGORITHM_VERSION
+            and row["ruleset_version"] == RULESET_VERSION
+        ):
             return "same"
 
         if row:
@@ -119,6 +144,9 @@ class Store:
             "observed_at",
             "source_hash",
             "is_current",
+            "source",
+            "algorithm_version",
+            "ruleset_version",
             "posted_on",
             "transacted_on",
             "account_name",
@@ -156,6 +184,9 @@ class Store:
             "observed_at": _now(),
             "source_hash": shash,
             "is_current": 1,
+            "source": source,
+            "algorithm_version": ALGORITHM_VERSION,
+            "ruleset_version": RULESET_VERSION,
         }
         for column in ("excluded_from_f2s", "is_split", "is_reviewed"):
             values.setdefault(column, 0)

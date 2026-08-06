@@ -191,10 +191,25 @@ def _is_recurring(s: Series) -> bool:
     return s.variation <= MAX_VARIATION
 
 
+def _has_future_projection(s: Series, today: date) -> bool:
+    return any(p["posted_on"] > today.isoformat() for p in s.projected)
+
+
+def _is_live(s: Series, today: date) -> bool:
+    """A recurring series is live only when recent or projected forward."""
+    if not _is_recurring(s):
+        return False
+    if _has_future_projection(s, today):
+        return True
+    return bool(
+        s.last_charge and (today - s.last_charge).days <= s.interval_days * SILENT_INTERVALS
+    )
+
+
 def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
     today = today or date.today()
     everything = _series(rows)
-    live = {k: s for k, s in everything.items() if _is_recurring(s)}
+    live = {k: s for k, s in everything.items() if _is_live(s, today)}
     findings: list[Finding] = []
 
     for key, s in sorted(everything.items()):
@@ -202,12 +217,8 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
         silent = (today - s.last_charge).days if s.last_charge else 10**6
 
         # GHOST — projected but not actually charging.
-        if (
-            s.projected
-            and len(s.charges) >= MIN_GHOST_HISTORY
-            and silent > interval * SILENT_INTERVALS
-        ):
-            future = [p for p in s.projected if p["posted_on"] > today.isoformat()]
+        future = [p for p in s.projected if p["posted_on"] > today.isoformat()]
+        if future and len(s.charges) >= MIN_GHOST_HISTORY and silent > interval * SILENT_INTERVALS:
             waste = abs(future[0]["amount_minor_units"]) / 100 * 12 if future else 0
             findings.append(
                 Finding(
@@ -240,7 +251,7 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
                 )
 
         # LAPSED — was regular, stopped, nothing projected.
-        if silent > interval * SILENT_INTERVALS and not s.projected:
+        if silent > interval * SILENT_INTERVALS and not future:
             findings.append(
                 Finding(
                     "lapsed",
@@ -401,7 +412,7 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
 
 def summary(rows: list[dict], today: date | None = None) -> str:
     today = today or date.today()
-    live = {k: s for k, s in _series(rows).items() if _is_recurring(s)}
+    live = {k: s for k, s in _series(rows).items() if _is_live(s, today)}
     lines = [
         f"{len(live)} live subscriptions, "
         f"${sum(s.monthly for s in live.values()):,.2f}/mo "

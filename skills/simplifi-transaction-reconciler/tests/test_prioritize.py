@@ -1,4 +1,6 @@
-from simplifi_runtime.prioritize import analyse
+from datetime import date
+
+from simplifi_runtime.prioritize import activity_staleness, analyse
 
 
 def test_pending_rows_do_not_create_review_signals():
@@ -19,3 +21,65 @@ def test_pending_rows_do_not_create_review_signals():
     ]
 
     assert analyse(rows) == []
+
+
+def test_activity_staleness_ignores_future_projections():
+    rows = [
+        {
+            "account_name": "Checking",
+            "posted_on": "2026-07-01",
+            "txn_state": "CLEARED",
+        },
+        {
+            "account_name": "Checking",
+            "posted_on": "2026-12-01",
+            "txn_state": "PENDING",
+            "scheduled_model_id": "scheduled-1",
+        },
+    ]
+
+    result = activity_staleness(rows, today=date(2026, 8, 1))
+
+    assert result == [
+        {
+            "account": "Checking",
+            "last_transaction": "2026-07-01",
+            "days_stale": 31,
+            "status": "stale",
+        }
+    ]
+
+
+def test_subscription_creep_ignores_refunds_and_income():
+    rows = []
+    for index, posted_on in enumerate(("2026-01-01", "2026-02-01", "2026-03-01", "2026-04-01")):
+        rows.append(
+            {
+                "transaction_id": f"charge-{index}",
+                "posted_on": posted_on,
+                "payee_canonical": "merchant",
+                "payee_display": "Merchant",
+                "account_name": "Checking",
+                "amount_minor_units": -1000,
+                "category": "Subscriptions",
+                "kind": "spend",
+                "poisons_statistics": 0,
+            }
+        )
+    rows.append(
+        {
+            "transaction_id": "refund-1",
+            "posted_on": "2026-05-01",
+            "payee_canonical": "merchant",
+            "payee_display": "Merchant",
+            "account_name": "Checking",
+            "amount_minor_units": 5000,
+            "category": "Subscriptions",
+            "kind": "refund",
+            "poisons_statistics": 0,
+        }
+    )
+
+    signals = [signal.name for item in analyse(rows) for signal in item.signals]
+
+    assert "subscription_creep" not in signals

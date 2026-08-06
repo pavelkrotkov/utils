@@ -212,18 +212,20 @@ class SimplifiApiClient:
                 page = self.get(next_path)
 
             resources = page.get("resources", [])
+            next_path = (page.get("metaData") or {}).get("nextLink")
             if not resources:
+                if next_path:
+                    raise ApiError(f"{path}: pagination cursor advanced to an empty page")
                 break
 
             # Belt and braces: if a cursor ever silently re-serves page one, an
             # all-duplicate page ends the walk instead of looping forever.
             fresh = [r for r in resources if r.get("id") not in seen_ids]
             if not fresh:
-                break
+                raise ApiError(f"{path}: pagination cursor did not advance")
             seen_ids.update(r.get("id") for r in fresh)
             out.extend(fresh)
 
-            next_path = (page.get("metaData") or {}).get("nextLink")
             if not next_path:
                 break
 
@@ -289,12 +291,36 @@ class SimplifiApiSource:
 
         raw = self.client.transactions(self.date_on_after, self.modified_after)
         return [
-            self._to_record(t, accounts, categories, account_names)
+            self._tombstone(t)
+            if t.get("isDeleted")
+            else self._to_record(t, accounts, categories, account_names)
             for t in raw
-            if not t.get("isDeleted")
         ]
 
     # --- mapping ------------------------------------------------------------
+
+    @staticmethod
+    def _tombstone(t: dict) -> dict:
+        transaction_id = t.get("id")
+        if not transaction_id:
+            raise ApiError("deleted transaction record is missing id")
+        return {
+            "transaction_id": transaction_id,
+            "is_deleted": True,
+        }
+
+    @staticmethod
+    def _validate_transaction(t: dict) -> None:
+        missing = [
+            key
+            for key in ("id", "amount", "postedOn")
+            if key not in t or t[key] is None or (isinstance(t[key], str) and not t[key].strip())
+        ]
+        if missing:
+            raise ApiError(
+                f"transaction {t.get('id', '?')} is missing required field(s): "
+                + ", ".join(missing)
+            )
 
     @staticmethod
     def _category_name(coa: dict | None, categories: dict) -> str:
@@ -331,6 +357,7 @@ class SimplifiApiSource:
     def _to_record(
         self, t: dict, accounts: dict, categories: dict, account_names: set[str]
     ) -> dict:
+        self._validate_transaction(t)
         cp = t.get("cpData") or {}
         account = accounts.get(t.get("accountId"), {})
         account_name = account.get("name", "") or t.get("accountId", "")

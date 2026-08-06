@@ -14,12 +14,12 @@ from typing import Any
 from . import llm, prioritize, report, subscriptions
 from .memory import MerchantMemory, Proposal
 from .secrets import SecretsError
-from .semantics import is_settled
+from .semantics import is_projected, is_settled
 from .sources.csv_source import SchemaError, SimplifiCsvSource
 from .store import Store
 
 
-def _rows(db: Path) -> list[dict]:
+def _rows(db: Path, source: str) -> list[dict]:
     if not db.exists():
         raise ValueError(f"no database at {db}; run `ingest` first")
     with sqlite3.connect(db) as conn:
@@ -28,7 +28,8 @@ def _rows(db: Path) -> list[dict]:
             dict(row)
             for row in conn.execute(
                 "SELECT * FROM transaction_version WHERE is_current = 1 "
-                "ORDER BY posted_on, transaction_id"
+                "AND source = ? ORDER BY posted_on, transaction_id",
+                (source,),
             )
         ]
 
@@ -49,16 +50,22 @@ def _parse_today(raw: str | None) -> date | None:
 
 
 def _print_summary(records: list[dict], source: str) -> None:
-    kinds = Counter(r["kind"] for r in records)
+    active_records = [r for r in records if not r.get("is_deleted")]
+    kinds = Counter(r["kind"] for r in active_records)
     rules = Counter(
-        rule for r in records for rule in (r.get("norm_rules_applied") or "").split(",") if rule
+        rule
+        for r in active_records
+        for rule in (r.get("norm_rules_applied") or "").split(",")
+        if rule
     )
-    print(f"INFO fetched {len(records)} rows from {source}")
+    print(f"INFO fetched {len(records)} rows from {source} ({len(active_records)} active)")
     print(f"INFO accounting kinds: {dict(kinds.most_common())}")
-    print(f"INFO excluded from statistics: {sum(r['poisons_statistics'] for r in records)}")
-    print(f"INFO uncategorized: {sum(r['is_uncategorized'] for r in records)}")
+    print(f"INFO deleted tombstones: {sum(bool(r.get('is_deleted')) for r in records)}")
+    print(f"INFO excluded from statistics: {sum(r['poisons_statistics'] for r in active_records)}")
+    print(f"INFO uncategorized: {sum(r['is_uncategorized'] for r in active_records)}")
     print(
-        f"INFO foreign charges (issuer-converted): {sum(r['is_foreign_charge'] for r in records)}"
+        "INFO foreign charges (issuer-converted): "
+        f"{sum(r['is_foreign_charge'] for r in active_records)}"
     )
     if rules:
         print(f"INFO normalization rules fired: {dict(rules.most_common())}")
@@ -101,9 +108,14 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     try:
         run_id = store.start_run(args.source, detail)
         outcomes = Counter(store.upsert_version(run_id, record) for record in records)
-        store.record_accounts({r["account_name"] for r in records if r["account_name"]})
+        store.record_accounts(
+            {r["account_name"] for r in records if not r.get("is_deleted") and r["account_name"]}
+        )
         store.finish_run(run_id, "success", len(records))
         store.commit()
+    except BaseException:
+        store.rollback()
+        raise
     finally:
         store.close()
 
@@ -115,10 +127,14 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 
 def _analysis_rows(args: argparse.Namespace) -> tuple[list[dict], int, str]:
     db = Path(args.db)
-    rows = _rows(db)
-    if not rows:
-        raise ValueError(f"no current transactions in {db}; run `ingest` first")
+    if not db.exists():
+        raise ValueError(f"no database at {db}; run `ingest` first")
     run_id, source = _latest_run(db)
+    rows = _rows(db, source)
+    if not rows:
+        raise ValueError(
+            f"no current transactions for source {source!r} in {db}; run `ingest` first"
+        )
     return rows, run_id, source
 
 
@@ -136,24 +152,31 @@ def _memory_proposals(
     return memory, pending
 
 
+def _as_of_rows(rows: list[dict], today: date) -> list[dict]:
+    """Keep settled facts through today while retaining projection evidence."""
+    cutoff = today.isoformat()
+    return [row for row in rows if is_projected(row) or row["posted_on"] <= cutoff]
+
+
 def cmd_analyze(args: argparse.Namespace) -> int:
     try:
         rows, run_id, source = _analysis_rows(args)
     except ValueError as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
-    today = _parse_today(args.today)
-    memory, proposals = _memory_proposals(rows)
-    prioritized = prioritize.analyse(rows, today)
-    staleness = prioritize.activity_staleness(rows, today)
-    findings = subscriptions.analyse(rows, today)
+    today = _parse_today(args.today) or date.today()
+    analysis_rows = _as_of_rows(rows, today)
+    memory, proposals = _memory_proposals(analysis_rows)
+    prioritized = prioritize.analyse(analysis_rows, today)
+    staleness = prioritize.activity_staleness(analysis_rows, today)
+    findings = subscriptions.analyse(analysis_rows, today)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(
         report.render(
             run_id=run_id,
             source=source,
-            rows=rows,
+            rows=analysis_rows,
             prioritized=prioritized,
             staleness=staleness,
             proposals=proposals,
@@ -165,7 +188,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 
     signals = Counter(signal.name for item in prioritized for signal in item.signals)
     resolved = sum(1 for _, proposal in proposals if proposal)
-    print(f"INFO analysed {len(rows)} transactions")
+    print(f"INFO analysed {len(analysis_rows)} transactions")
     print(f"INFO flagged for review: {len(prioritized)}  signals: {dict(signals.most_common())}")
     print(
         f"INFO uncategorized: {len(proposals)}  memory resolved: {resolved}  "
@@ -188,8 +211,8 @@ def cmd_subs(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
-    today = _parse_today(args.today)
-    print(subscriptions.summary(rows, today))
+    today = _parse_today(args.today) or date.today()
+    print(subscriptions.summary(_as_of_rows(rows, today), today))
     if not any((row.get("txn_state") or "") for row in rows):
         print(
             "\nWARNING source has no settlement/projection state; projected rows cannot be excluded.",
