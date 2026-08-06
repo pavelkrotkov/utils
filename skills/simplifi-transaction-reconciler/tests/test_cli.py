@@ -13,9 +13,7 @@ COMMANDS = {"ingest", "analyze", "classify", "subs", "probe", "schema"}
 def test_every_packaged_subcommand_has_a_handler():
     parser = build_parser()
     subparsers = next(
-        action
-        for action in parser._actions
-        if isinstance(action, argparse._SubParsersAction)
+        action for action in parser._actions if isinstance(action, argparse._SubParsersAction)
     )
 
     assert set(subparsers.choices) == COMMANDS

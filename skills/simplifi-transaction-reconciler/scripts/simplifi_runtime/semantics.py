@@ -149,10 +149,7 @@ def is_projected(row: dict) -> bool:
 
     Date is NOT a safe proxy: 11 projected rows are dated in the past.
     """
-    return (
-        (row.get("txn_state") or "").upper() == "PENDING"
-        and bool(row.get("scheduled_model_id"))
-    )
+    return (row.get("txn_state") or "").upper() == "PENDING" and bool(row.get("scheduled_model_id"))
 
 
 def is_real_charge(row: dict) -> bool:

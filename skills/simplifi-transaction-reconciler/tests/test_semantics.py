@@ -77,9 +77,7 @@ def test_pending_is_projected_even_when_past_dated_and_has_model_id():
 
 
 def test_cleared_is_real_even_inside_recurring_series():
-    assert is_real_charge(
-        {"txn_state": "CLEARED", "scheduled_model_id": "522552228473503488"}
-    )
+    assert is_real_charge({"txn_state": "CLEARED", "scheduled_model_id": "522552228473503488"})
 
 
 def test_past_date_does_not_imply_real_charge():

@@ -127,8 +127,7 @@ def _memory_proposals(rows: list[dict]) -> tuple[MerchantMemory, list[tuple[dict
     pending = [
         (row, memory.propose(row))
         for row in rows
-        if row["is_uncategorized"] and not row["poisons_statistics"]
-        and is_settled(row)
+        if row["is_uncategorized"] and not row["poisons_statistics"] and is_settled(row)
     ]
     pending.sort(key=lambda pair: (pair[1] is None, -abs(pair[0]["amount_minor_units"])))
     return memory, pending

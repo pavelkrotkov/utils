@@ -62,10 +62,7 @@ def test_same_merchant_different_original_amounts_share_identity():
 
 
 def test_processor_and_card_noise_are_removed():
-    card = normalize(
-        "Loy*themedicalgroupnj, 908-520-1927, NJ "
-        "(Card Transaction ID: nobdyq7)"
-    )
+    card = normalize("Loy*themedicalgroupnj, 908-520-1927, NJ (Card Transaction ID: nobdyq7)")
 
     assert "nobdyq7" not in card.normalized
     assert "908-520-1927" not in card.normalized
