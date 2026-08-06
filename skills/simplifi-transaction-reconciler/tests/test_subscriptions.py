@@ -104,3 +104,11 @@ def test_ghost_annual_impact_uses_observed_quarterly_cadence():
     ghost = next(finding for finding in findings if finding.kind == "ghost")
 
     assert ghost.annual_impact == pytest.approx(100 * 365.25 / 90, rel=0.02)
+
+
+def test_repeated_merchant_token_does_not_create_self_twin():
+    rows = _charges("netflix_netflix", [15.99] * 3, month0=9)
+
+    findings = analyse(rows, today=date(2026, 12, 1))
+
+    assert "twin" not in {finding.kind for finding in findings}

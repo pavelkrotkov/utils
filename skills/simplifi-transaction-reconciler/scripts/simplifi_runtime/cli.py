@@ -245,6 +245,42 @@ def _as_of_rows(rows: list[dict], today: date) -> list[dict]:
     return [row for row in rows if is_projected(row) or row["posted_on"] <= cutoff]
 
 
+def _analysis_limitations(source: str, rows: list[dict]) -> list[str]:
+    limitations = []
+    if source == "csv":
+        limitations.append(
+            "CSV has no settlement or projection metadata; all settled-only analyses "
+            "(memory, prioritization, staleness, recurring charges, and model examples) "
+            "are unavailable."
+        )
+    unknown_exclusions = sum(row.get("exclusion_flag") == 2 for row in rows)
+    if source == "api" and unknown_exclusions:
+        limitations.append(
+            "The API bulk transaction response did not expose isExcludedFromReports; "
+            f"{unknown_exclusions:,} row(s) were excluded from statistics, memory, "
+            "prioritization, staleness, recurring-charge, and model-example analysis. "
+            "An empty result is not evidence of a clean review."
+        )
+    return limitations
+
+
+def _model_taxonomy(rows: list[dict]) -> list[str]:
+    accounts = {row["account_name"] for row in rows}
+    return sorted(
+        {
+            (row["category"] or "").strip()
+            for row in rows
+            if (
+                (row["category"] or "").strip()
+                and not row["is_uncategorized"]
+                and not row["poisons_statistics"]
+                and is_settled(row)
+            )
+        }
+        - accounts
+    )
+
+
 def cmd_analyze(args: argparse.Namespace) -> int:
     try:
         rows, run_id, source = _analysis_rows(args)
@@ -257,19 +293,14 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     prioritized = prioritize.analyse(analysis_rows, today)
     staleness = prioritize.activity_staleness(analysis_rows, today)
     findings = subscriptions.analyse(analysis_rows, today)
-    limitations = []
-    if source == "csv":
-        limitations.append(
-            "CSV has no settlement or projection metadata; all settled-only analyses "
-            "(memory, prioritization, staleness, recurring charges, and model examples) "
-            "are unavailable."
-        )
+    limitations = _analysis_limitations(source, analysis_rows)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(
         report.render(
             run_id=run_id,
             source=source,
+            analysis_date=today,
             rows=analysis_rows,
             prioritized=prioritized,
             staleness=staleness,
@@ -338,15 +369,7 @@ def cmd_classify(args: argparse.Namespace) -> int:
         print("INFO nothing left for a model to propose")
         return 0
 
-    accounts = {row["account_name"] for row in rows}
-    taxonomy = sorted(
-        {
-            (row["category"] or "").strip()
-            for row in rows
-            if (row["category"] or "").strip() and not row["is_uncategorized"]
-        }
-        - accounts
-    )
+    taxonomy = _model_taxonomy(rows)
     examples = llm.build_examples(rows)
     backend_cls = llm.BACKENDS[args.model]
     backend = backend_cls()
@@ -398,11 +421,11 @@ def cmd_classify(args: argparse.Namespace) -> int:
                 [
                     proposal.transaction_id,
                     row["posted_on"],
-                    row["payee_display"],
+                    _csv_safe_text(row["payee_display"]),
                     f"{row['amount_minor_units'] / 100:.2f}",
-                    proposal.category or "",
+                    _csv_safe_text(proposal.category or ""),
                     f"{proposal.confidence:.2f}",
-                    proposal.rationale,
+                    _csv_safe_text(proposal.rationale),
                     proposal.model,
                     "",
                 ]
@@ -412,6 +435,12 @@ def cmd_classify(args: argparse.Namespace) -> int:
     print(f"INFO tokens in/out: {usage.input_tokens}/{usage.output_tokens}")
     print(f"INFO wrote {out}; proposals are not written back to Simplifi")
     return 0
+
+
+def _csv_safe_text(value: str) -> str:
+    """Prevent spreadsheet applications from interpreting text as a formula."""
+    text = str(value)
+    return "'" + text if text.startswith(("=", "+", "-", "@")) else text
 
 
 def _api_client(args: argparse.Namespace):

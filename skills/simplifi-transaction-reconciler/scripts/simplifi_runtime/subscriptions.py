@@ -318,7 +318,7 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
     by_token: dict[str, list[str]] = defaultdict(list)
     for key, series in live.items():
         for tok in series.merchant.split("_"):
-            if len(tok) >= 5 and tok not in GENERIC:
+            if len(tok) >= 5 and tok not in GENERIC and key not in by_token[tok]:
                 by_token[tok].append(key)
     seen_pairs: set[tuple[str, ...]] = set()
     for tok, keys in by_token.items():

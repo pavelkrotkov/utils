@@ -26,6 +26,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 from ..money import Money
@@ -322,6 +323,17 @@ class SimplifiApiSource:
                 f"transaction {t.get('id', '?')} is missing required field(s): "
                 + ", ".join(missing)
             )
+        posted_on = str(t["postedOn"]).strip()
+        try:
+            date.fromisoformat(posted_on)
+        except ValueError:
+            try:
+                datetime.fromisoformat(posted_on.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise ApiError(
+                    f"transaction {t.get('id', '?')} has invalid postedOn date "
+                    f"{posted_on!r}; expected ISO date or datetime"
+                ) from exc
 
     @staticmethod
     def _category_name(coa: dict | None, categories: dict) -> str:

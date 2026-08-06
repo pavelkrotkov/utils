@@ -179,7 +179,10 @@ def normalize(raw: str) -> Descriptor:
         text = (raw or "").strip()
         applied.append("fallback_to_raw")
 
-    canonical = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+    # `\w` is Unicode-aware in Python. Keeping letters and digits from the
+    # descriptor avoids collapsing unrelated international merchants into the
+    # same ASCII-only `unknown` identity.
+    canonical = re.sub(r"[^\w]+", "_", text.casefold()).strip("_")
     display = text if text.isupper() or text.istitle() else text.title()
 
     return Descriptor(

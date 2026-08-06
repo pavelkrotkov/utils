@@ -19,6 +19,7 @@ def test_csv_report_surfaces_capability_limit_and_row_provenance():
     html = render(
         run_id=4,
         source="csv",
+        analysis_date="2026-08-15",
         rows=[row],
         prioritized=[],
         staleness=[],
@@ -32,3 +33,4 @@ def test_csv_report_surfaces_capability_limit_and_row_provenance():
     assert "version_id=17" in html
     assert "run_id=4" in html
     assert "source_hash=hash-17" in html
+    assert "analysis through 2026-08-15" in html

@@ -77,3 +77,9 @@ def test_normalization_preserves_raw_and_never_returns_empty_identity():
 
     for pathological in ("", "   ", "***", "12345678", "NJ"):
         assert normalize(pathological).canonical
+
+
+def test_normalization_preserves_non_latin_merchant_identity():
+    assert normalize("東京").canonical == "東京"
+    assert normalize("Кафе").canonical == "кафе"
+    assert normalize("東京").canonical != normalize("Кафе").canonical

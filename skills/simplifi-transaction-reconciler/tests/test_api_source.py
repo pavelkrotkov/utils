@@ -23,6 +23,13 @@ def test_incomplete_transaction_record_is_rejected():
         source._to_record({"id": "txn-1", "postedOn": "2026-08-01"}, {}, {}, set())
 
 
+def test_malformed_api_posted_on_date_is_rejected():
+    with pytest.raises(ApiError, match="invalid postedOn date"):
+        SimplifiApiSource._validate_transaction(
+            {"id": "txn-1", "amount": "10.00", "postedOn": "08/01/2026"}
+        )
+
+
 def test_deleted_transaction_becomes_a_tombstone():
     assert SimplifiApiSource._tombstone(
         {"id": "txn-1", "isDeleted": True, "modifiedAt": "2026-08-06T12:00:00Z"}

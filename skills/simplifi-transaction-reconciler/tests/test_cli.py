@@ -4,7 +4,14 @@ import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from simplifi_runtime.cli import _aggregator_health, _as_of_rows, build_parser
+from simplifi_runtime.cli import (
+    _aggregator_health,
+    _analysis_limitations,
+    _as_of_rows,
+    _csv_safe_text,
+    _model_taxonomy,
+    build_parser,
+)
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
 ENTRYPOINT = SKILL_DIR / "scripts" / "simplifi_transaction_reconciler.py"
@@ -101,3 +108,45 @@ def test_probe_health_reports_status_code_and_stale_refresh():
         "care code present",
         "last successful refresh is stale",
     ]
+
+
+def test_api_missing_exclusion_state_is_visible_as_a_report_limitation():
+    limitations = _analysis_limitations("api", [{"exclusion_flag": 2}])
+
+    assert len(limitations) == 1
+    assert "isExcludedFromReports" in limitations[0]
+    assert "not evidence of a clean review" in limitations[0]
+
+
+def test_model_taxonomy_excludes_non_spending_and_unsettled_rows():
+    rows = [
+        {
+            "account_name": "Checking",
+            "category": "Groceries",
+            "is_uncategorized": 0,
+            "poisons_statistics": 0,
+            "txn_state": "CLEARED",
+        },
+        {
+            "account_name": "Checking",
+            "category": "Transfer",
+            "is_uncategorized": 0,
+            "poisons_statistics": 1,
+            "txn_state": "CLEARED",
+        },
+        {
+            "account_name": "Checking",
+            "category": "Pending Category",
+            "is_uncategorized": 0,
+            "poisons_statistics": 0,
+            "txn_state": "PENDING",
+        },
+    ]
+
+    assert _model_taxonomy(rows) == ["Groceries"]
+
+
+def test_csv_text_escapes_formula_leading_values():
+    for prefix in ("=", "+", "-", "@"):
+        assert _csv_safe_text(prefix + "payload") == "'" + prefix + "payload"
+    assert _csv_safe_text("Groceries") == "Groceries"

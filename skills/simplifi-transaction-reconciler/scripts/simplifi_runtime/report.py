@@ -69,6 +69,7 @@ def render(
     *,
     run_id: int,
     source: str,
+    analysis_date: date | str | None = None,
     rows: list[dict],
     prioritized: list,
     staleness: list[dict],
@@ -87,7 +88,9 @@ def render(
     p.append(f"<style>{CSS}</style>")
     p.append(
         f"<h1>Transaction review</h1><div class=sub>run {run_id} · source {_e(source)} · "
-        f"generated {date.today().isoformat()} · row-level provenance shown below · "
+        f"generated {date.today().isoformat()} · analysis through "
+        f"{_e(analysis_date or date.today().isoformat())} · "
+        "row-level provenance shown below · "
         "no inference used</div>"
     )
     for limitation in limitations or []:
