@@ -1,0 +1,41 @@
+# ADR-006: Store append-only observations with reproducible derivations
+
+- Status: Accepted
+- Scope: SQLite storage, synchronization, and audit provenance
+
+## Context
+
+Aggregators can rename, recategorize, re-amount, replace, or remove a
+transaction after it first appears. Upserting the latest row loses evidence and
+makes it impossible to distinguish data churn from algorithm changes.
+
+## Decision
+
+Use numbered, ordered migrations and an append-only transaction-version table.
+Identify API observations with the provider's stable transaction ID; use a
+content-addressed synthetic ID only for ID-less exports and treat it as a
+fallback that cannot survive edits. Record the source hash and mark the current
+version without deleting prior versions.
+
+Record run and fetch state, row counts, source details, outcomes, and analysis
+results. Every derived proposal or signal carries enough provenance to
+reproduce it: run ID, source hash, algorithm/ruleset version, and when relevant
+model ID and prompt version, plus creation time. Preserve raw source evidence
+needed to audit normalization and write decisions.
+
+For API sources, prefer the provider's incremental modification cursor/as-of
+value over repeatedly refetching a full window. Persist the cursor with the
+source state, advance it only after a successful fetch, and retain a bounded
+full-scan/reconciliation path for recovery. A failed or partial fetch must not
+advance the cursor or be recorded as a complete run.
+
+## Consequences
+
+Re-ingestion is idempotent for unchanged observations, changes become visible,
+and reports can explain which data and code produced them. Incremental runs
+reduce load without sacrificing a deliberate recovery path.
+
+## Non-scope
+
+Retention duration, personal transaction data, databases, logs, and undo files
+are deployment artifacts, not skill resources.
