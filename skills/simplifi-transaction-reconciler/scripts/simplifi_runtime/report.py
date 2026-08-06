@@ -131,7 +131,7 @@ def render(
             "<th class=num>Amount</th><th>Signals</th><th class=num>Score</th>"
             "<th>Provenance</th></tr>"
         )
-        for item in prioritized[:60]:
+        for item in prioritized:
             r = item.row
             chips = "".join(
                 f'<span class="chip {"bad" if s.score >= 3 else "warn" if s.score >= 1 else ""}">'
@@ -162,7 +162,7 @@ def render(
             "<table><tr><th>Finding</th><th>Merchant</th>"
             "<th>Detail</th><th class=num>Annual impact</th></tr>"
         )
-        for finding in findings[:40]:
+        for finding in findings:
             p.append(
                 f"<tr><td><span class='chip warn'>{_e(finding.kind)}</span></td>"
                 f"<td>{_e(finding.merchant)}</td><td>{_e(finding.detail)}</td>"

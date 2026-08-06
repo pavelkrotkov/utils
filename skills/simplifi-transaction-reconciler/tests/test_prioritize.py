@@ -158,3 +158,30 @@ def test_refunds_do_not_raise_the_spending_baseline():
     signals = [signal.name for item in analyse(rows) for signal in item.signals]
 
     assert "amount_outlier" in signals
+
+
+def test_subscription_creep_keeps_accounts_separate():
+    rows = []
+    for account, amounts in (
+        ("Checking", [-10.00, -10.00, -10.00, -10.00, -12.00]),
+        ("Savings", [-10.00, -10.00, -10.00, -10.00, -10.00]),
+    ):
+        for index, amount in enumerate(amounts):
+            rows.append(
+                {
+                    "transaction_id": f"{account}-{index}",
+                    "posted_on": f"2026-0{index + 1}-01",
+                    "payee_canonical": "shared_provider",
+                    "payee_display": "Shared Provider",
+                    "account_name": account,
+                    "amount_minor_units": int(amount * 100),
+                    "category": "Subscriptions",
+                    "kind": "spend",
+                    "poisons_statistics": 0,
+                    "txn_state": "CLEARED",
+                }
+            )
+
+    signals = [signal for item in analyse(rows) for signal in item.signals]
+
+    assert any(signal.name == "subscription_creep" for signal in signals)

@@ -199,11 +199,27 @@ def _is_recurring(s: Series) -> bool:
     All three conditions matter. Dropping the amount check admits mortgages and
     grocery runs; dropping the cadence check admits anything bought twice.
     """
-    if len(s.charges) < MIN_CHARGES:
-        return False
-    if not (MIN_DAYS <= s.interval_days <= MAX_DAYS):
-        return False
-    return s.variation <= MAX_VARIATION
+    return _has_regular_cadence(s) and s.variation <= MAX_VARIATION
+
+
+def _has_regular_cadence(s: Series) -> bool:
+    return len(s.charges) >= MIN_CHARGES and MIN_DAYS <= s.interval_days <= MAX_DAYS
+
+
+def _hike(s: Series, interval: float) -> Finding | None:
+    """Return a price-hike finding before recent variation can reject a series."""
+    if len(s.amounts) < 4:
+        return None
+    by_date = [a for _, a in sorted(zip(s.dates, s.amounts, strict=True))]
+    old, new = statistics.median(by_date[:-2]), statistics.median(by_date[-2:])
+    if old <= 0 or new / old < HIKE_RATIO:
+        return None
+    return Finding(
+        "hike",
+        s.merchant,
+        f"${old:,.2f} -> ${new:,.2f} per charge ({new / old:.1f}x)",
+        (new - old) * (30.44 / interval) * 12,
+    )
 
 
 def _has_future_projection(s: Series, today: date) -> bool:
@@ -248,22 +264,16 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
             )
             continue
 
-        if not _is_recurring(s):
+        if not _has_regular_cadence(s):
             continue
 
-        # HIKE — compare the two most recent charges to the earlier median.
-        if len(s.amounts) >= 4:
-            by_date = [a for _, a in sorted(zip(s.dates, s.amounts, strict=True))]
-            old, new = statistics.median(by_date[:-2]), statistics.median(by_date[-2:])
-            if old > 0 and new / old >= HIKE_RATIO:
-                findings.append(
-                    Finding(
-                        "hike",
-                        s.merchant,
-                        f"${old:,.2f} -> ${new:,.2f} per charge ({new / old:.1f}x)",
-                        (new - old) * (30.44 / interval) * 12,
-                    )
-                )
+        # HIKE — detect a stable pre/post regime before recent variation can
+        # reject the series because the price change itself is large.
+        if hike := _hike(s, interval):
+            findings.append(hike)
+
+        if not _is_recurring(s):
+            continue
 
         # LAPSED — was regular, stopped, nothing projected.
         if silent > interval * SILENT_INTERVALS and not future:

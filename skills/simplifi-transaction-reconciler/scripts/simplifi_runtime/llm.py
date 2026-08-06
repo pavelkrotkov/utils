@@ -16,6 +16,7 @@ GUARDRAILS
 from __future__ import annotations
 
 import json
+import math
 import os
 import urllib.error
 import urllib.request
@@ -152,6 +153,7 @@ class HaikuBackend:
 
 
 BACKENDS = {"luna": LunaBackend, "haiku": HaikuBackend}
+REQUIRED_API_KEYS = {"luna": "OPENAI_API_KEY", "haiku": "ANTHROPIC_API_KEY"}
 
 
 def build_prompt(taxonomy: list[str], examples: list[dict], batch: list[dict]) -> str:
@@ -191,11 +193,17 @@ def _parse(text: str, taxonomy: set[str], model: str) -> list[Proposal]:
             # Not a member of the supplied taxonomy. Reject rather than coerce;
             # a plausible-looking invented category is worse than no answer.
             rejected, category = category, None
+        try:
+            confidence = float(item.get("confidence", 0.0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("model returned a non-numeric confidence") from exc
+        if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+            raise ValueError(f"model returned invalid confidence: {confidence!r}")
         out.append(
             Proposal(
                 transaction_id=str(item.get("id", "")),
                 category=category,
-                confidence=float(item.get("confidence", 0.0)),
+                confidence=confidence,
                 rationale=str(item.get("rationale", ""))[:120],
                 model=model,
                 rejected_category=rejected,

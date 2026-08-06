@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import sqlite3
 import sys
 from collections import Counter
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -29,11 +30,31 @@ def _positive_int(raw: str) -> int:
     return value
 
 
+MAX_CURSOR_FUTURE_SKEW = timedelta(minutes=5)
+
+
+def _parse_modified_at(raw: str) -> datetime:
+    value = str(raw).strip()
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"invalid modifiedAt timestamp: {value!r}") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    if parsed > datetime.now(timezone.utc) + MAX_CURSOR_FUTURE_SKEW:
+        raise ValueError(f"modifiedAt timestamp is too far in the future: {value!r}")
+    return parsed
+
+
 def _latest_modified_at(records: list[dict], fallback: str | None) -> str | None:
-    values = [str(row["modified_at"]) for row in records if row.get("modified_at")]
+    values = [
+        (str(row["modified_at"]), _parse_modified_at(row["modified_at"]))
+        for row in records
+        if row.get("modified_at")
+    ]
     if fallback:
-        values.append(fallback)
-    return max(values) if values else None
+        values.append((fallback, _parse_modified_at(fallback)))
+    return max(values, key=lambda item: item[1])[0] if values else None
 
 
 REFRESH_STALE_DAYS = 14
@@ -143,32 +164,64 @@ def _print_summary(records: list[dict], source: str) -> None:
         )
 
 
+def _finish_failed_run(store: Store, run_id: int) -> None:
+    """Persist failure status after discarding any transaction work."""
+    store.rollback()
+    store.finish_run(run_id, "failure", 0)
+    store.commit()
+
+
+def _is_complete_snapshot(args: argparse.Namespace) -> bool:
+    return args.source == "csv" or (args.source == "api" and args.full_rescan and not args.since)
+
+
+def _ensure_model_key(model: str, verbose: bool) -> None:
+    key = llm.REQUIRED_API_KEYS[model]
+    if os.environ.get(key):
+        return
+    from .secrets import load_into_env
+
+    load_into_env(required=[key], verbose=verbose)
+
+
 def cmd_ingest(args: argparse.Namespace) -> int:
     store = Store(Path(args.db))
     cursor_before: str | None = None
     if args.source == "csv":
+        detail = f"csv path={args.path or 'missing'}"
+    else:
+        cursor_before = (
+            None if args.full_rescan else args.modified_after or store.latest_cursor("api")
+        )
+        mode = "full-rescan" if args.full_rescan else "incremental"
+        detail = (
+            f"api since={args.since or 'all'} mode={mode} modified_after={cursor_before or 'all'}"
+        )
+    run_id = store.start_run(args.source, detail, cursor_before=cursor_before)
+    store.commit()
+
+    if args.source == "csv":
         if not args.path:
             print("ERROR a CSV path is required with --source csv", file=sys.stderr)
+            _finish_failed_run(store, run_id)
             store.close()
             return 2
         path = Path(args.path)
         if not path.exists():
             print(f"ERROR no such file: {path}", file=sys.stderr)
+            _finish_failed_run(store, run_id)
             store.close()
             return 1
         try:
             records = SimplifiCsvSource(path).fetch()
         except (OSError, SchemaError, ValueError) as exc:
             print(f"ERROR {exc}", file=sys.stderr)
+            _finish_failed_run(store, run_id)
             store.close()
             return 1
-        detail = str(path)
     else:
         from .sources.api_source import ApiError, SimplifiApiSource, client_from_env_or_age
 
-        cursor_before = (
-            None if args.full_rescan else args.modified_after or store.latest_cursor("api")
-        )
         try:
             client = client_from_env_or_age(verbose=args.verbose)
             records = SimplifiApiSource(
@@ -176,17 +229,13 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             ).fetch()
         except (SecretsError, ApiError) as exc:
             print(f"ERROR {exc}", file=sys.stderr)
+            _finish_failed_run(store, run_id)
             store.close()
             return 1
-        mode = "full-rescan" if args.full_rescan else "incremental"
-        detail = (
-            f"api since={args.since or 'all'} mode={mode} modified_after={cursor_before or 'all'}"
-        )
 
     try:
-        run_id = store.start_run(args.source, detail, cursor_before=cursor_before)
         outcomes = Counter(store.upsert_version(run_id, record) for record in records)
-        if args.source == "csv":
+        if _is_complete_snapshot(args):
             store.retire_absent_snapshot(run_id, {r["transaction_id"] for r in records})
         store.record_accounts(
             {r["account_name"] for r in records if not r.get("is_deleted") and r["account_name"]}
@@ -201,7 +250,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         )
         store.commit()
     except BaseException:
-        store.rollback()
+        _finish_failed_run(store, run_id)
         raise
     finally:
         store.close()
@@ -371,8 +420,14 @@ def cmd_classify(args: argparse.Namespace) -> int:
 
     taxonomy = _model_taxonomy(rows)
     examples = llm.build_examples(rows)
-    backend_cls = llm.BACKENDS[args.model]
-    backend = backend_cls()
+    try:
+        if not args.dry_run:
+            _ensure_model_key(args.model, args.verbose)
+        backend_cls = llm.BACKENDS[args.model]
+        backend = backend_cls()
+    except (SecretsError, ValueError) as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
     print(f"INFO {len(residue)} transactions need a proposal")
     print(f"INFO taxonomy: {len(taxonomy)} categories, {len(examples)} examples")
     try:
@@ -525,6 +580,7 @@ def build_parser() -> argparse.ArgumentParser:
     classify.add_argument("--out", default="proposals.csv")
     classify.add_argument("--model", choices=sorted(llm.BACKENDS), default="luna")
     classify.add_argument("--chunk-size", type=_positive_int, default=llm.CHUNK_SIZE)
+    classify.add_argument("--verbose", action="store_true")
     classify.add_argument(
         "--dry-run", action="store_true", help="write prompts without calling an API"
     )

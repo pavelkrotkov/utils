@@ -202,16 +202,18 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Prioritized]:
 
     # --- subscription_creep -------------------------------------------------
     # The CSV's Recurring flag is set on only 8 of 1,641 rows, so cadence is
-    # inferred from date spacing instead: >=4 charges, roughly monthly.
-    for canon in merchant_dates:
+    # inferred from date spacing instead: >=4 charges, roughly monthly. Keep
+    # accounts separate: two monthly charges for the same provider must not be
+    # interleaved into a false twice-monthly series.
+    series_by_account: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for r in scored:
+        if r["kind"] in {"spend", "fee"} and r["amount_minor_units"] < 0 and r["payee_canonical"]:
+            identity = str(r.get("account_id") or r.get("account_name") or "").strip()
+            series_by_account[(r["payee_canonical"], identity)].append(r)
+
+    for (_canon, _identity), series_rows in series_by_account.items():
         series = sorted(
-            (
-                r
-                for r in scored
-                if r["payee_canonical"] == canon
-                and r["kind"] in {"spend", "fee"}
-                and r["amount_minor_units"] < 0
-            ),
+            series_rows,
             key=lambda x: x["posted_on"],
         )
         dates = [_d(r["posted_on"]) for r in series]

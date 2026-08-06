@@ -57,3 +57,16 @@ def _rows():
 def test_classify_rejects_non_exact_batch_results(results, message):
     with pytest.raises(ValueError, match=message):
         classify(FakeBackend({"results": results}), _rows(), ["Shopping"], [], chunk_size=2)
+
+
+@pytest.mark.parametrize("confidence", [-0.1, 1.1, "NaN", "Infinity"])
+def test_classify_rejects_invalid_confidence(confidence):
+    payload = {
+        "results": [
+            {"id": "txn-1", "category": "Shopping", "confidence": confidence},
+            {"id": "txn-2", "category": "Shopping", "confidence": 0.5},
+        ]
+    }
+
+    with pytest.raises(ValueError, match="confidence"):
+        classify(FakeBackend(payload), _rows(), ["Shopping"], [], chunk_size=2)

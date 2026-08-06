@@ -112,3 +112,11 @@ def test_repeated_merchant_token_does_not_create_self_twin():
     findings = analyse(rows, today=date(2026, 12, 1))
 
     assert "twin" not in {finding.kind for finding in findings}
+
+
+def test_price_hike_is_reported_even_when_recent_variation_is_high():
+    rows = _charges("hike_service", [10.00, 10.00, 10.00, 10.00, 20.00, 20.00])
+
+    findings = analyse(rows, today=date(2026, 7, 1))
+
+    assert "hike" in {finding.kind for finding in findings}

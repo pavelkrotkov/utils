@@ -93,6 +93,22 @@ def test_failed_run_can_be_rolled_back(tmp_path: Path):
     store.close()
 
 
+def test_failed_run_is_audited_after_transaction_work_is_rolled_back(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+    run_id = store.start_run("csv", "fixture")
+    store.commit()
+    store.upsert_version(run_id, _record("txn-1"))
+
+    store.rollback()
+    store.finish_run(run_id, "failure", 0)
+    store.commit()
+
+    run = store.conn.execute("SELECT outcome FROM runs WHERE id = ?", (run_id,)).fetchone()
+    assert run[0] == "failure"
+    assert store.conn.execute("SELECT COUNT(*) FROM transaction_version").fetchone()[0] == 0
+    store.close()
+
+
 def test_latest_successful_api_cursor_is_persisted(tmp_path: Path):
     store = Store(tmp_path / "review.sqlite")
     run_id = store.start_run("api", "fixture", cursor_before="2026-08-01T00:00:00Z")

@@ -404,15 +404,14 @@ Two consequences for the `apply` design (plan §6.11):
 
 ## 7. Connection health has a dedicated endpoint
 
-`GET /institutions/fi-issues?institutionIds=...` is presumably where the care
-codes surface — `FDP-108` for HealthEquity, `324` for HSBC, `FDP-192` for the
-dead WageWorks connector. Combined with `/institution-logins`, this is a far
-better basis for the `account_stale` monitor (plan §3.7) than inferring staleness
-from the newest transaction date, because it reports the *connection's* state
-rather than the absence of activity.
+`GET /institutions/fi-issues?institutionIds=...` is presumably where provider
+care codes surface. Combined with `/institution-logins`, this is a far better
+basis for the `account_stale` monitor (plan §3.7) than inferring staleness from
+the newest transaction date, because it reports the *connection's* state rather
+than the absence of activity.
 
-That also fixes the false positive Pavel flagged: Alliant showed 308 days stale
-purely because the account sees little use. `fi-issues` would show it healthy.
+This also avoids false positives from accounts that see little use: a quiet
+account can still have a healthy provider connection.
 
 ---
 
@@ -462,7 +461,7 @@ browser. `POST /institution-logins/refresh` then poll.
   "aggregators": [{
     "cpId": "...", "cpChannel": "...",
     "aggStatus": "...",                    // connection state
-    "aggStatusCode": "...",                // *** THE CARE CODE: FDP-108, 324, FDP-192 ***
+    "aggStatusCode": "...",                // provider care code
     "aggStatusDetail": "...",              // the human-readable message
     "lastStatusUpdatedAt": "...",
     "nextRefreshAttemptAt": "...",         // when Simplifi will next auto-try
@@ -477,12 +476,12 @@ This is a purpose-built connection-health feed and it is strictly better than
 what the plan designed:
 
 - **`lastRefreshSuccessfulAt` is the real staleness metric.** §6.5 inferred
-  staleness from the newest transaction date, which produced the Alliant false
-  positive — 308 days with no activity on an account that is simply little-used
-  but perfectly connected. This field distinguishes "no spending" from "no sync".
-- **`aggStatusCode` gives the care code directly.** WageWorks going FDP-192 on
-  2025-05-31 would have been detectable the same day, instead of surfacing
-  fourteen months later. That single field justifies the monitor.
+  staleness from the newest transaction date, which can falsely flag an account
+  that is simply little-used but perfectly connected. This field distinguishes
+  "no spending" from "no sync".
+- **`aggStatusCode` gives the care code directly.** A provider failure with a
+  care code is detectable at the time it occurs rather than when missing
+  transactions surface later. That single field justifies the monitor.
 - **`nextManualRefreshEligibleAt` is the aggregator's own rate limit.** The
   script can respect it rather than guessing, which addresses the §4.2 worry
   about refresh storms marking a connection bad.
@@ -511,31 +510,27 @@ it is a supplement to `aggStatus`, not a replacement.
 
 ---
 
-## 10. First live run of `probe` (2026-08-05)
+## 10. Example `probe` output
 
 ```
 INFO authenticated: profile keys ['createdAt','firstName','id','lastName','modifiedAt','primaryAddress']
-INFO dataset 43020084... · 32 accounts · 12 connections
+INFO dataset <dataset-id-prefix>... · 3 accounts · 2 connections
 ```
 
-Connection health, verbatim from `aggregators[]`:
+The following synthetic connection table illustrates the shape of the health
+data without recording any user's institutions, identifiers, or live status:
 
 | Institution | aggStatus | aggStatusCode | lastRefreshSuccessfulAt |
 |---|---|---|---|
-| Alliant, Ally, Amex, BofA, Capital One, Chase, Fidelity, HSBC, Ikea, Lowe's | OK | — | 2026-08-05 |
-| Apple Wallet | OK | — | 2026-08-04 |
-| **WageWorks** | **UNSUPPORTED_…** | **FDP-192** | **2025-05-31** |
+| Example Bank | OK | — | 2026-08-05 |
+| Example Wallet | UNSUPPORTED | FDP-000 | 2026-08-01 |
 
 Three things this confirms:
 
-1. **The monitor works.** WageWorks reports its own failure with the care code
-   and a 431-day-old last success. Plan §6.5 inferred staleness from transaction
-   dates and produced a false positive on Alliant; this is the account's own
-   report of its connection state, and Alliant correctly reads OK.
-2. **HSBC healed.** It carried care code 324 on 2026-08-04 and reads OK a day
-   later — either self-recovery or the refresh triggered during recon. Worth
-   remembering that care codes are transient and a monitor should track
-   transitions, not just current state.
-3. **Apple Wallet lags by a day**, consistent with syncing from the phone rather
-   than server-side. Not a fault; the `expected_staleness_days` idea in §4.0
-   should account for per-connection cadence rather than one global threshold.
+1. **The monitor reports provider-owned health.** A non-OK status, care code,
+   or stale refresh timestamp is visible without inferring failure from spending
+   activity.
+2. **Care codes are transient.** A monitor should track transitions, not just
+   the current status.
+3. **Refresh cadence varies by connection.** `expected_staleness_days` should
+   therefore be connection-specific rather than one global threshold.

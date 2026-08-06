@@ -1,4 +1,5 @@
 import argparse
+import sqlite3
 import subprocess
 import sys
 from datetime import date, datetime, timezone
@@ -9,6 +10,9 @@ from simplifi_runtime.cli import (
     _analysis_limitations,
     _as_of_rows,
     _csv_safe_text,
+    _ensure_model_key,
+    _is_complete_snapshot,
+    _latest_modified_at,
     _model_taxonomy,
     build_parser,
 )
@@ -84,6 +88,51 @@ def test_api_ingest_supports_explicit_full_rescan():
         assert exc.code == 2
     else:
         raise AssertionError("accepted mutually exclusive API cursor options")
+
+
+def test_snapshot_retirement_is_limited_to_complete_imports():
+    csv_args = build_parser().parse_args(["ingest", "--source", "csv", "fixture.csv"])
+    api_full_args = build_parser().parse_args(["ingest", "--source", "api", "--full-rescan"])
+    api_partial_args = build_parser().parse_args(
+        ["ingest", "--source", "api", "--full-rescan", "--since", "2026-01-01"]
+    )
+
+    assert _is_complete_snapshot(csv_args)
+    assert _is_complete_snapshot(api_full_args)
+    assert not _is_complete_snapshot(api_partial_args)
+
+
+def test_modified_at_cursor_rejects_invalid_values():
+    try:
+        _latest_modified_at([{"modified_at": "not-a-timestamp"}], None)
+    except ValueError as exc:
+        assert "invalid modifiedAt timestamp" in str(exc)
+    else:
+        raise AssertionError("accepted an invalid modifiedAt cursor")
+
+
+def test_ingest_records_failed_run_for_missing_csv(tmp_path):
+    db = tmp_path / "review.sqlite"
+    missing = tmp_path / "missing.csv"
+    args = build_parser().parse_args(["ingest", "--source", "csv", str(missing), "--db", str(db)])
+
+    assert args.func(args) == 1
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT outcome FROM runs").fetchone()[0] == "failure"
+
+
+def test_model_key_is_loaded_from_the_age_vault_when_missing(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    calls = []
+
+    def fake_load_into_env(*, required, verbose):
+        calls.append((required, verbose))
+
+    monkeypatch.setattr("simplifi_runtime.secrets.load_into_env", fake_load_into_env)
+
+    _ensure_model_key("luna", verbose=True)
+
+    assert calls == [(["OPENAI_API_KEY"], True)]
 
 
 def test_probe_health_reports_status_code_and_stale_refresh():

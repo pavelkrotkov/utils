@@ -164,15 +164,12 @@ nextManualRefreshEligibleAt, lastRefreshAttemptedAt,
 lastRefreshSuccessfulAt
 ```
 
-Use `lastRefreshSuccessfulAt` for sync freshness, `aggStatusCode` for care
-codes (for example `FDP-108`, `324`, `FDP-192`), and
-`nextManualRefreshEligibleAt` as the provider's manual-refresh rate limit.
-`/institutions/fi-issues` returned an empty array in the capture and is a
-supplement, not a replacement. The first live probe showed WageWorks
-`UNSUPPORTED_*`/`FDP-192` with last success 2025-05-31, while Alliant was `OK`
-despite low transaction activity; HSBC had recovered from code 324, and Apple
-Wallet lagged by about one day. Monitor transitions and per-connection cadence,
-not transaction dates alone.
+Use `lastRefreshSuccessfulAt` for sync freshness, `aggStatusCode` for provider
+care codes, and `nextManualRefreshEligibleAt` as the provider's manual-refresh
+rate limit. `/institutions/fi-issues` is a supplement, not a replacement. Keep
+live institution names, identifiers, statuses, and timestamps out of this
+portable reference; monitor transitions and per-connection cadence, not
+transaction dates alone.
 
 ## Superseded hypotheses
 
