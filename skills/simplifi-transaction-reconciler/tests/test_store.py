@@ -103,6 +103,27 @@ def test_latest_successful_api_cursor_is_persisted(tmp_path: Path):
     store.close()
 
 
+def test_csv_replacement_snapshot_retires_absent_and_edited_rows(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+    first_run = store.start_run("csv", "first snapshot")
+    store.upsert_version(first_run, _record("txn-1"))
+    store.upsert_version(first_run, _record("txn-2"))
+    store.retire_absent_snapshot(first_run, {"txn-1", "txn-2"})
+    store.commit()
+
+    second_run = store.start_run("csv", "replacement snapshot")
+    store.upsert_version(second_run, _record("txn-1-edited"))
+    retired = store.retire_absent_snapshot(second_run, {"txn-1-edited"})
+    store.commit()
+
+    assert retired == 2
+    current = store.conn.execute(
+        "SELECT transaction_id FROM transaction_version WHERE source = 'csv' AND is_current = 1"
+    ).fetchall()
+    assert [row[0] for row in current] == ["txn-1-edited"]
+    store.close()
+
+
 def test_schema_migration_rolls_back_all_statements(tmp_path: Path):
     migrations = tmp_path / "migrations"
     migrations.mkdir()

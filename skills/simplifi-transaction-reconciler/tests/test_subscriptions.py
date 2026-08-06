@@ -1,5 +1,6 @@
 from datetime import date
 
+import pytest
 from simplifi_runtime.subscriptions import _is_recurring, _series, analyse, summary
 
 
@@ -74,3 +75,32 @@ def test_same_merchant_on_two_accounts_has_separate_cadence_series():
     assert len(series) == 2
     assert all(_is_recurring(item) for item in series.values())
     assert summary(first + second, today=date(2026, 12, 1)).startswith("2 live subscriptions")
+
+
+def test_ghost_annual_impact_uses_observed_quarterly_cadence():
+    rows = [
+        {
+            "payee_canonical": "quarterly_service",
+            "kind": "spend",
+            "txn_state": "CLEARED",
+            "amount_minor_units": -10000,
+            "posted_on": posted_on,
+        }
+        for posted_on in ("2026-01-01", "2026-04-01", "2026-07-01")
+    ]
+    rows.extend(
+        {
+            "payee_canonical": "quarterly_service",
+            "kind": "spend",
+            "txn_state": "PENDING",
+            "scheduled_model_id": "scheduled-1",
+            "amount_minor_units": -10000,
+            "posted_on": posted_on,
+        }
+        for posted_on in ("2026-10-01", "2027-01-01", "2027-04-01")
+    )
+
+    findings = analyse(rows, today=date(2027, 2, 1))
+    ghost = next(finding for finding in findings if finding.kind == "ghost")
+
+    assert ghost.annual_impact == pytest.approx(100 * 365.25 / 90, rel=0.02)

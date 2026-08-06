@@ -102,6 +102,29 @@ class Store:
         ).fetchone()
         return str(row["cursor_after"]) if row else None
 
+    def retire_absent_snapshot(self, run_id: int, observed_ids: set[str]) -> int:
+        """Retire current rows absent from a complete replacement snapshot."""
+        source = self._run_sources.get(run_id)
+        if source is None:
+            row = self.conn.execute("SELECT source FROM runs WHERE id = ?", (run_id,)).fetchone()
+            if row is None:
+                raise sqlite3.DatabaseError(f"unknown run ID: {run_id}")
+            source = str(row["source"])
+        current = self.conn.execute(
+            "SELECT id, transaction_id FROM transaction_version "
+            "WHERE source = ? AND is_current = 1",
+            (source,),
+        ).fetchall()
+        retired = 0
+        for row in current:
+            if row["transaction_id"] not in observed_ids:
+                self.conn.execute(
+                    "UPDATE transaction_version SET is_current = 0 WHERE id = ?",
+                    (row["id"],),
+                )
+                retired += 1
+        return retired
+
     def rollback(self) -> None:
         self.conn.rollback()
 

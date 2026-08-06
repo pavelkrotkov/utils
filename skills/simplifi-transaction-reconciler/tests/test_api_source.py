@@ -31,3 +31,23 @@ def test_deleted_transaction_becomes_a_tombstone():
         "is_deleted": True,
         "modified_at": "2026-08-06T12:00:00Z",
     }
+
+
+def test_missing_api_exclusion_flag_fails_closed():
+    source = object.__new__(SimplifiApiSource)
+    record = source._to_record(
+        {
+            "id": "txn-1",
+            "amount": "10.00",
+            "postedOn": "2026-08-01",
+            "payee": "Example Store",
+            "coa": {"type": "CATEGORY", "id": "cat-1"},
+        },
+        {},
+        {"cat-1": {"id": "cat-1", "name": "Shopping"}},
+        set(),
+    )
+
+    assert record["exclusion_flag"] == 2
+    assert record["poisons_statistics"] == 1
+    assert "report-exclusion state unavailable" in record["semantics_reasons"]

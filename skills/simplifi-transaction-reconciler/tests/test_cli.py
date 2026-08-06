@@ -1,10 +1,10 @@
 import argparse
 import subprocess
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
-from simplifi_runtime.cli import _as_of_rows, build_parser
+from simplifi_runtime.cli import _aggregator_health, _as_of_rows, build_parser
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
 ENTRYPOINT = SKILL_DIR / "scripts" / "simplifi_transaction_reconciler.py"
@@ -61,3 +61,43 @@ def test_classify_rejects_non_positive_chunk_size():
             assert exc.code == 2
         else:
             raise AssertionError(f"accepted invalid chunk size {value}")
+
+
+def test_api_ingest_supports_explicit_full_rescan():
+    args = build_parser().parse_args(["ingest", "--source", "api", "--full-rescan"])
+
+    assert args.full_rescan
+    assert args.modified_after is None
+
+    try:
+        build_parser().parse_args(
+            ["ingest", "--source", "api", "--full-rescan", "--modified-after", "cursor"]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("accepted mutually exclusive API cursor options")
+
+
+def test_probe_health_reports_status_code_and_stale_refresh():
+    now = datetime(2026, 8, 6, tzinfo=timezone.utc)
+    health = _aggregator_health(
+        {
+            "name": "Example Bank",
+            "aggregators": [
+                {
+                    "aggStatus": "ERROR",
+                    "aggStatusCode": "FDP-192",
+                    "aggStatusDetail": "unsupported",
+                    "lastRefreshSuccessfulAt": "2026-07-01T00:00:00Z",
+                }
+            ],
+        },
+        now=now,
+    )
+
+    assert health[0]["issues"] == [
+        "status is not OK",
+        "care code present",
+        "last successful refresh is stale",
+    ]

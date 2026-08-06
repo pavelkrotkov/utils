@@ -60,7 +60,7 @@ _INCOME_CATEGORY = re.compile(
 @dataclass
 class Semantics:
     kind: Kind
-    excluded_from_reports: bool
+    excluded_from_reports: bool | None
     #: True when this row must not train merchant memory or amount baselines.
     poisons_statistics: bool
     reasons: list[str]
@@ -71,7 +71,7 @@ def classify(
     category: str,
     payee_raw: str,
     amount_minor_units: int,
-    exclusion_flag: bool,
+    exclusion_flag: bool | None,
     account_names: set[str] | None = None,
 ) -> Semantics:
     """Assign an accounting kind. Deterministic, explainable, no model."""
@@ -127,10 +127,15 @@ def classify(
         Kind.BALANCE_ADJUSTMENT,
         Kind.INVESTMENT,
     }
-    if exclusion_flag and not poisons:
+    if exclusion_flag is True and not poisons:
         # Trust the user's own exclusion flag even when our heuristics disagree.
         poisons = True
         reasons.append("user marked excluded from reports")
+    elif exclusion_flag is None:
+        # The API bulk read does not expose this capability. Fail closed so an
+        # excluded transaction cannot silently enter statistics or memory.
+        poisons = True
+        reasons.append("report-exclusion state unavailable")
 
     return Semantics(
         kind=kind,

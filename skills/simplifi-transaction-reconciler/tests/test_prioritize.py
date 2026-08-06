@@ -106,3 +106,55 @@ def test_short_history_does_not_suppress_a_real_amount_outlier():
     signals = [signal.name for item in analyse(rows) for signal in item.signals]
 
     assert "amount_outlier" in signals
+
+
+def test_refunds_do_not_raise_the_spending_baseline():
+    rows = []
+    for index in range(5):
+        rows.append(
+            {
+                "transaction_id": f"debit-{index}",
+                "posted_on": f"2026-0{index + 1}-01",
+                "payee_canonical": "merchant",
+                "payee_display": "Merchant",
+                "account_name": "Checking",
+                "amount_minor_units": -1000,
+                "category": "Shopping",
+                "kind": "spend",
+                "poisons_statistics": 0,
+                "txn_state": "CLEARED",
+            }
+        )
+    for index in range(3):
+        rows.append(
+            {
+                "transaction_id": f"refund-{index}",
+                "posted_on": f"2026-0{index + 6}-01",
+                "payee_canonical": "merchant",
+                "payee_display": "Merchant",
+                "account_name": "Checking",
+                "amount_minor_units": 90000,
+                "category": "Shopping",
+                "kind": "refund",
+                "poisons_statistics": 0,
+                "txn_state": "CLEARED",
+            }
+        )
+    rows.append(
+        {
+            "transaction_id": "large-debit",
+            "posted_on": "2026-09-01",
+            "payee_canonical": "merchant",
+            "payee_display": "Merchant",
+            "account_name": "Checking",
+            "amount_minor_units": -100000,
+            "category": "Shopping",
+            "kind": "spend",
+            "poisons_statistics": 0,
+            "txn_state": "CLEARED",
+        }
+    )
+
+    signals = [signal.name for item in analyse(rows) for signal in item.signals]
+
+    assert "amount_outlier" in signals

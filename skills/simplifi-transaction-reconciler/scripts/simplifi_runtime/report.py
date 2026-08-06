@@ -51,6 +51,20 @@ def _evidence(ev: dict) -> str:
     return " ".join(f'<span class="ev">{_e(k)}={_e(v)}</span>' for k, v in ev.items())
 
 
+def _provenance(row: dict) -> str:
+    return "<br>".join(
+        _e(f"{label}={row.get(key, 'unknown')}")
+        for key, label in (
+            ("transaction_id", "transaction_id"),
+            ("id", "version_id"),
+            ("run_id", "run_id"),
+            ("source_hash", "source_hash"),
+            ("algorithm_version", "algorithm_version"),
+            ("ruleset_version", "ruleset_version"),
+        )
+    )
+
+
 def render(
     *,
     run_id: int,
@@ -61,6 +75,7 @@ def render(
     proposals: list[tuple[dict, Proposal | None]],
     memory_stats: dict,
     subscription_findings: list | None = None,
+    limitations: list[str] | None = None,
 ) -> str:
     total = len(rows)
     uncat = sum(1 for r in rows if r["is_uncategorized"])
@@ -72,8 +87,11 @@ def render(
     p.append(f"<style>{CSS}</style>")
     p.append(
         f"<h1>Transaction review</h1><div class=sub>run {run_id} · source {_e(source)} · "
-        f"generated {date.today().isoformat()} · no inference used</div>"
+        f"generated {date.today().isoformat()} · row-level provenance shown below · "
+        "no inference used</div>"
     )
+    for limitation in limitations or []:
+        p.append(f"<div class='chip warn'>LIMITATION: {_e(limitation)}</div>")
 
     # 1. Run health
     p.append("<h2>Run health</h2><div class=cards>")
@@ -107,7 +125,8 @@ def render(
     else:
         p.append(
             "<table><tr><th>Date</th><th>Payee</th><th>Account</th>"
-            "<th class=num>Amount</th><th>Signals</th><th class=num>Score</th></tr>"
+            "<th class=num>Amount</th><th>Signals</th><th class=num>Score</th>"
+            "<th>Provenance</th></tr>"
         )
         for item in prioritized[:60]:
             r = item.row
@@ -122,7 +141,7 @@ def render(
                 f"<td>{_e(r['account_name'])}</td>"
                 f"<td class=num>{_money(r['amount_minor_units'])}</td>"
                 f"<td>{chips}<br>{ev}</td>"
-                f"<td class=num>{item.total_score}</td></tr>"
+                f"<td class=num>{item.total_score}</td><td class=ev>{_provenance(r)}</td></tr>"
             )
         p.append("</table>")
 
@@ -155,7 +174,7 @@ def render(
     else:
         p.append(
             "<table><tr><th>Date</th><th>Payee</th><th class=num>Amount</th>"
-            "<th>Proposed</th><th>Basis</th></tr>"
+            "<th>Proposed</th><th>Basis</th><th>Provenance</th></tr>"
         )
         for r, prop in proposals:
             basis = (
@@ -167,7 +186,7 @@ def render(
             p.append(
                 f"<tr><td>{_e(r['posted_on'])}</td><td>{_e(r['payee_display'])}</td>"
                 f"<td class=num>{_money(r['amount_minor_units'])}</td>"
-                f"<td>{cat}</td><td>{basis}</td></tr>"
+                f"<td>{cat}</td><td>{basis}</td><td class=ev>{_provenance(r)}</td></tr>"
             )
         p.append("</table>")
 

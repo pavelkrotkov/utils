@@ -7,7 +7,7 @@ import csv
 import sqlite3
 import sys
 from collections import Counter
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +34,56 @@ def _latest_modified_at(records: list[dict], fallback: str | None) -> str | None
     if fallback:
         values.append(fallback)
     return max(values) if values else None
+
+
+REFRESH_STALE_DAYS = 14
+
+
+def _aggregator_health(login: dict, now: datetime | None = None) -> list[dict]:
+    """Return provider-health observations for one institution login."""
+    now = now or datetime.now(timezone.utc)
+    name = str(login.get("name") or login.get("id") or "unknown")
+    aggregators = login.get("aggregators") or []
+    if not aggregators:
+        return [{"name": name, "status": "unknown", "issues": ["no aggregator data"]}]
+
+    out = []
+    for aggregator in aggregators:
+        status = str(aggregator.get("aggStatus") or "unknown")
+        code = str(aggregator.get("aggStatusCode") or "")
+        detail = str(aggregator.get("aggStatusDetail") or "")
+        last_success = aggregator.get("lastRefreshSuccessfulAt")
+        issues = []
+        if status.upper() != "OK":
+            issues.append("status is not OK")
+        if code:
+            issues.append("care code present")
+        age_days = None
+        if last_success:
+            try:
+                refreshed = datetime.fromisoformat(str(last_success).replace("Z", "+00:00"))
+                if refreshed.tzinfo is None:
+                    refreshed = refreshed.replace(tzinfo=timezone.utc)
+                age_days = (now - refreshed).total_seconds() / 86400
+                if age_days > REFRESH_STALE_DAYS:
+                    issues.append("last successful refresh is stale")
+            except ValueError:
+                issues.append("last successful refresh has an invalid timestamp")
+        else:
+            issues.append("no successful refresh recorded")
+        out.append(
+            {
+                "name": name,
+                "status": status,
+                "code": code,
+                "detail": detail,
+                "last_success": last_success or "never",
+                "age_days": age_days,
+                "next_manual": aggregator.get("nextManualRefreshEligibleAt") or "unknown",
+                "issues": issues,
+            }
+        )
+    return out
 
 
 def _rows(db: Path, source: str) -> list[dict]:
@@ -116,7 +166,9 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     else:
         from .sources.api_source import ApiError, SimplifiApiSource, client_from_env_or_age
 
-        cursor_before = args.modified_after or store.latest_cursor("api")
+        cursor_before = (
+            None if args.full_rescan else args.modified_after or store.latest_cursor("api")
+        )
         try:
             client = client_from_env_or_age(verbose=args.verbose)
             records = SimplifiApiSource(
@@ -126,11 +178,16 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             print(f"ERROR {exc}", file=sys.stderr)
             store.close()
             return 1
-        detail = f"api since={args.since or 'all'} modified_after={cursor_before or 'all'}"
+        mode = "full-rescan" if args.full_rescan else "incremental"
+        detail = (
+            f"api since={args.since or 'all'} mode={mode} modified_after={cursor_before or 'all'}"
+        )
 
     try:
         run_id = store.start_run(args.source, detail, cursor_before=cursor_before)
         outcomes = Counter(store.upsert_version(run_id, record) for record in records)
+        if args.source == "csv":
+            store.retire_absent_snapshot(run_id, {r["transaction_id"] for r in records})
         store.record_accounts(
             {r["account_name"] for r in records if not r.get("is_deleted") and r["account_name"]}
         )
@@ -200,6 +257,13 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     prioritized = prioritize.analyse(analysis_rows, today)
     staleness = prioritize.activity_staleness(analysis_rows, today)
     findings = subscriptions.analyse(analysis_rows, today)
+    limitations = []
+    if source == "csv":
+        limitations.append(
+            "CSV has no settlement or projection metadata; all settled-only analyses "
+            "(memory, prioritization, staleness, recurring charges, and model examples) "
+            "are unavailable."
+        )
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(
@@ -212,6 +276,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
             proposals=proposals,
             memory_stats=memory.stats(),
             subscription_findings=findings,
+            limitations=limitations,
         ),
         encoding="utf-8",
     )
@@ -374,7 +439,20 @@ def cmd_probe(args: argparse.Namespace) -> int:
         f"INFO dataset {client.dataset_id[:8]}... · {len(accounts)} accounts · "
         f"{len(logins)} connections"
     )
-    return 0
+    healthy = True
+    for login in logins:
+        for health in _aggregator_health(login):
+            level = "WARNING" if health["issues"] else "INFO"
+            suffix = f"; issues={', '.join(health['issues'])}" if health["issues"] else ""
+            print(
+                f"{level} {health['name']}: status={health['status']} "
+                f"code={health.get('code') or 'none'} "
+                f"detail={health.get('detail') or 'none'} "
+                f"last_success={health.get('last_success', 'unknown')} "
+                f"next_manual={health.get('next_manual', 'unknown')}{suffix}"
+            )
+            healthy = healthy and not health["issues"]
+    return 0 if healthy else 1
 
 
 def cmd_schema(args: argparse.Namespace) -> int:
@@ -396,7 +474,13 @@ def build_parser() -> argparse.ArgumentParser:
     ingest.add_argument("path", nargs="?", help="CSV path when --source csv")
     ingest.add_argument("--source", choices=("csv", "api"), default="csv")
     ingest.add_argument("--since", help="API dateOnAfter value, YYYY-MM-DD")
-    ingest.add_argument("--modified-after", help="API modifiedAfter cursor/value")
+    cursor_group = ingest.add_mutually_exclusive_group()
+    cursor_group.add_argument("--modified-after", help="API modifiedAfter cursor/value")
+    cursor_group.add_argument(
+        "--full-rescan",
+        action="store_true",
+        help="API only: omit modifiedAfter and perform a recovery/full scan",
+    )
     ingest.add_argument("--db", default="simplifi.sqlite")
     ingest.add_argument("--verbose", action="store_true")
     ingest.set_defaults(func=cmd_ingest)

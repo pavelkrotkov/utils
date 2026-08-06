@@ -50,6 +50,8 @@ files:
 ```bash
 uv run ./scripts/simplifi_transaction_reconciler.py ingest \
   --source csv /path/to/Simplifi-Transactions.csv --db /path/to/review.sqlite
+uv run ./scripts/simplifi_transaction_reconciler.py ingest \
+  --source api --full-rescan --db /path/to/review.sqlite
 uv run ./scripts/simplifi_transaction_reconciler.py analyze \
   --db /path/to/review.sqlite --out /path/to/review.html
 uv run ./scripts/simplifi_transaction_reconciler.py subs --db /path/to/review.sqlite
@@ -58,7 +60,9 @@ uv run ./scripts/simplifi_transaction_reconciler.py classify \
 ```
 
 Use `--source api` for read-only API ingestion, or `probe`/`schema` for
-read-only diagnostics. The packaged CLI emits reports and proposal files only;
+read-only diagnostics. Omit `--modified-after` for normal API ingestion to use
+the last successful cursor; use `--full-rescan` for recovery or after changing
+derivation rules. The packaged CLI emits reports and proposal files only;
 it contains no account rule plan, account assignments, benefit allowances, or
 category/rule apply or undo workflow. CSV runs report their limitation because
 CSV exports do not expose settlement or projection state.

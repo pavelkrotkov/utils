@@ -81,15 +81,14 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Prioritized]:
 
     # --- baselines, most specific first ------------------------------------
     by_merchant: dict[str, list[int]] = defaultdict(list)
-    by_category: dict[str, list[int]] = defaultdict(list)
-    global_amounts: list[int] = []
-    for r in scored:
+    baseline_rows = [
+        r for r in scored if r["kind"] in {"spend", "fee"} and r["amount_minor_units"] < 0
+    ]
+    for r in baseline_rows:
         amt = abs(r["amount_minor_units"])
         if amt == 0:
             continue
         by_merchant[r["payee_canonical"]].append(amt)
-        by_category[r["category"]].append(amt)
-        global_amounts.append(amt)
 
     first_seen: dict[str, date] = {}
     merchant_dates: dict[str, list[date]] = defaultdict(list)

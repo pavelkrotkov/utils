@@ -423,11 +423,12 @@ class SimplifiApiSource:
         is_uncategorized = not category or category.lower() == "uncategorized"
 
         desc = normalize(payee_raw)
+        report_exclusion = t.get("isExcludedFromReports")
         sem = classify(
             category=category,
             payee_raw=payee_raw,
             amount_minor_units=money.minor_units,
-            exclusion_flag=bool(t.get("isExcludedFromReports")),
+            exclusion_flag=(None if report_exclusion is None else bool(report_exclusion)),
             account_names=account_names,
         )
 
@@ -455,7 +456,8 @@ class SimplifiApiSource:
             "category": category,
             "inferred_category": inferred_category,
             "is_uncategorized": int(is_uncategorized),
-            "exclusion_flag": int(bool(t.get("isExcludedFromReports"))),
+            # 2 means unknown: GET /transactions does not expose this flag.
+            "exclusion_flag": 2 if report_exclusion is None else int(bool(report_exclusion)),
             "excluded_from_f2s": int(bool(t.get("isExcludedFromF2S"))),
             "recurring_flag": int(bool(t.get("isSubscription") or t.get("isBill"))),
             # PENDING vs CLEARED. The CSV has no equivalent, and without it the

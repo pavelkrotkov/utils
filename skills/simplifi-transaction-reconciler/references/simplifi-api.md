@@ -127,6 +127,9 @@ window: the app syncs broadly, caches, and filters locally. The API's real
 incremental cursor is `modifiedAfter`; persist it with fetch provenance and
 advance it only after a complete successful fetch. A failed or partial fetch
 must not advance the cursor. Keep a deliberate full-scan/reconciliation path.
+The packaged CLI uses the last successful cursor by default; pass
+`ingest --source api --full-rescan` to omit `modifiedAfter` and rebuild the
+current API view after a missed window or derivation-rule change.
 
 Use `dateOnAfter` to bound transaction history explicitly. `dateStart`/
 `dateEnd` are app view state, not observed API parameters; no `dateBefore` was

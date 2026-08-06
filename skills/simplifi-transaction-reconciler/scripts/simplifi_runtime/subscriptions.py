@@ -172,7 +172,7 @@ def _series(rows: list[dict]) -> dict[str, Series]:
     """
     out: dict[str, Series] = defaultdict(lambda: Series(""))
     for r in rows:
-        if not is_settled(r) and not is_projected(r):
+        if r.get("poisons_statistics") or (not is_settled(r) and not is_projected(r)):
             continue
         if r.get("kind") not in {"spend", "fee"}:
             continue
@@ -234,7 +234,7 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
         # GHOST — projected but not actually charging.
         future = [p for p in s.projected if p["posted_on"] > today.isoformat()]
         if future and len(s.charges) >= MIN_GHOST_HISTORY and silent > interval * SILENT_INTERVALS:
-            waste = abs(future[0]["amount_minor_units"]) / 100 * 12 if future else 0
+            waste = abs(future[0]["amount_minor_units"]) / 100 * (365.25 / interval)
             findings.append(
                 Finding(
                     "ghost",
