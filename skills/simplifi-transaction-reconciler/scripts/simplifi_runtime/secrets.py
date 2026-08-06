@@ -75,6 +75,9 @@ def decrypt(
     if not secrets_path.exists():
         raise SecretsError(f"no secrets file at {secrets_path}")
 
+    if warning := _check_permissions(identity_path):
+        raise SecretsError(f"refusing insecure age identity: {warning}")
+
     try:
         proc = subprocess.run(
             ["age", "-d", "-i", str(identity_path), str(secrets_path)],

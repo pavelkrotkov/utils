@@ -162,6 +162,13 @@ def is_real_charge(row: dict) -> bool:
 
 
 def is_settled(row: dict) -> bool:
-    """True for settled activity, or for sources without state metadata."""
+    """True only for activity whose source provides a settled state.
+
+    CSV exports do not carry settlement metadata. Treating those rows as
+    settled would let an unknown pending row train memory and recurring or
+    outlier statistics as if it were a confirmed charge.
+    """
+    if not (row.get("txn_state") or "").strip():
+        return False
     state = (row.get("txn_state") or "").upper()
     return not is_projected(row) and state != "PENDING"

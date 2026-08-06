@@ -204,6 +204,25 @@ def _parse(text: str, taxonomy: set[str], model: str) -> list[Proposal]:
     return out
 
 
+def _validate_batch_ids(proposals: list[Proposal], batch: list[dict]) -> None:
+    """Reject partial, duplicate, or out-of-batch model responses."""
+    expected = [str(row["transaction_id"]) for row in batch]
+    actual = [proposal.transaction_id for proposal in proposals]
+    if len(actual) != len(set(actual)):
+        raise ValueError("model returned duplicate transaction IDs")
+    if set(actual) != set(expected):
+        missing = sorted(set(expected) - set(actual))
+        unknown = sorted(set(actual) - set(expected))
+        detail = []
+        if missing:
+            detail.append(f"missing={missing}")
+        if unknown:
+            detail.append(f"unknown={unknown}")
+        raise ValueError(
+            "model did not return one result per transaction (" + ", ".join(detail) + ")"
+        )
+
+
 def classify(
     backend: Backend,
     rows: list[dict],
@@ -214,6 +233,8 @@ def classify(
     dry_run: bool = False,
 ) -> tuple[list[Proposal], Usage, list[str]]:
     """Classify rows. With dry_run=True, returns the prompts instead of calling out."""
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be a positive integer")
     allowed = set(taxonomy)
     proposals: list[Proposal] = []
     total = Usage()
@@ -226,7 +247,9 @@ def classify(
         if dry_run:
             continue
         text, usage = backend.complete(SYSTEM_PROMPT, user)
-        proposals.extend(_parse(text, allowed, backend.id))
+        batch_proposals = _parse(text, allowed, backend.id)
+        _validate_batch_ids(batch_proposals, batch)
+        proposals.extend(batch_proposals)
         total.input_tokens += usage.input_tokens
         total.output_tokens += usage.output_tokens
         total.requests += usage.requests

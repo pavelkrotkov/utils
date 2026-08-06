@@ -1,9 +1,8 @@
 """Hierarchical merchant/category memory.
 
-Three keys, most specific first:
+Two keys, most specific first:
 
     (account_name, canonical, amount_band, sign)
-    (account_type, canonical, sign)          -- account_type unavailable from CSV
     (canonical, sign)
 
 A level matches only with `n >= MIN_OBSERVATIONS` and `>= MIN_PURITY` agreement.
@@ -67,7 +66,6 @@ class MerchantMemory:
         self._levels: list[tuple[str, dict[tuple, Counter]]] = [
             ("account+merchant+band+sign", defaultdict(Counter)),
             ("merchant+sign", defaultdict(Counter)),
-            ("merchant", defaultdict(Counter)),
         ]
 
     @staticmethod
@@ -77,7 +75,6 @@ class MerchantMemory:
         return [
             (row["account_name"], canon, amount_band(row["amount_minor_units"]), sign),
             (canon, sign),
-            (canon,),
         ]
 
     def train(self, rows: list[dict]) -> None:

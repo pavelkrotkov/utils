@@ -307,6 +307,7 @@ class SimplifiApiSource:
         return {
             "transaction_id": transaction_id,
             "is_deleted": True,
+            "modified_at": t.get("modifiedAt") or None,
         }
 
     @staticmethod
@@ -432,6 +433,7 @@ class SimplifiApiSource:
 
         return {
             "transaction_id": t["id"],
+            "modified_at": t.get("modifiedAt") or None,
             "posted_on": (t.get("postedOn") or "")[:10],
             # cpData.txnOn is the *transaction* date; postedOn is settlement.
             # Keeping both preserves the transaction and settlement dates for

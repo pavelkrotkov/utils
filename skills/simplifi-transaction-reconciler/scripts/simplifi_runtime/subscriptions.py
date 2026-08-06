@@ -92,8 +92,13 @@ MIN_GHOST_HISTORY = 1
 @dataclass
 class Series:
     merchant: str
+    identity: str = ""
     charges: list[dict] = field(default_factory=list)
     projected: list[dict] = field(default_factory=list)
+
+    @property
+    def label(self) -> str:
+        return f"{self.merchant} [{self.identity}]" if self.identity else self.merchant
 
     @property
     def amounts(self) -> list[float]:
@@ -154,10 +159,17 @@ class Finding:
     merchant: str
     detail: str
     annual_impact: float = 0.0
+    series_key: str | None = None
 
 
 def _series(rows: list[dict]) -> dict[str, Series]:
-    """Group into per-merchant series. Cleared charges and projections apart."""
+    """Group into per-account merchant series.
+
+    The account identity prevents two people or accounts billed by the same
+    provider from being interleaved into one cadence. Rows without account
+    metadata retain the historical merchant-only key for fixture and CSV
+    compatibility.
+    """
     out: dict[str, Series] = defaultdict(lambda: Series(""))
     for r in rows:
         if not is_settled(r) and not is_projected(r):
@@ -172,8 +184,11 @@ def _series(rows: list[dict]) -> dict[str, Series]:
         leaf = (r.get("category") or "").split(":")[-1].strip().lower()
         if leaf in BILL_CATEGORIES:
             continue
-        s = out[key]
+        identity = str(r.get("account_id") or r.get("account_name") or "").strip()
+        series_key = f"{key}::{identity}" if identity else key
+        s = out[series_key]
         s.merchant = key
+        s.identity = identity
         (s.projected if is_projected(r) else s.charges).append(r)
     return out
 
@@ -223,7 +238,7 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
             findings.append(
                 Finding(
                     "ghost",
-                    key,
+                    s.merchant,
                     f"Simplifi projects {len(future)} future charges but nothing has "
                     f"cleared in {f'{silent} days' if s.last_charge else 'ever'} "
                     f"(last real charge: {s.last_charge or 'none'}). Forecast only "
@@ -244,7 +259,7 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
                 findings.append(
                     Finding(
                         "hike",
-                        key,
+                        s.merchant,
                         f"${old:,.2f} -> ${new:,.2f} per charge ({new / old:.1f}x)",
                         (new - old) * (30.44 / interval) * 12,
                     )
@@ -255,16 +270,17 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
             findings.append(
                 Finding(
                     "lapsed",
-                    key,
+                    s.merchant,
                     f"was every ~{interval:.0f}d, nothing since {s.last_charge} "
                     f"({silent} days). Confirm this was deliberate.",
                     -s.monthly * 12,
+                    key,
                 )
             )
 
     # ZOMBIE — a charge cleared after the newest projection ran out, i.e. the
     # series looked finished and then billed anyway.
-    for key, s in live.items():
+    for _key, s in live.items():
         if s.projected:
             newest_projection = max(p["posted_on"] for p in s.projected)
             after = [c for c in s.charges if c["posted_on"] > newest_projection]
@@ -272,7 +288,7 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
                 findings.append(
                     Finding(
                         "zombie",
-                        key,
+                        s.merchant,
                         f"{len(after)} charge(s) cleared after the projected series "
                         f"ended {newest_projection} — billing outlived the schedule",
                         s.monthly * 12,
@@ -300,8 +316,8 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
         "type",
     }
     by_token: dict[str, list[str]] = defaultdict(list)
-    for key in live:
-        for tok in key.split("_"):
+    for key, series in live.items():
+        for tok in series.merchant.split("_"):
             if len(tok) >= 5 and tok not in GENERIC:
                 by_token[tok].append(key)
     seen_pairs: set[tuple[str, ...]] = set()
@@ -313,10 +329,11 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
             continue
         seen_pairs.add(sig)
         total = sum(live[k].monthly for k in keys)
+        labels = [live[k].label for k in keys]
         findings.append(
             Finding(
                 "twin",
-                " + ".join(sig),
+                " + ".join(labels),
                 f"{len(keys)} concurrent series both contain '{tok}' — one service "
                 f"billed twice, or a rebrand still double-running",
                 total * 12,
@@ -369,11 +386,13 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
     }
 
     for f in [f for f in findings if f.kind == "lapsed"]:
-        old = everything[f.merchant]
-        old_toks = {t for t in f.merchant.split("_") if len(t) >= 4 and t not in GENERIC_TOK}
+        if f.series_key is None:
+            continue
+        old = everything[f.series_key]
+        old_toks = {t for t in old.merchant.split("_") if len(t) >= 4 and t not in GENERIC_TOK}
         best = None
         for key, cand in candidates.items():
-            if key == f.merchant or not cand.charges:
+            if key == f.series_key or not cand.charges:
                 continue
             started = min(cand.dates)
             gap = (started - old.last_charge).days if old.last_charge else 999
@@ -381,14 +400,16 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
                 continue
             if not (old.monthly > 0 and 0.8 <= cand.monthly / old.monthly <= 1.25):
                 continue
-            shared = old_toks & {t for t in key.split("_") if len(t) >= 4 and t not in GENERIC_TOK}
+            shared = old_toks & {
+                t for t in cand.merchant.split("_") if len(t) >= 4 and t not in GENERIC_TOK
+            }
             if shared:
                 findings.remove(f)
                 findings.append(
                     Finding(
                         "renamed",
-                        f"{f.merchant} -> {key}",
-                        f"stopped {old.last_charge}; {key} started {started} at "
+                        f"{old.merchant} -> {cand.merchant}",
+                        f"stopped {old.last_charge}; {cand.merchant} started {started} at "
                         f"${cand.monthly:,.2f} (was ${old.monthly:,.2f}) and shares "
                         f"'{sorted(shared)[0]}'. Same service, new name — not a "
                         f"cancellation.",
@@ -401,7 +422,7 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
         if best:
             key, started, cand = best
             f.detail += (
-                f" Possibly replaced by {key} (started {started}, "
+                f" Possibly replaced by {cand.merchant} (started {started}, "
                 f"${cand.monthly:,.2f}/mo) — similar price and timing "
                 f"only, names unrelated, so treat as a guess."
             )
@@ -419,9 +440,9 @@ def summary(rows: list[dict], today: date | None = None) -> str:
         f"(${sum(s.monthly for s in live.values()) * 12:,.2f}/yr)",
         "",
     ]
-    for k, s in sorted(live.items(), key=lambda kv: -kv[1].monthly):
+    for _key, s in sorted(live.items(), key=lambda kv: -kv[1].monthly):
         lines.append(
-            f"  ${s.monthly:>8,.2f}/mo  {k[:34]:34} "
+            f"  ${s.monthly:>8,.2f}/mo  {s.merchant[:34]:34} "
             f"every ~{s.interval_days:.0f}d, last {s.last_charge}"
         )
     findings = analyse(rows, today)

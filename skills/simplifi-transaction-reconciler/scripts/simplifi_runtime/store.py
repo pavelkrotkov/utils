@@ -42,20 +42,38 @@ class Store:
         for sql_file in sorted(self.migrations_dir.glob("*.sql")):
             if sql_file.name in applied:
                 continue
-            self.conn.executescript(sql_file.read_text(encoding="utf-8"))
-            self.conn.execute(
-                "INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)",
-                (sql_file.name, _now()),
+            script = sql_file.read_text(encoding="utf-8")
+            name = sql_file.name.replace("'", "''")
+            applied_at = _now().replace("'", "''")
+            migration = (
+                "BEGIN;\n"
+                + script
+                + "\nINSERT INTO schema_migrations (name, applied_at) VALUES ('"
+                + name
+                + "', '"
+                + applied_at
+                + "');\nCOMMIT;"
             )
-            self.conn.commit()
+            try:
+                self.conn.executescript(migration)
+            except sqlite3.Error:
+                self.conn.rollback()
+                raise
 
     # --- runs ---------------------------------------------------------------
 
-    def start_run(self, source: str, source_detail: str) -> int:
+    def start_run(self, source: str, source_detail: str, cursor_before: str | None = None) -> int:
         cur = self.conn.execute(
             "INSERT INTO runs (started_at, source, source_detail,"
-            " algorithm_version, ruleset_version) VALUES (?, ?, ?, ?, ?)",
-            (_now(), source, source_detail, ALGORITHM_VERSION, RULESET_VERSION),
+            " algorithm_version, ruleset_version, cursor_before) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                _now(),
+                source,
+                source_detail,
+                ALGORITHM_VERSION,
+                RULESET_VERSION,
+                cursor_before,
+            ),
         )
         if cur.lastrowid is None:
             raise sqlite3.DatabaseError("SQLite did not return a run ID")
@@ -63,11 +81,26 @@ class Store:
         self._run_sources[run_id] = source
         return run_id
 
-    def finish_run(self, run_id: int, outcome: str, row_count: int) -> None:
+    def finish_run(
+        self,
+        run_id: int,
+        outcome: str,
+        row_count: int,
+        cursor_after: str | None = None,
+    ) -> None:
         self.conn.execute(
-            "UPDATE runs SET finished_at = ?, outcome = ?, row_count = ? WHERE id = ?",
-            (_now(), outcome, row_count, run_id),
+            "UPDATE runs SET finished_at = ?, outcome = ?, row_count = ?, cursor_after = ? "
+            "WHERE id = ?",
+            (_now(), outcome, row_count, cursor_after, run_id),
         )
+
+    def latest_cursor(self, source: str) -> str | None:
+        row = self.conn.execute(
+            "SELECT cursor_after FROM runs WHERE source = ? AND outcome = 'success' "
+            "AND cursor_after IS NOT NULL ORDER BY id DESC LIMIT 1",
+            (source,),
+        ).fetchone()
+        return str(row["cursor_after"]) if row else None
 
     def rollback(self) -> None:
         self.conn.rollback()

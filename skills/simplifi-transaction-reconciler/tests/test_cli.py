@@ -51,3 +51,13 @@ def test_as_of_rows_excludes_future_settled_activity_but_keeps_projections():
     result = _as_of_rows(rows, date(2026, 8, 15))
 
     assert result == rows[:2]
+
+
+def test_classify_rejects_non_positive_chunk_size():
+    for value in ("0", "-1"):
+        try:
+            build_parser().parse_args(["classify", "--chunk-size", value])
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:
+            raise AssertionError(f"accepted invalid chunk size {value}")

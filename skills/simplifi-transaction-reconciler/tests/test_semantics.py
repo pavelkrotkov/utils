@@ -98,5 +98,5 @@ def test_pending_without_schedule_is_real_pending_activity():
     assert not is_settled(row)
 
 
-def test_missing_state_is_supported_for_csv_rows():
-    assert is_settled({"posted_on": "2026-08-01"})
+def test_missing_state_is_not_treated_as_settled_for_csv_rows():
+    assert not is_settled({"posted_on": "2026-08-01"})

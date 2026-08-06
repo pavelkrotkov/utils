@@ -3,7 +3,7 @@ from datetime import date
 from simplifi_runtime.subscriptions import _is_recurring, _series, analyse, summary
 
 
-def _charges(payee, amounts, *, month0=1, state="CLEARED"):
+def _charges(payee, amounts, *, month0=1, state="CLEARED", account_name=None):
     return [
         {
             "payee_canonical": payee,
@@ -11,6 +11,7 @@ def _charges(payee, amounts, *, month0=1, state="CLEARED"):
             "txn_state": state,
             "amount_minor_units": -int(amount * 100),
             "posted_on": f"2026-{month0 + index:02d}-01",
+            **({"account_name": account_name} if account_name else {}),
         }
         for index, amount in enumerate(amounts)
     ]
@@ -62,3 +63,14 @@ def test_lapsed_series_are_not_counted_as_live():
     result = summary(old + active, today=date(2026, 12, 1))
 
     assert result.startswith("1 live subscriptions")
+
+
+def test_same_merchant_on_two_accounts_has_separate_cadence_series():
+    first = _charges("shared_provider", [10.00] * 3, month0=9, account_name="Checking")
+    second = _charges("shared_provider", [10.00] * 3, month0=9, account_name="Savings")
+
+    series = _series(first + second)
+
+    assert len(series) == 2
+    assert all(_is_recurring(item) for item in series.values())
+    assert summary(first + second, today=date(2026, 12, 1)).startswith("2 live subscriptions")

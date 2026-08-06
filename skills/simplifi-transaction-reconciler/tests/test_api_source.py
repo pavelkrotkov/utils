@@ -24,7 +24,10 @@ def test_incomplete_transaction_record_is_rejected():
 
 
 def test_deleted_transaction_becomes_a_tombstone():
-    assert SimplifiApiSource._tombstone({"id": "txn-1", "isDeleted": True}) == {
+    assert SimplifiApiSource._tombstone(
+        {"id": "txn-1", "isDeleted": True, "modifiedAt": "2026-08-06T12:00:00Z"}
+    ) == {
         "transaction_id": "txn-1",
         "is_deleted": True,
+        "modified_at": "2026-08-06T12:00:00Z",
     }

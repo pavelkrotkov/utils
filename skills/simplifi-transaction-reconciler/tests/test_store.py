@@ -1,5 +1,7 @@
+import sqlite3
 from pathlib import Path
 
+import pytest
 from simplifi_runtime.store import Store
 
 
@@ -89,3 +91,34 @@ def test_failed_run_can_be_rolled_back(tmp_path: Path):
     assert store.conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
     assert store.conn.execute("SELECT COUNT(*) FROM transaction_version").fetchone()[0] == 0
     store.close()
+
+
+def test_latest_successful_api_cursor_is_persisted(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+    run_id = store.start_run("api", "fixture", cursor_before="2026-08-01T00:00:00Z")
+    store.finish_run(run_id, "success", 2, cursor_after="2026-08-06T12:00:00Z")
+    store.commit()
+
+    assert store.latest_cursor("api") == "2026-08-06T12:00:00Z"
+    store.close()
+
+
+def test_schema_migration_rolls_back_all_statements(tmp_path: Path):
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    (migrations / "001_broken.sql").write_text(
+        "CREATE TABLE migration_probe (id INTEGER);\nSELECT missing_column FROM nowhere;",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(sqlite3.Error):
+        Store(tmp_path / "review.sqlite", migrations_dir=migrations)
+
+    with sqlite3.connect(tmp_path / "review.sqlite") as conn:
+        assert (
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'migration_probe'"
+            ).fetchone()
+            is None
+        )
+        assert conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 0

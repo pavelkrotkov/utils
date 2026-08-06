@@ -19,6 +19,23 @@ from .sources.csv_source import SchemaError, SimplifiCsvSource
 from .store import Store
 
 
+def _positive_int(raw: str) -> int:
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if value <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return value
+
+
+def _latest_modified_at(records: list[dict], fallback: str | None) -> str | None:
+    values = [str(row["modified_at"]) for row in records if row.get("modified_at")]
+    if fallback:
+        values.append(fallback)
+    return max(values) if values else None
+
+
 def _rows(db: Path, source: str) -> list[dict]:
     if not db.exists():
         raise ValueError(f"no database at {db}; run `ingest` first")
@@ -77,41 +94,54 @@ def _print_summary(records: list[dict], source: str) -> None:
 
 
 def cmd_ingest(args: argparse.Namespace) -> int:
+    store = Store(Path(args.db))
+    cursor_before: str | None = None
     if args.source == "csv":
         if not args.path:
             print("ERROR a CSV path is required with --source csv", file=sys.stderr)
+            store.close()
             return 2
         path = Path(args.path)
         if not path.exists():
             print(f"ERROR no such file: {path}", file=sys.stderr)
+            store.close()
             return 1
         try:
             records = SimplifiCsvSource(path).fetch()
         except (OSError, SchemaError, ValueError) as exc:
             print(f"ERROR {exc}", file=sys.stderr)
+            store.close()
             return 1
         detail = str(path)
     else:
         from .sources.api_source import ApiError, SimplifiApiSource, client_from_env_or_age
 
+        cursor_before = args.modified_after or store.latest_cursor("api")
         try:
             client = client_from_env_or_age(verbose=args.verbose)
             records = SimplifiApiSource(
-                client, date_on_after=args.since, modified_after=args.modified_after
+                client, date_on_after=args.since, modified_after=cursor_before
             ).fetch()
         except (SecretsError, ApiError) as exc:
             print(f"ERROR {exc}", file=sys.stderr)
+            store.close()
             return 1
-        detail = f"api since={args.since or 'all'} modified_after={args.modified_after or 'all'}"
+        detail = f"api since={args.since or 'all'} modified_after={cursor_before or 'all'}"
 
-    store = Store(Path(args.db))
     try:
-        run_id = store.start_run(args.source, detail)
+        run_id = store.start_run(args.source, detail, cursor_before=cursor_before)
         outcomes = Counter(store.upsert_version(run_id, record) for record in records)
         store.record_accounts(
             {r["account_name"] for r in records if not r.get("is_deleted") and r["account_name"]}
         )
-        store.finish_run(run_id, "success", len(records))
+        store.finish_run(
+            run_id,
+            "success",
+            len(records),
+            cursor_after=(
+                _latest_modified_at(records, cursor_before) if args.source == "api" else None
+            ),
+        )
         store.commit()
     except BaseException:
         store.rollback()
@@ -381,7 +411,7 @@ def build_parser() -> argparse.ArgumentParser:
     classify.add_argument("--db", default="simplifi.sqlite")
     classify.add_argument("--out", default="proposals.csv")
     classify.add_argument("--model", choices=sorted(llm.BACKENDS), default="luna")
-    classify.add_argument("--chunk-size", type=int, default=llm.CHUNK_SIZE)
+    classify.add_argument("--chunk-size", type=_positive_int, default=llm.CHUNK_SIZE)
     classify.add_argument(
         "--dry-run", action="store_true", help="write prompts without calling an API"
     )

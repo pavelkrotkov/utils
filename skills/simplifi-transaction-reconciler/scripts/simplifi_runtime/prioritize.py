@@ -38,6 +38,10 @@ MIN_SERIES_FOR_CREEP = 4
 #: Amazon's median is ~$19 because of many small orders, so every ordinary
 #: larger purchase scored 5.0 and dominated the list.
 MAX_MERCHANT_FIRE_RATE = 0.10
+# A single unusual charge should not make a short merchant history ineligible
+# for outlier detection. Wait until there is enough history for a fire-rate
+# estimate to mean more than one observation.
+MIN_VARIABLE_HISTORY = 10
 #: Below this, a same-day repeat is routine (two coffees, two small Amazon
 #: items, two subway fares) and not worth a line in a review list.
 DUPLICATE_MIN_MINOR_UNITS = 2_000
@@ -97,7 +101,7 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Prioritized]:
     # Merchants whose own spread makes the outlier test meaningless.
     variable_merchants: set[str] = set()
     for canon, amounts in by_merchant.items():
-        if len(amounts) < MIN_BASELINE_N:
+        if len(amounts) < MIN_VARIABLE_HISTORY:
             continue
         med, mad = _robust_stats(amounts)
         if med <= 0:

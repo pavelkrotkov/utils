@@ -83,3 +83,26 @@ def test_subscription_creep_ignores_refunds_and_income():
     signals = [signal.name for item in analyse(rows) for signal in item.signals]
 
     assert "subscription_creep" not in signals
+
+
+def test_short_history_does_not_suppress_a_real_amount_outlier():
+    rows = []
+    for index, amount in enumerate([-10.00] * 5 + [-1000.00]):
+        rows.append(
+            {
+                "transaction_id": f"txn-{index}",
+                "posted_on": f"2026-0{index + 1}-01",
+                "payee_canonical": "merchant",
+                "payee_display": "Merchant",
+                "account_name": "Checking",
+                "amount_minor_units": int(amount * 100),
+                "category": "Shopping",
+                "kind": "spend",
+                "poisons_statistics": 0,
+                "txn_state": "CLEARED",
+            }
+        )
+
+    signals = [signal.name for item in analyse(rows) for signal in item.signals]
+
+    assert "amount_outlier" in signals
