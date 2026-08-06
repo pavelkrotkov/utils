@@ -57,6 +57,8 @@ class Store:
             (_now(), source, source_detail, ALGORITHM_VERSION, RULESET_VERSION),
         )
         self.conn.commit()
+        if cur.lastrowid is None:
+            raise sqlite3.DatabaseError("SQLite did not return a run ID")
         return int(cur.lastrowid)
 
     def finish_run(self, run_id: int, outcome: str, row_count: int) -> None:

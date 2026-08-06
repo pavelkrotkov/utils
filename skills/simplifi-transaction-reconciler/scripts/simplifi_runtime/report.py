@@ -5,6 +5,8 @@ from __future__ import annotations
 import html
 from datetime import date
 
+from .memory import Proposal
+
 CSS = """
 :root { --bg:#fff; --fg:#1a1a1a; --muted:#666; --line:#e4e4e7; --accent:#4f39d9;
         --warn:#b45309; --bad:#b91c1c; --ok:#15803d; --chip:#f4f4f5; }
@@ -56,7 +58,7 @@ def render(
     rows: list[dict],
     prioritized: list,
     staleness: list[dict],
-    proposals: list[tuple[dict, object]],
+    proposals: list[tuple[dict, Proposal | None]],
     memory_stats: dict,
     subscription_findings: list | None = None,
 ) -> str:

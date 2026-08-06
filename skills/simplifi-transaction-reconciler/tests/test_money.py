@@ -17,9 +17,11 @@ def test_parse_amount_export_values(raw, expected):
 
 
 def test_parse_amount_rejects_garbage():
-    for raw in ("", "   ", "-", "abc", None):
+    for raw in ("", "   ", "-", "abc"):
         with pytest.raises(ValueError):
             parse_amount(raw)
+    with pytest.raises(ValueError):
+        parse_amount(None)
 
 
 def test_jpy_has_no_minor_units():

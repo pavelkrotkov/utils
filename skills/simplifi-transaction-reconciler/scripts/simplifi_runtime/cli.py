@@ -9,9 +9,10 @@ import sys
 from collections import Counter
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 from . import llm, prioritize, report, subscriptions
-from .memory import MerchantMemory
+from .memory import MerchantMemory, Proposal
 from .secrets import SecretsError
 from .semantics import is_settled
 from .sources.csv_source import SchemaError, SimplifiCsvSource
@@ -121,7 +122,9 @@ def _analysis_rows(args: argparse.Namespace) -> tuple[list[dict], int, str]:
     return rows, run_id, source
 
 
-def _memory_proposals(rows: list[dict]) -> tuple[MerchantMemory, list[tuple[dict, object]]]:
+def _memory_proposals(
+    rows: list[dict[str, Any]],
+) -> tuple[MerchantMemory, list[tuple[dict[str, Any], Proposal | None]]]:
     memory = MerchantMemory()
     memory.train(rows)
     pending = [

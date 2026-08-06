@@ -42,7 +42,7 @@ class Money:
         return f"{self.as_decimal:.{self.exponent}f} {self.currency}"
 
 
-def parse_amount(raw: str, currency: str = "USD") -> Money:
+def parse_amount(raw: str | None, currency: str = "USD") -> Money:
     """Parse a Simplifi CSV amount into minor units.
 
     The export writes amounts with a leading space, a bare minus for debits,

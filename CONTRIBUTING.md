@@ -41,6 +41,7 @@ uv run ruff format .
 We use `ty` for lightweight static type checks:
 ```bash
 uv run ty check \
+  --extra-search-path "skills/simplifi-transaction-reconciler/scripts" \
   --exclude "tidal_pipeline" \
   --exclude "tidal_match_from_json.py" \
   --exclude "test_tidal_search_backend.py" \
