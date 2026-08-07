@@ -153,3 +153,35 @@ def test_api_fixture_reaches_report_with_review_uncategorized_and_recurring_find
     assert unknown["review_eligible"] == 1
     assert unknown["exclusion_flag"] == 2
     assert "report_exclusion_unknown" in unknown["eligibility_reason_codes"]
+
+
+def test_analyze_rejects_report_and_packet_path_collision(tmp_path: Path):
+    db = tmp_path / "collision.sqlite"
+    output = tmp_path / "review.html"
+    _run_ingest(
+        [
+            "ingest",
+            "--source",
+            "csv",
+            str(FIXTURE_DIR / "acceptance.csv"),
+            "--db",
+            str(db),
+        ]
+    )
+
+    args = build_parser().parse_args(
+        [
+            "analyze",
+            "--db",
+            str(db),
+            "--out",
+            str(output),
+            "--packet-out",
+            str(output),
+            "--today",
+            "2026-06-15",
+        ]
+    )
+
+    assert args.func(args) == 2
+    assert not output.exists()

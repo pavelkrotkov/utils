@@ -376,8 +376,11 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     findings = subscriptions.analyse(analysis_rows, today)
     limitations = _analysis_limitations(source, analysis_rows)
     out = Path(args.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
     packet_path = Path(args.packet_out) if args.packet_out else out.with_name("review-packet.json")
+    if out.resolve() == packet_path.resolve():
+        print("ERROR --out and --packet-out must name different files", file=sys.stderr)
+        return 2
+    out.parent.mkdir(parents=True, exist_ok=True)
     packet = review_packet.build_packet(
         run_id=run_id,
         source=source,

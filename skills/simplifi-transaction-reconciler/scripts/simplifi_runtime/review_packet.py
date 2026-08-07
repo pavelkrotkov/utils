@@ -16,7 +16,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from .semantics import SOURCE_CAPABILITIES, assess_eligibility
+from .semantics import SOURCE_CAPABILITIES, assess_eligibility, is_projected
 from .store import ALGORITHM_VERSION, RULESET_VERSION
 
 PACKET_TYPE = "simplifi.transaction.review"
@@ -114,16 +114,19 @@ def _merchant(row: Mapping[str, Any]) -> dict[str, str]:
 
 def _transaction(row: Mapping[str, Any]) -> dict[str, Any]:
     """Map a stored row to the packet's deliberately small transaction shape."""
+    currency_exponent = row.get("currency_exponent")
+    if currency_exponent is None:
+        currency_exponent = 2
     return {
         "transaction_id": _string(row.get("transaction_id")),
         "posted_on": _string(row.get("posted_on")),
-        "transacted_on": row.get("transacted_on"),
+        "transacted_on": _json_safe(row.get("transacted_on")),
         "account_name": _string(row.get("account_name")),
         "merchant": _merchant(row),
         "amount": {
             "minor_units": int(row.get("amount_minor_units") or 0),
             "currency": _string(row.get("currency")) or "unknown",
-            "currency_exponent": int(row.get("currency_exponent") or 2),
+            "currency_exponent": int(currency_exponent),
         },
         "category": _string(row.get("category")) or None,
         "inferred_category": _string(row.get("inferred_category")) or None,
@@ -136,6 +139,7 @@ def _transaction(row: Mapping[str, Any]) -> dict[str, Any]:
             "split": bool(row.get("is_split")),
             "reviewed": bool(row.get("is_reviewed")),
             "foreign_charge": bool(row.get("is_foreign_charge")),
+            "projected": is_projected(dict(row)),
         },
         "reason_codes": _reason_codes(row),
         "provenance": {
@@ -185,6 +189,7 @@ def _prioritized_findings(prioritized: list[Any]) -> list[dict[str, Any]]:
         findings.append(
             {
                 "transaction_id": _string(row.get("transaction_id")),
+                "transaction_ids": [_string(row.get("transaction_id"))],
                 "scope": "transaction",
                 "priority": round(float(item.total_score), 2),
                 "confidence": None,
@@ -213,6 +218,7 @@ def _subscription_findings(subscription_findings: list[Any]) -> list[dict[str, A
         findings.append(
             {
                 "transaction_id": None,
+                "transaction_ids": sorted(str(txid) for txid in finding.transaction_ids),
                 "scope": "merchant_series",
                 "priority": None,
                 "confidence": None,

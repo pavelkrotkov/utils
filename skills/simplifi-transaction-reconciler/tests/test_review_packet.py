@@ -94,6 +94,33 @@ def test_packet_is_deterministic_and_omits_raw_or_secret_fields(tmp_path: Path):
     assert first["findings"][0]["reason_codes"] == ["amount_outlier"]
 
 
+def test_packet_preserves_zero_currency_exponent_and_projection_state():
+    row = _row("jpy-1")
+    row.update(
+        {
+            "amount_minor_units": -1500,
+            "currency": "JPY",
+            "currency_exponent": 0,
+            "txn_state": "PENDING",
+            "scheduled_model_id": "internal-schedule-id",
+        }
+    )
+
+    packet = build_packet(
+        run_id=42,
+        source="api",
+        analysis_date="2026-08-15",
+        rows=[row],
+        prioritized=[],
+        proposals=[],
+    )
+
+    transaction = packet["transactions"][0]
+    assert transaction["amount"]["currency_exponent"] == 0
+    assert transaction["flags"]["projected"] is True
+    assert "internal-schedule-id" not in json.dumps(packet)
+
+
 def test_ineligible_rows_are_diagnostic_only():
     packet = build_packet(
         run_id=42,
@@ -129,6 +156,7 @@ def test_recurring_finding_does_not_expose_internal_series_key():
                 "fixture market",
                 "price increased",
                 series_key="fixture market::sensitive-account-id",
+                transaction_ids=("tx-1", "tx-2"),
             )
         ],
     )
@@ -136,6 +164,7 @@ def test_recurring_finding_does_not_expose_internal_series_key():
     encoded = json.dumps(packet, sort_keys=True)
     assert "sensitive-account-id" not in encoded
     assert "series_key" not in encoded
+    assert packet["findings"][0]["transaction_ids"] == ["tx-1", "tx-2"]
 
 
 def test_validation_rejects_credentials():

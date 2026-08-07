@@ -106,6 +106,19 @@ class Series:
         return f"{self.merchant} [{self.identity}]" if self.identity else self.merchant
 
     @property
+    def transaction_ids(self) -> tuple[str, ...]:
+        """Stable member IDs without exposing the internal account identity."""
+        return tuple(
+            sorted(
+                {
+                    str(row["transaction_id"])
+                    for row in [*self.charges, *self.projected]
+                    if row.get("transaction_id")
+                }
+            )
+        )
+
+    @property
     def amounts(self) -> list[float]:
         return [abs(c["amount_minor_units"]) / 100 for c in self.charges]
 
@@ -165,6 +178,7 @@ class Finding:
     detail: str
     annual_impact: float = 0.0
     series_key: str | None = None
+    transaction_ids: tuple[str, ...] = ()
 
 
 def _series(rows: list[dict]) -> dict[str, Series]:
@@ -234,6 +248,7 @@ def _hike(s: Series, interval: float) -> Finding | None:
         s.merchant,
         f"${old:,.2f} -> ${new:,.2f} per charge ({new / old:.1f}x)",
         (new - old) * (30.44 / interval) * 12,
+        transaction_ids=s.transaction_ids,
     )
 
 
@@ -275,6 +290,7 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
                     f"(last real charge: {s.last_charge or 'none'}). Forecast only "
                     f"— NOT money leaving your account.",
                     waste,
+                    transaction_ids=s.transaction_ids,
                 )
             )
             continue
@@ -300,6 +316,7 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
                     f"({silent} days). Confirm this was deliberate.",
                     -s.monthly * 12,
                     key,
+                    s.transaction_ids,
                 )
             )
 
@@ -317,6 +334,7 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
                         f"{len(after)} charge(s) cleared after the projected series "
                         f"ended {newest_projection} — billing outlived the schedule",
                         s.monthly * 12,
+                        transaction_ids=s.transaction_ids,
                     )
                 )
 
@@ -354,14 +372,18 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
             continue
         seen_pairs.add(sig)
         total = sum(live[k].monthly for k in keys)
-        labels = [live[k].label for k in keys]
+        merchant_names = [live[k].merchant for k in keys]
+        transaction_ids = tuple(
+            sorted({txid for key in keys for txid in live[key].transaction_ids})
+        )
         findings.append(
             Finding(
                 "twin",
-                " + ".join(labels),
+                " + ".join(merchant_names),
                 f"{len(keys)} concurrent series both contain '{tok}' — one service "
                 f"billed twice, or a rebrand still double-running",
                 total * 12,
+                transaction_ids=transaction_ids,
             )
         )
 
@@ -439,6 +461,9 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
                         f"'{sorted(shared)[0]}'. Same service, new name — not a "
                         f"cancellation.",
                         0.0,
+                        transaction_ids=tuple(
+                            sorted((*old.transaction_ids, *cand.transaction_ids))
+                        ),
                     )
                 )
                 best = None

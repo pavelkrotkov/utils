@@ -52,14 +52,18 @@ Each eligible transaction contains:
 - normalized merchant identity (`canonical`, `normalized`, and `display`);
 - signed minor-unit amount, currency, and exponent;
 - category and accounting kind, transaction/match state, and review flags;
+  the flags explicitly identify provider-generated projected rows;
 - eligibility/accounting reason codes; and
 - append-only provenance (`transaction_version_id`, run ID, source hash, and
   algorithm/ruleset versions).
 
 Each deterministic finding identifies its transaction or merchant-series scope,
-priority, reason codes, evidence, and applicable ADR references. Deterministic
-findings intentionally set probabilistic `confidence` to `null`; their
-evidence, not a made-up probability, is what the agent should evaluate.
+the contributing `transaction_ids`, priority, reason codes, evidence, and
+applicable ADR references. Merchant-series findings use normalized merchant
+names and stable member transaction IDs; internal account identities are never
+serialized. Deterministic findings intentionally set probabilistic `confidence`
+to `null`; their evidence, not a made-up probability, is what the agent should
+evaluate.
 Category proposals carry confidence only when deterministic merchant memory
 provided the proposal; unresolved rows carry `null`.
 
