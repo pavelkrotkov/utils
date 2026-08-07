@@ -1,0 +1,110 @@
+{
+  "accounts": [
+    {"id": "account-checking", "name": "Checking"},
+    {"id": "account-savings", "name": "Savings"}
+  ],
+  "categories": [
+    {"id": "category-subscriptions", "name": "Subscriptions"},
+    {"id": "category-shopping", "name": "Shopping"}
+  ],
+  "transactions": [
+    {
+      "id": "api-subscription-01",
+      "amount": "-10.00",
+      "postedOn": "2026-01-01",
+      "accountId": "account-checking",
+      "payee": "STREAMLINE VIDEO",
+      "coa": {"type": "CATEGORY", "id": "category-subscriptions"},
+      "state": "CLEARED",
+      "isExcludedFromReports": false,
+      "modifiedAt": "2026-01-01T12:00:00Z"
+    },
+    {
+      "id": "api-subscription-02",
+      "amount": "-10.00",
+      "postedOn": "2026-02-01",
+      "accountId": "account-checking",
+      "payee": "STREAMLINE VIDEO",
+      "coa": {"type": "CATEGORY", "id": "category-subscriptions"},
+      "state": "CLEARED",
+      "isExcludedFromReports": false,
+      "modifiedAt": "2026-02-01T12:00:00Z"
+    },
+    {
+      "id": "api-subscription-03",
+      "amount": "-10.00",
+      "postedOn": "2026-03-01",
+      "accountId": "account-checking",
+      "payee": "STREAMLINE VIDEO",
+      "coa": {"type": "CATEGORY", "id": "category-subscriptions"},
+      "state": "CLEARED",
+      "isExcludedFromReports": false,
+      "modifiedAt": "2026-03-01T12:00:00Z"
+    },
+    {
+      "id": "api-subscription-04",
+      "amount": "-10.00",
+      "postedOn": "2026-04-01",
+      "accountId": "account-checking",
+      "payee": "STREAMLINE VIDEO",
+      "coa": {"type": "CATEGORY", "id": "category-subscriptions"},
+      "state": "CLEARED",
+      "isExcludedFromReports": false,
+      "modifiedAt": "2026-04-01T12:00:00Z"
+    },
+    {
+      "id": "api-subscription-05",
+      "amount": "-20.00",
+      "postedOn": "2026-05-01",
+      "accountId": "account-checking",
+      "payee": "STREAMLINE VIDEO",
+      "coa": {"type": "CATEGORY", "id": "category-subscriptions"},
+      "state": "CLEARED",
+      "isExcludedFromReports": false,
+      "modifiedAt": "2026-05-01T12:00:00Z"
+    },
+    {
+      "id": "api-uncategorized",
+      "amount": "-25.00",
+      "postedOn": "2026-05-15",
+      "accountId": "account-checking",
+      "payee": "MYSTERY PURCHASE",
+      "coa": {"type": "UNCATEGORIZED"},
+      "state": "CLEARED",
+      "isExcludedFromReports": false,
+      "modifiedAt": "2026-05-15T12:00:00Z"
+    },
+    {
+      "id": "api-excluded",
+      "amount": "-5.00",
+      "postedOn": "2026-05-16",
+      "accountId": "account-checking",
+      "payee": "IGNORED PURCHASE",
+      "coa": {"type": "CATEGORY", "id": "category-shopping"},
+      "state": "CLEARED",
+      "isExcludedFromReports": true,
+      "modifiedAt": "2026-05-16T12:00:00Z"
+    },
+    {
+      "id": "api-transfer",
+      "amount": "-100.00",
+      "postedOn": "2026-05-17",
+      "accountId": "account-checking",
+      "payee": "TRANSFER TO SAVINGS",
+      "coa": {"type": "ACCOUNT", "id": "account-savings"},
+      "state": "CLEARED",
+      "isExcludedFromReports": false,
+      "modifiedAt": "2026-05-17T12:00:00Z"
+    },
+    {
+      "id": "api-unknown-exclusion",
+      "amount": "-7.00",
+      "postedOn": "2026-05-18",
+      "accountId": "account-checking",
+      "payee": "UNKNOWN REPORT STATUS",
+      "coa": {"type": "CATEGORY", "id": "category-shopping"},
+      "state": "CLEARED",
+      "modifiedAt": "2026-05-18T12:00:00Z"
+    }
+  ]
+}
