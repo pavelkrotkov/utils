@@ -1,0 +1,235 @@
+import argparse
+import sqlite3
+import subprocess
+import sys
+from datetime import date, datetime, timezone
+from pathlib import Path
+
+from simplifi_runtime.cli import (
+    _aggregator_health,
+    _analysis_limitations,
+    _as_of_rows,
+    _csv_safe_text,
+    _ensure_model_key,
+    _is_complete_snapshot,
+    _latest_modified_at,
+    _latest_run,
+    _model_taxonomy,
+    build_parser,
+)
+from simplifi_runtime.store import Store
+
+SKILL_DIR = Path(__file__).resolve().parents[1]
+ENTRYPOINT = SKILL_DIR / "scripts" / "simplifi_transaction_reconciler.py"
+COMMANDS = {"ingest", "analyze", "classify", "subs", "probe", "schema"}
+
+
+def test_every_packaged_subcommand_has_a_handler():
+    parser = build_parser()
+    subparsers = next(
+        action for action in parser._actions if isinstance(action, argparse._SubParsersAction)
+    )
+
+    assert set(subparsers.choices) == COMMANDS
+    for command in COMMANDS:
+        args = parser.parse_args([command])
+        assert callable(args.func), f"subcommand {command!r} has no handler"
+
+
+def test_bundled_entrypoint_help_runs_from_skill_folder():
+    result = subprocess.run(
+        [sys.executable, str(ENTRYPOINT), "--help"],
+        cwd=SKILL_DIR,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "ingest" in result.stdout
+    assert "analyze" in result.stdout
+
+
+def test_as_of_rows_excludes_future_settled_activity_but_keeps_projections():
+    rows = [
+        {"posted_on": "2026-08-01", "txn_state": "CLEARED"},
+        {
+            "posted_on": "2026-09-01",
+            "txn_state": "PENDING",
+            "scheduled_model_id": "scheduled-1",
+        },
+        {"posted_on": "2026-09-01", "txn_state": "PENDING"},
+    ]
+
+    result = _as_of_rows(rows, date(2026, 8, 15))
+
+    assert result == rows[:2]
+
+
+def test_classify_rejects_non_positive_chunk_size():
+    for value in ("0", "-1"):
+        try:
+            build_parser().parse_args(["classify", "--chunk-size", value])
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:
+            raise AssertionError(f"accepted invalid chunk size {value}")
+
+
+def test_api_ingest_supports_explicit_full_rescan():
+    args = build_parser().parse_args(["ingest", "--source", "api", "--full-rescan"])
+
+    assert args.full_rescan
+    assert args.modified_after is None
+
+    try:
+        build_parser().parse_args(
+            ["ingest", "--source", "api", "--full-rescan", "--modified-after", "cursor"]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("accepted mutually exclusive API cursor options")
+
+
+def test_snapshot_retirement_is_limited_to_complete_imports():
+    csv_args = build_parser().parse_args(["ingest", "--source", "csv", "fixture.csv"])
+    api_full_args = build_parser().parse_args(["ingest", "--source", "api", "--full-rescan"])
+    api_partial_args = build_parser().parse_args(
+        ["ingest", "--source", "api", "--full-rescan", "--since", "2026-01-01"]
+    )
+
+    assert _is_complete_snapshot(csv_args)
+    assert _is_complete_snapshot(api_full_args)
+    assert not _is_complete_snapshot(api_partial_args)
+
+
+def test_modified_at_cursor_rejects_invalid_values():
+    try:
+        _latest_modified_at([{"modified_at": "not-a-timestamp"}], None)
+    except ValueError as exc:
+        assert "invalid modifiedAt timestamp" in str(exc)
+    else:
+        raise AssertionError("accepted an invalid modifiedAt cursor")
+
+
+def test_ingest_records_failed_run_for_missing_csv(tmp_path):
+    db = tmp_path / "review.sqlite"
+    missing = tmp_path / "missing.csv"
+    args = build_parser().parse_args(["ingest", "--source", "csv", str(missing), "--db", str(db)])
+
+    assert args.func(args) == 1
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT outcome FROM runs").fetchone()[0] == "failure"
+
+
+def test_model_key_is_loaded_from_the_age_vault_when_missing(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    calls = []
+
+    def fake_load_into_env(*, required, verbose):
+        calls.append((required, verbose))
+
+    monkeypatch.setattr("simplifi_runtime.secrets.load_into_env", fake_load_into_env)
+
+    _ensure_model_key("luna", verbose=True)
+
+    assert calls == [(["OPENAI_API_KEY"], True)]
+
+
+def test_probe_health_reports_status_code_and_stale_refresh():
+    now = datetime(2026, 8, 6, tzinfo=timezone.utc)
+    health = _aggregator_health(
+        {
+            "name": "Example Bank",
+            "aggregators": [
+                {
+                    "aggStatus": "ERROR",
+                    "aggStatusCode": "FDP-192",
+                    "aggStatusDetail": "unsupported",
+                    "lastRefreshSuccessfulAt": "2026-07-01T00:00:00Z",
+                }
+            ],
+        },
+        now=now,
+        expected_refresh_days=14,
+    )
+
+    assert health[0]["issues"] == [
+        "status is not OK",
+        "care code present",
+        "last successful refresh is stale",
+    ]
+
+
+def test_probe_health_without_expected_cadence_keeps_age_informational():
+    now = datetime(2026, 8, 6, tzinfo=timezone.utc)
+    health = _aggregator_health(
+        {
+            "name": "Example Bank",
+            "aggregators": [
+                {
+                    "aggStatus": "OK",
+                    "lastRefreshSuccessfulAt": "2026-07-01T00:00:00Z",
+                }
+            ],
+        },
+        now=now,
+    )
+
+    assert health[0]["issues"] == []
+    assert health[0]["age_days"] > 14
+
+
+def test_latest_run_ignores_failed_runs(tmp_path):
+    store = Store(tmp_path / "review.sqlite")
+    successful = store.start_run("csv", "good")
+    store.finish_run(successful, "success", 1)
+    failed = store.start_run("api", "bad")
+    store.finish_run(failed, "failure", 0)
+    store.commit()
+    store.close()
+
+    assert _latest_run(tmp_path / "review.sqlite") == (successful, "csv")
+
+
+def test_api_missing_exclusion_state_is_visible_as_a_report_limitation():
+    limitations = _analysis_limitations("api", [{"exclusion_flag": 2}])
+
+    assert len(limitations) == 1
+    assert "isExcludedFromReports" in limitations[0]
+    assert "not evidence of a clean review" in limitations[0]
+
+
+def test_model_taxonomy_excludes_non_spending_and_unsettled_rows():
+    rows = [
+        {
+            "account_name": "Checking",
+            "category": "Groceries",
+            "is_uncategorized": 0,
+            "poisons_statistics": 0,
+            "txn_state": "CLEARED",
+        },
+        {
+            "account_name": "Checking",
+            "category": "Transfer",
+            "is_uncategorized": 0,
+            "poisons_statistics": 1,
+            "txn_state": "CLEARED",
+        },
+        {
+            "account_name": "Checking",
+            "category": "Pending Category",
+            "is_uncategorized": 0,
+            "poisons_statistics": 0,
+            "txn_state": "PENDING",
+        },
+    ]
+
+    assert _model_taxonomy(rows) == ["Groceries"]
+
+
+def test_csv_text_escapes_formula_leading_values():
+    for prefix in ("=", "+", "-", "@"):
+        assert _csv_safe_text(prefix + "payload") == "'" + prefix + "payload"
+    assert _csv_safe_text("Groceries") == "Groceries"

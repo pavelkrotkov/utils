@@ -15,6 +15,22 @@ GEMINI.md
 test.md
 test.mhtml
 test_2.md
+# helper_transaction_analyzer — financial data, never commit
+txn_data/
+logs/
+state/
+*.har
+storage_state.json
+token.json
+review.csv
+helper-txn.sqlite*
+reports/
+
+# Simplifi reconciler defaults: personal data and generated review artifacts
+simplifi.sqlite*
+report.html
+proposals.csv
+
 # Personal notes and local artifacts
 Spain Investment Accounts.md
 Return-stacked ETFs vs. managed-futures funds.md
