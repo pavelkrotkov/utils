@@ -15,7 +15,7 @@ from typing import Any
 from . import llm, prioritize, report, subscriptions
 from .memory import MerchantMemory, Proposal
 from .secrets import SecretsError
-from .semantics import is_projected, is_settled
+from .semantics import SOURCE_CAPABILITIES, assess_eligibility, is_projected, is_settled
 from .sources.csv_source import SchemaError, SimplifiCsvSource
 from .store import Store
 
@@ -154,6 +154,11 @@ def _print_summary(records: list[dict], source: str) -> None:
     print(f"INFO deleted tombstones: {sum(bool(r.get('is_deleted')) for r in records)}")
     print(f"INFO excluded from statistics: {sum(r['poisons_statistics'] for r in active_records)}")
     print(f"INFO uncategorized: {sum(r['is_uncategorized'] for r in active_records)}")
+    print(
+        "INFO review eligible: "
+        f"{sum(r.get('review_eligible', assess_eligibility(r).eligible) for r in active_records)}"
+        f"/{len(active_records)}"
+    )
     print(
         "INFO foreign charges (issuer-converted): "
         f"{sum(r['is_foreign_charge'] for r in active_records)}"
@@ -298,20 +303,32 @@ def _as_of_rows(rows: list[dict], today: date) -> list[dict]:
 
 
 def _analysis_limitations(source: str, rows: list[dict]) -> list[str]:
-    limitations = []
-    if source == "csv":
+    limitations: list[str] = []
+    capabilities = SOURCE_CAPABILITIES.get(source)
+    unknown_states = sum(
+        "unsupported_state" in (row.get("eligibility_reason_codes") or "") for row in rows
+    )
+    missing_states = sum(
+        "missing_optional_field" in (row.get("eligibility_reason_codes") or "") for row in rows
+    )
+    if capabilities and not capabilities.settlement_state:
         limitations.append(
-            "CSV has no settlement or projection metadata; all settled-only analyses "
-            "(memory, prioritization, staleness, recurring charges, and model examples) "
-            "are unavailable."
+            f"{source.upper()} has no settlement or projection metadata; "
+            f"{missing_states:,} row(s) remain visible for general review, but "
+            "settled-only analyses (memory, prioritization, staleness, recurring "
+            "charges, and model examples) require explicit CLEARED state."
+        )
+    elif unknown_states:
+        limitations.append(
+            f"{unknown_states:,} row(s) have a non-CLEARED state and are excluded "
+            "from settled-only analyses."
         )
     unknown_exclusions = sum(row.get("exclusion_flag") == 2 for row in rows)
-    if source == "api" and unknown_exclusions:
+    if capabilities and not capabilities.report_exclusion and unknown_exclusions:
         limitations.append(
             "The API bulk transaction response did not expose isExcludedFromReports; "
-            f"{unknown_exclusions:,} row(s) were excluded from statistics, memory, "
-            "prioritization, staleness, recurring-charge, and model-example analysis. "
-            "An empty result is not evidence of a clean review."
+            f"{unknown_exclusions:,} row(s) remain review-visible with an unknown "
+            "report-exclusion state. The result is not evidence of a clean review."
         )
     return limitations
 

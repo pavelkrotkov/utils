@@ -1,5 +1,6 @@
 import pytest
 from simplifi_runtime.sources.api_source import ApiError, SimplifiApiClient, SimplifiApiSource
+from simplifi_runtime.sources.csv_source import SimplifiCsvSource
 
 
 def test_non_advancing_pagination_cursor_fails_closed():
@@ -81,7 +82,9 @@ def test_missing_api_exclusion_flag_fails_closed():
     )
 
     assert record["exclusion_flag"] == 2
-    assert record["poisons_statistics"] == 1
+    assert record["poisons_statistics"] == 0
+    assert record["review_eligible"] == 1
+    assert "report_exclusion_unknown" in record["eligibility_reason_codes"]
     assert "report-exclusion state unavailable" in record["semantics_reasons"]
 
 
@@ -90,3 +93,17 @@ def test_api_record_requires_account_identity():
         SimplifiApiSource._validate_transaction(
             {"id": "txn-1", "amount": "10.00", "postedOn": "2026-08-01", "accountId": " "}
         )
+
+
+def test_csv_record_is_review_eligible_without_settlement_state(tmp_path):
+    path = tmp_path / "transactions.csv"
+    path.write_text(
+        "Date,Account,Reviewed,Payee,Category,Attachments,Exclusion,Recurring,Amount\n"
+        '"Aug 1, 2026",Checking,Yes,Example Store,Shopping,,No,No,-10.00\n',
+        encoding="utf-8",
+    )
+
+    record = SimplifiCsvSource(path).fetch()[0]
+
+    assert record["review_eligible"] == 1
+    assert record["eligibility_reason_codes"] == "missing_optional_field,eligible"

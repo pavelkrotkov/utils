@@ -66,6 +66,79 @@ class Semantics:
     reasons: list[str]
 
 
+@dataclass(frozen=True)
+class SourceCapabilities:
+    """Fields an adapter can authoritatively provide."""
+
+    settlement_state: bool
+    report_exclusion: bool
+    stable_transaction_id: bool
+
+
+SOURCE_CAPABILITIES = {
+    "csv": SourceCapabilities(
+        settlement_state=False,
+        report_exclusion=True,
+        stable_transaction_id=False,
+    ),
+    "api": SourceCapabilities(
+        settlement_state=True,
+        report_exclusion=False,
+        stable_transaction_id=True,
+    ),
+}
+
+
+@dataclass(frozen=True)
+class Eligibility:
+    """Whether a row can participate in general review, plus diagnostics.
+
+    ``eligible`` is deliberately broader than ``settled``. A row with an
+    unknown optional field remains visible to review, while settled-only
+    statistics must still require an explicit ``CLEARED`` state.
+    """
+
+    eligible: bool
+    settled: bool
+    reason_codes: tuple[str, ...]
+
+
+def assess_eligibility(row: dict) -> Eligibility:
+    """Evaluate review eligibility without guessing missing source fields."""
+    reasons: list[str] = []
+    required = ("transaction_id", "posted_on", "amount_minor_units", "account_name")
+    if any(row.get(field) in (None, "") for field in required):
+        reasons.append("missing_required_field")
+
+    exclusion_flag = row.get("exclusion_flag")
+    if exclusion_flag is True or exclusion_flag == 1:
+        reasons.append("excluded_from_reports")
+    elif exclusion_flag == 2:
+        reasons.append("report_exclusion_unknown")
+
+    state = str(row.get("txn_state") or "").strip().upper()
+    settled = state == "CLEARED"
+    if not state:
+        reasons.append("missing_optional_field")
+    elif not settled:
+        reasons.append("unsupported_state")
+
+    eligible = not any(
+        reason in {"missing_required_field", "excluded_from_reports"} for reason in reasons
+    )
+    if eligible:
+        reasons.append("eligible")
+    return Eligibility(eligible, settled, tuple(reasons))
+
+
+def annotate_eligibility(row: dict) -> dict:
+    """Attach stable, reportable eligibility fields to a normalized record."""
+    result = assess_eligibility(row)
+    row["review_eligible"] = int(result.eligible)
+    row["eligibility_reason_codes"] = ",".join(result.reason_codes)
+    return row
+
+
 def classify(
     *,
     category: str,
@@ -132,9 +205,9 @@ def classify(
         poisons = True
         reasons.append("user marked excluded from reports")
     elif exclusion_flag is None:
-        # The API bulk read does not expose this capability. Fail closed so an
-        # excluded transaction cannot silently enter statistics or memory.
-        poisons = True
+        # The API bulk read does not expose this optional capability. Preserve
+        # the row for review and expose the uncertainty; absence is not proof
+        # that the transaction is excluded and must not erase the dataset.
         reasons.append("report-exclusion state unavailable")
 
     return Semantics(
@@ -167,13 +240,10 @@ def is_real_charge(row: dict) -> bool:
 
 
 def is_settled(row: dict) -> bool:
-    """True only for activity whose source provides a settled state.
+    """True only for activity explicitly marked ``CLEARED``.
 
     CSV exports do not carry settlement metadata. Treating those rows as
     settled would let an unknown pending row train memory and recurring or
     outlier statistics as if it were a confirmed charge.
     """
-    if not (row.get("txn_state") or "").strip():
-        return False
-    state = (row.get("txn_state") or "").upper()
-    return not is_projected(row) and state != "PENDING"
+    return not is_projected(row) and (row.get("txn_state") or "").strip().upper() == "CLEARED"

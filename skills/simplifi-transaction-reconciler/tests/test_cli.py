@@ -201,6 +201,22 @@ def test_api_missing_exclusion_state_is_visible_as_a_report_limitation():
     assert "not evidence of a clean review" in limitations[0]
 
 
+def test_csv_missing_settlement_state_is_visible_without_erasing_review_rows():
+    limitations = _analysis_limitations(
+        "csv",
+        [
+            {
+                "exclusion_flag": 0,
+                "eligibility_reason_codes": "missing_optional_field,eligible",
+            }
+        ],
+    )
+
+    assert len(limitations) == 1
+    assert "1 row(s) remain visible for general review" in limitations[0]
+    assert "require explicit CLEARED state" in limitations[0]
+
+
 def test_model_taxonomy_excludes_non_spending_and_unsettled_rows():
     rows = [
         {

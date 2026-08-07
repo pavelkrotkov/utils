@@ -1,5 +1,6 @@
 from simplifi_runtime.semantics import (
     Kind,
+    assess_eligibility,
     classify,
     is_projected,
     is_real_charge,
@@ -54,6 +55,18 @@ def test_ordinary_purchase_is_spend_and_does_not_poison_statistics():
     assert not semantics.poisons_statistics
 
 
+def test_missing_report_exclusion_does_not_poison_statistics():
+    semantics = classify(
+        category="Groceries",
+        payee_raw="Some Store",
+        amount_minor_units=-1000,
+        exclusion_flag=None,
+    )
+
+    assert not semantics.poisons_statistics
+    assert "report-exclusion state unavailable" in semantics.reasons
+
+
 def test_user_exclusion_flag_is_respected():
     semantics = classify(
         category="Groceries",
@@ -100,3 +113,41 @@ def test_pending_without_schedule_is_real_pending_activity():
 
 def test_missing_state_is_not_treated_as_settled_for_csv_rows():
     assert not is_settled({"posted_on": "2026-08-01"})
+
+
+def test_only_cleared_state_is_settled():
+    assert is_settled({"txn_state": "CLEARED"})
+    assert not is_settled({"txn_state": "POSTED"})
+
+
+def test_unknown_optional_fields_keep_a_row_review_eligible_with_reasons():
+    result = assess_eligibility(
+        {
+            "transaction_id": "txn-1",
+            "posted_on": "2026-08-01",
+            "account_name": "Checking",
+            "amount_minor_units": -1000,
+            "exclusion_flag": 2,
+            "txn_state": "POSTED",
+        }
+    )
+
+    assert result.eligible
+    assert not result.settled
+    assert result.reason_codes == ("report_exclusion_unknown", "unsupported_state", "eligible")
+
+
+def test_csv_like_row_is_review_eligible_without_settlement_metadata():
+    result = assess_eligibility(
+        {
+            "transaction_id": "csv-1",
+            "posted_on": "2026-08-01",
+            "account_name": "Checking",
+            "amount_minor_units": -1000,
+            "exclusion_flag": 0,
+        }
+    )
+
+    assert result.eligible
+    assert not result.settled
+    assert result.reason_codes == ("missing_optional_field", "eligible")

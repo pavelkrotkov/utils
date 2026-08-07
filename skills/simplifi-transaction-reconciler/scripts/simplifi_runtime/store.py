@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ALGORITHM_VERSION = "0.1.0"
-RULESET_VERSION = "0.1.0"
+RULESET_VERSION = "0.2.0"
 
 
 def _now() -> str:
@@ -233,6 +233,8 @@ class Store:
             "match_state",
             "scheduled_model_id",
             "scheduled_due_on",
+            "review_eligible",
+            "eligibility_reason_codes",
         ]
         values = {
             **record,
@@ -246,6 +248,8 @@ class Store:
         }
         for column in ("excluded_from_f2s", "is_split", "is_reviewed"):
             values.setdefault(column, 0)
+        values.setdefault("review_eligible", 1)
+        values.setdefault("eligibility_reason_codes", "")
         self.conn.execute(
             f"INSERT INTO transaction_version ({','.join(cols)})"
             f" VALUES ({','.join('?' * len(cols))})",

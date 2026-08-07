@@ -31,7 +31,7 @@ from decimal import Decimal, InvalidOperation
 
 from ..money import Money
 from ..normalize import normalize
-from ..semantics import classify
+from ..semantics import annotate_eligibility, classify
 
 BASE = "https://services.quicken.com"
 TIMEOUT = 60
@@ -466,55 +466,57 @@ class SimplifiApiSource:
             account_names=account_names,
         )
 
-        return {
-            "transaction_id": t["id"],
-            "modified_at": t.get("modifiedAt") or None,
-            "posted_on": (t.get("postedOn") or "")[:10],
-            # cpData.txnOn is the *transaction* date; postedOn is settlement.
-            # Keeping both preserves the transaction and settlement dates for
-            # date-based signals.
-            "transacted_on": (cp.get("txnOn") or "")[:10] or None,
-            "account_name": account_name,
-            "account_id": t.get("accountId"),
-            "amount_minor_units": money.minor_units,
-            "currency": "USD",
-            "currency_exponent": 2,
-            "payee_raw": payee_raw,
-            "payee_normalized": desc.normalized,
-            "payee_canonical": desc.canonical,
-            "payee_display": payee_display_api or desc.display,
-            "norm_rules_applied": ",".join(desc.rules_applied),
-            "original_currency": desc.original_currency,
-            "original_amount": desc.original_amount,
-            "is_foreign_charge": int(desc.original_currency is not None),
-            "category": category,
-            "inferred_category": inferred_category,
-            "is_uncategorized": int(is_uncategorized),
-            # 2 means unknown: GET /transactions does not expose this flag.
-            "exclusion_flag": 2 if report_exclusion is None else int(bool(report_exclusion)),
-            "excluded_from_f2s": int(bool(t.get("isExcludedFromF2S"))),
-            "recurring_flag": int(bool(t.get("isSubscription") or t.get("isBill"))),
-            # PENDING vs CLEARED. The CSV has no equivalent, and without it the
-            # duplicate detector cannot tell a real double-charge from a pending
-            # row sitting alongside its posted twin. 156 of 400 sampled rows are
-            # PENDING, so this is the common case, not an edge case.
-            # (These were already extracted here but never made it into the
-            # store's column list, so they were silently discarded on write.
-            # Named `txn_state` because `state` is too generic to grep for.)
-            "txn_state": t.get("state") or None,
-            "match_state": t.get("matchState") or None,
-            # The discriminator between a real pending transaction and a
-            # PROJECTED one. Both carry state=PENDING; only projections carry a
-            # scheduled-model id. Reading a projection as a charge is how a
-            # confusing a cancelled recurring item with active billing.
-            "scheduled_model_id": t.get("stModelId") or None,
-            "scheduled_due_on": t.get("stDueOn") or None,
-            "is_split": int(bool(t.get("split"))),
-            "is_reviewed": int(bool(t.get("isReviewed"))),
-            "kind": sem.kind.value,
-            "poisons_statistics": int(sem.poisons_statistics),
-            "semantics_reasons": "; ".join(sem.reasons),
-        }
+        return annotate_eligibility(
+            {
+                "transaction_id": t["id"],
+                "modified_at": t.get("modifiedAt") or None,
+                "posted_on": (t.get("postedOn") or "")[:10],
+                # cpData.txnOn is the *transaction* date; postedOn is settlement.
+                # Keeping both preserves the transaction and settlement dates for
+                # date-based signals.
+                "transacted_on": (cp.get("txnOn") or "")[:10] or None,
+                "account_name": account_name,
+                "account_id": t.get("accountId"),
+                "amount_minor_units": money.minor_units,
+                "currency": "USD",
+                "currency_exponent": 2,
+                "payee_raw": payee_raw,
+                "payee_normalized": desc.normalized,
+                "payee_canonical": desc.canonical,
+                "payee_display": payee_display_api or desc.display,
+                "norm_rules_applied": ",".join(desc.rules_applied),
+                "original_currency": desc.original_currency,
+                "original_amount": desc.original_amount,
+                "is_foreign_charge": int(desc.original_currency is not None),
+                "category": category,
+                "inferred_category": inferred_category,
+                "is_uncategorized": int(is_uncategorized),
+                # 2 means unknown: GET /transactions does not expose this flag.
+                "exclusion_flag": 2 if report_exclusion is None else int(bool(report_exclusion)),
+                "excluded_from_f2s": int(bool(t.get("isExcludedFromF2S"))),
+                "recurring_flag": int(bool(t.get("isSubscription") or t.get("isBill"))),
+                # PENDING vs CLEARED. The CSV has no equivalent, and without it the
+                # duplicate detector cannot tell a real double-charge from a pending
+                # row sitting alongside its posted twin. 156 of 400 sampled rows are
+                # PENDING, so this is the common case, not an edge case.
+                # (These were already extracted here but never made it into the
+                # store's column list, so they were silently discarded on write.
+                # Named `txn_state` because `state` is too generic to grep for.)
+                "txn_state": t.get("state") or None,
+                "match_state": t.get("matchState") or None,
+                # The discriminator between a real pending transaction and a
+                # PROJECTED one. Both carry state=PENDING; only projections carry a
+                # scheduled-model id. Reading a projection as a charge is how a
+                # confusing a cancelled recurring item with active billing.
+                "scheduled_model_id": t.get("stModelId") or None,
+                "scheduled_due_on": t.get("stDueOn") or None,
+                "is_split": int(bool(t.get("split"))),
+                "is_reviewed": int(bool(t.get("isReviewed"))),
+                "kind": sem.kind.value,
+                "poisons_statistics": int(sem.poisons_statistics),
+                "semantics_reasons": "; ".join(sem.reasons),
+            }
+        )
 
 
 def schema_report(client: SimplifiApiClient, sample: int = 400) -> str:
