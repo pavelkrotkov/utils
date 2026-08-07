@@ -1,3 +1,5 @@
+from typing import Any, cast
+
 import pytest
 from simplifi_runtime.sources.api_source import ApiError, SimplifiApiClient, SimplifiApiSource
 from simplifi_runtime.sources.csv_source import SimplifiCsvSource
@@ -11,7 +13,7 @@ def test_non_advancing_pagination_cursor_fails_closed():
             {"resources": [{"id": "txn-1"}], "metaData": {"nextLink": "/transactions?after=2"}},
         ]
     )
-    client.get = lambda _path, **_params: next(pages)
+    client.get = cast(Any, lambda _path, **_params: next(pages))
 
     with pytest.raises(ApiError, match="pagination cursor did not advance"):
         client.paginate("/transactions")
@@ -19,7 +21,7 @@ def test_non_advancing_pagination_cursor_fails_closed():
 
 def test_malformed_collection_envelope_is_rejected():
     client = object.__new__(SimplifiApiClient)
-    client.get = lambda _path, **_params: {"metaData": {}}
+    client.get = cast(Any, lambda _path, **_params: {"metaData": {}})
 
     with pytest.raises(ApiError, match="missing resources"):
         client.paginate("/transactions")
@@ -27,10 +29,13 @@ def test_malformed_collection_envelope_is_rejected():
 
 def test_duplicate_ids_within_page_are_rejected():
     client = object.__new__(SimplifiApiClient)
-    client.get = lambda _path, **_params: {
-        "resources": [{"id": "txn-1"}, {"id": "txn-1"}],
-        "metaData": {},
-    }
+    client.get = cast(
+        Any,
+        lambda _path, **_params: {
+            "resources": [{"id": "txn-1"}, {"id": "txn-1"}],
+            "metaData": {},
+        },
+    )
 
     with pytest.raises(ApiError, match="duplicate resource id within page"):
         client.paginate("/transactions")
