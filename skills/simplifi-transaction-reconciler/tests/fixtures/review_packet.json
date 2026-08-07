@@ -1,0 +1,107 @@
+{
+  "category_proposals": [],
+  "excluded_transactions": [],
+  "examples": [
+    {
+      "id": "example-1",
+      "lesson": "Keep scheduled forecasts separate from cleared activity.",
+      "title": "Projected versus real subscription"
+    }
+  ],
+  "findings": [],
+  "limitations": [],
+  "packet_type": "simplifi.transaction.review",
+  "policy_references": [
+    {
+      "id": "ADR-001",
+      "path": "references/adr/001-source-strategy.md"
+    },
+    {
+      "id": "ADR-002",
+      "path": "references/adr/002-merchant-identity-and-normalization.md"
+    },
+    {
+      "id": "ADR-003",
+      "path": "references/adr/003-accounting-semantics-and-projections.md"
+    },
+    {
+      "id": "ADR-004",
+      "path": "references/adr/004-deterministic-first-escalation.md"
+    },
+    {
+      "id": "ADR-006",
+      "path": "references/adr/006-provenance-and-incremental-storage.md"
+    }
+  ],
+  "run": {
+    "algorithm_version": "0.1.0",
+    "analysis_date": "2026-08-15",
+    "ruleset_version": "0.2.0",
+    "run_id": 42,
+    "source": "api"
+  },
+  "schema_version": "1",
+  "source": {
+    "capabilities": {
+      "report_exclusion": false,
+      "settlement_state": true,
+      "stable_transaction_ids": true
+    },
+    "dataset_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "kind": "api"
+  },
+  "summary": {
+    "category_proposal_count": 0,
+    "eligible_transaction_count": 1,
+    "excluded_transaction_count": 0,
+    "finding_count": 0,
+    "stale_account_count": 0,
+    "transaction_count": 1,
+    "unresolved_category_count": 0
+  },
+  "transaction_ids": [
+    "txn-fixture"
+  ],
+  "transactions": [
+    {
+      "account_name": "Checking",
+      "amount": {
+        "currency": "USD",
+        "currency_exponent": 2,
+        "minor_units": -1250
+      },
+      "category": "Shopping",
+      "flags": {
+        "foreign_charge": false,
+        "projected": false,
+        "recurring": false,
+        "reviewed": true,
+        "split": false,
+        "uncategorized": false
+      },
+      "inferred_category": null,
+      "kind": "spend",
+      "match_state": "unknown",
+      "merchant": {
+        "canonical": "fixture market",
+        "display": "Fixture Market",
+        "normalized": "Fixture Market"
+      },
+      "posted_on": "2026-08-01",
+      "provenance": {
+        "algorithm_version": "0.1.0",
+        "ruleset_version": "0.2.0",
+        "run_id": 42,
+        "source_hash": "fixture-hash",
+        "transaction_version_id": 7
+      },
+      "reason_codes": [
+        "accounting_kind:spend",
+        "eligible"
+      ],
+      "transaction_id": "txn-fixture",
+      "transaction_state": "CLEARED",
+      "transacted_on": null
+    }
+  ]
+}

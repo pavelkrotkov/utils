@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from . import llm, prioritize, report, subscriptions
+from . import llm, prioritize, report, review_packet, subscriptions
 from .memory import MerchantMemory, Proposal
 from .secrets import SecretsError
 from .semantics import (
@@ -376,7 +376,26 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     findings = subscriptions.analyse(analysis_rows, today)
     limitations = _analysis_limitations(source, analysis_rows)
     out = Path(args.out)
+    packet_path = Path(args.packet_out) if args.packet_out else out.with_name("review-packet.json")
+    if out.resolve() == packet_path.resolve():
+        print("ERROR --out and --packet-out must name different files", file=sys.stderr)
+        return 2
+    if Path(args.db).resolve() == packet_path.resolve():
+        print("ERROR --packet-out and --db must name different files", file=sys.stderr)
+        return 2
     out.parent.mkdir(parents=True, exist_ok=True)
+    packet = review_packet.build_packet(
+        run_id=run_id,
+        source=source,
+        analysis_date=today,
+        rows=analysis_rows,
+        prioritized=prioritized,
+        proposals=proposals,
+        subscription_findings=findings,
+        stale_account_count=sum(s["status"] == "stale" for s in staleness),
+        limitations=limitations,
+    )
+    review_packet.write_packet(packet, packet_path)
     out.write_text(
         report.render(
             run_id=run_id,
@@ -409,6 +428,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
     print(f"INFO wrote {out}")
+    print(f"INFO wrote {packet_path}")
     return 0
 
 
@@ -619,6 +639,10 @@ def build_parser() -> argparse.ArgumentParser:
     analyze = sub.add_parser("analyze", help="build an HTML read-only review")
     analyze.add_argument("--db", default="simplifi.sqlite")
     analyze.add_argument("--out", default="report.html")
+    analyze.add_argument(
+        "--packet-out",
+        help="review-packet.json path (default: beside --out)",
+    )
     analyze.add_argument("--today", help="analysis date, YYYY-MM-DD")
     analyze.set_defaults(func=cmd_analyze)
 

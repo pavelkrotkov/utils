@@ -4,15 +4,26 @@ import pytest
 from simplifi_runtime.subscriptions import _is_recurring, _series, analyse, summary
 
 
-def _charges(payee, amounts, *, month0=1, state="CLEARED", account_name=None):
+def _charges(
+    payee,
+    amounts,
+    *,
+    month0=1,
+    state="CLEARED",
+    account_name=None,
+    account_id=None,
+    transaction_prefix=None,
+):
     return [
         {
+            "transaction_id": f"{transaction_prefix or payee}-{index}",
             "payee_canonical": payee,
             "kind": "spend",
             "txn_state": state,
             "amount_minor_units": -int(amount * 100),
             "posted_on": f"2026-{month0 + index:02d}-01",
             **({"account_name": account_name} if account_name else {}),
+            **({"account_id": account_id} if account_id else {}),
         }
         for index, amount in enumerate(amounts)
     ]
@@ -75,6 +86,39 @@ def test_same_merchant_on_two_accounts_has_separate_cadence_series():
     assert len(series) == 2
     assert all(_is_recurring(item) for item in series.values())
     assert summary(first + second, today=date(2026, 12, 1)).startswith("2 live subscriptions")
+
+
+def test_twin_finding_uses_safe_merchant_names_and_member_transaction_ids():
+    first = _charges(
+        "shared_provider",
+        [10.00] * 3,
+        month0=9,
+        account_name="Checking",
+        account_id="account-id-one",
+        transaction_prefix="checking-shared-provider",
+    )
+    second = _charges(
+        "shared_provider",
+        [10.00] * 3,
+        month0=9,
+        account_name="Savings",
+        account_id="account-id-two",
+        transaction_prefix="savings-shared-provider",
+    )
+
+    twin = next(
+        finding
+        for finding in analyse(first + second, today=date(2026, 12, 1))
+        if finding.kind == "twin"
+    )
+
+    assert "account-id-one" not in twin.merchant
+    assert "account-id-two" not in twin.merchant
+    assert set(twin.transaction_ids) == {
+        f"{prefix}-{index}"
+        for prefix in ("checking-shared-provider", "savings-shared-provider")
+        for index in range(3)
+    }
 
 
 def test_ghost_annual_impact_uses_observed_quarterly_cadence():
