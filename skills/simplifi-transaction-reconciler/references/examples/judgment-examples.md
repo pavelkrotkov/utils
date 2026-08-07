@@ -49,13 +49,15 @@ payee but not the original descriptor.
 
 **Proposal or escalation**
 
-Inspect the raw statement field through the richer source, then apply a narrow
-statement-based correction and classify the charges as EV charging.
+Inspect the raw statement field through the richer source, then emit a narrow
+statement-based correction proposal and classify the charges as EV charging.
 
 **Human decision**
 
-Use the raw descriptor as the identity evidence, rename the merchant to
-Iberdrola, and treat the charges as fuel/EV charging rather than T-mobile.
+Use the raw descriptor as the identity evidence, report Iberdrola as the likely
+merchant, and treat the charges as fuel/EV charging rather than T-mobile. Keep
+the rename and category change as a proposal; this read-only workflow does not
+apply provider changes.
 
 **Reusable lesson**
 
@@ -79,14 +81,15 @@ alert.
 
 **Proposal or escalation**
 
-Compare descriptor changes against category history, then add a stable
-Wellhub-based correction after confirming that the rebrand is the same vendor.
+Compare descriptor changes against category history, then propose stable
+Wellhub-based coverage after confirming that the rebrand is the same vendor.
 
 **Human decision**
 
-Treat the new descriptors as fitness charges and correct the affected history;
-retain a rule that covers the stable vendor token rather than each person's
-name.
+The historical human decision was to treat the new descriptors as fitness
+charges and recommend correcting the affected history, with future coverage
+based on the stable vendor token rather than each person's name. In the current
+read-only workflow, record those outcomes as proposals and do not apply them.
 
 **Reusable lesson**
 
@@ -122,8 +125,8 @@ as Home Improvement.
 **Reusable lesson**
 
 Confidence is not only merchant classification. High-value or processor-fronted
-transactions need an amount/receipt check before mutation, even when the likely
-category is obvious.
+transactions need an amount/receipt check before finalizing a proposal, even
+when the likely category is obvious.
 
 ## 5. Statement credits are neither spending nor income
 
