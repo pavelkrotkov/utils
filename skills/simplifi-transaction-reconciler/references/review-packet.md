@@ -51,8 +51,8 @@ Each eligible transaction contains:
 - stable transaction ID, posted/transaction dates, and account display name;
 - normalized merchant identity (`canonical`, `normalized`, and `display`);
 - signed minor-unit amount, currency, and exponent;
-- category and accounting kind, transaction/match state, and review flags;
-  the flags explicitly identify provider-generated projected rows;
+- category and accounting kind, transaction/match state, and review flags; the
+  flags explicitly identify provider-generated projected rows;
 - eligibility/accounting reason codes; and
 - append-only provenance (`transaction_version_id`, run ID, source hash, and
   algorithm/ruleset versions).
@@ -61,22 +61,26 @@ Each deterministic finding identifies its transaction or merchant-series scope,
 the contributing `transaction_ids`, priority, reason codes, evidence, and
 applicable ADR references. Merchant-series findings use normalized merchant
 names and stable member transaction IDs; internal account identities are never
-serialized. Deterministic findings intentionally set probabilistic `confidence`
-to `null`; their evidence, not a made-up probability, is what the agent should
-evaluate.
+serialized. Monetary finding evidence is represented with minor units, currency,
+and exponent. Deterministic findings intentionally set probabilistic
+`confidence` to `null`; their evidence, not a made-up probability, is what the
+agent should evaluate.
 Category proposals carry confidence only when deterministic merchant memory
 provided the proposal; unresolved rows carry `null`.
 
-`examples` is an explicit input to packet construction. The current runtime
-does not promote transaction history into that field. A later judgment-context
-layer may supply only deliberately curated and sanitized examples from
-`references/examples/judgment-examples.md`.
+`examples` is an explicit input to packet construction and is checked against a
+small safe field allowlist. The current runtime does not promote transaction
+history into that field. A later judgment-context layer may supply only
+deliberately curated and sanitized examples from
+`references/examples/judgment-examples.md`; account IDs, transaction IDs,
+account names, source hashes, and raw descriptors are rejected.
 
 ## Safety and reproducibility
 
 The packet is read-only and contains no provider mutation instructions. Raw
 statement descriptors, account IDs, source paths, API responses, cookies,
-passwords, access tokens, and other credential fields are excluded. The
+passwords, access tokens, and other credential fields are excluded. Missing or
+unresolved account lookup names become `unknown account`. The
 dataset identity is a SHA-256 digest of sorted transaction/source hashes, not a
 CSV path or a raw source payload.
 

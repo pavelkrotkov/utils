@@ -73,6 +73,7 @@
       "category": "Shopping",
       "flags": {
         "foreign_charge": false,
+        "projected": false,
         "recurring": false,
         "reviewed": true,
         "split": false,

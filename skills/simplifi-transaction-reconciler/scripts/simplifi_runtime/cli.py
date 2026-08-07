@@ -380,6 +380,9 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     if out.resolve() == packet_path.resolve():
         print("ERROR --out and --packet-out must name different files", file=sys.stderr)
         return 2
+    if Path(args.db).resolve() == packet_path.resolve():
+        print("ERROR --packet-out and --db must name different files", file=sys.stderr)
+        return 2
     out.parent.mkdir(parents=True, exist_ok=True)
     packet = review_packet.build_packet(
         run_id=run_id,

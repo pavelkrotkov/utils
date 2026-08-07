@@ -185,3 +185,21 @@ def test_analyze_rejects_report_and_packet_path_collision(tmp_path: Path):
 
     assert args.func(args) == 2
     assert not output.exists()
+
+    db_collision_output = tmp_path / "db-collision.html"
+    db_collision_args = build_parser().parse_args(
+        [
+            "analyze",
+            "--db",
+            str(db),
+            "--out",
+            str(db_collision_output),
+            "--packet-out",
+            str(db),
+            "--today",
+            "2026-06-15",
+        ]
+    )
+
+    assert db_collision_args.func(db_collision_args) == 2
+    assert db.read_bytes().startswith(b"SQLite format 3\x00")

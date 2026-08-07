@@ -40,6 +40,8 @@ _FINDING_POLICIES = {
 
 _FORBIDDEN_KEYS = {
     "access_token",
+    "account_id",
+    "account_ids",
     "authorization",
     "client_secret",
     "cookie",
@@ -51,6 +53,27 @@ _FORBIDDEN_KEYS = {
     "source_path",
     "token",
 }
+
+_EXAMPLE_ALLOWED_KEYS = {
+    "evidence",
+    "human_decision",
+    "id",
+    "lesson",
+    "policy_references",
+    "proposal_or_escalation",
+    "reusable_lesson",
+    "situation",
+    "title",
+}
+_EXAMPLE_FORBIDDEN_KEYS = _FORBIDDEN_KEYS | {
+    "account",
+    "account_name",
+    "account_names",
+    "source_hash",
+    "transaction_id",
+    "transaction_ids",
+}
+_MONEY_EVIDENCE_FIELDS = {"amount", "median", "now", "previous_typical"}
 
 
 class PacketValidationError(ValueError):
@@ -70,16 +93,21 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
-def _assert_no_forbidden_keys(value: Any, path: str = "packet") -> None:
+def _assert_no_forbidden_keys(
+    value: Any,
+    path: str = "packet",
+    forbidden_keys: set[str] | None = None,
+) -> None:
+    forbidden_keys = forbidden_keys or _FORBIDDEN_KEYS
     if isinstance(value, Mapping):
         for key, item in value.items():
             normalized = str(key).lower()
-            if normalized in _FORBIDDEN_KEYS:
+            if normalized in forbidden_keys:
                 raise PacketValidationError(f"{path} contains forbidden field {key!r}")
-            _assert_no_forbidden_keys(item, f"{path}.{key}")
+            _assert_no_forbidden_keys(item, f"{path}.{key}", forbidden_keys)
     elif isinstance(value, list):
         for index, item in enumerate(value):
-            _assert_no_forbidden_keys(item, f"{path}[{index}]")
+            _assert_no_forbidden_keys(item, f"{path}[{index}]", forbidden_keys)
 
 
 def _string(value: Any) -> str:
@@ -105,10 +133,12 @@ def _eligible(row: Mapping[str, Any]) -> bool:
 
 
 def _merchant(row: Mapping[str, Any]) -> dict[str, str]:
+    normalized = _string(row.get("payee_normalized"))
+    canonical = _string(row.get("payee_canonical"))
     return {
-        "canonical": _string(row.get("payee_canonical")),
-        "display": _string(row.get("payee_display")),
-        "normalized": _string(row.get("payee_normalized")),
+        "canonical": canonical,
+        "display": normalized or canonical or "unknown merchant",
+        "normalized": normalized,
     }
 
 
@@ -117,11 +147,15 @@ def _transaction(row: Mapping[str, Any]) -> dict[str, Any]:
     currency_exponent = row.get("currency_exponent")
     if currency_exponent is None:
         currency_exponent = 2
+    account_name = _string(row.get("account_name"))
+    account_id = _string(row.get("account_id"))
+    if not account_name or account_name == account_id:
+        account_name = "unknown account"
     return {
         "transaction_id": _string(row.get("transaction_id")),
         "posted_on": _string(row.get("posted_on")),
         "transacted_on": _json_safe(row.get("transacted_on")),
-        "account_name": _string(row.get("account_name")),
+        "account_name": account_name,
         "merchant": _merchant(row),
         "amount": {
             "minor_units": int(row.get("amount_minor_units") or 0),
@@ -165,13 +199,31 @@ def _dataset_hash(rows: Sequence[Mapping[str, Any]]) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _safe_evidence(evidence: Mapping[str, Any]) -> dict[str, Any]:
-    """Keep rule facts while dropping duplicated identifying display values."""
-    return {
-        str(key): _json_safe(value)
-        for key, value in sorted(evidence.items())
-        if str(key).lower() not in {"account", "merchant", "payee", "payee_raw"}
-    }
+def _safe_evidence(evidence: Mapping[str, Any], row: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep rule facts while retaining monetary units and safe identity fields."""
+    currency = _string(row.get("currency")) or "unknown"
+    exponent = row.get("currency_exponent")
+    if exponent is None:
+        exponent = 2
+    result: dict[str, Any] = {}
+    for key, value in sorted(evidence.items()):
+        name = str(key)
+        lower_name = name.lower()
+        if lower_name in {"account", "merchant", "payee", "payee_raw"}:
+            continue
+        if lower_name in _MONEY_EVIDENCE_FIELDS:
+            continue
+        if lower_name.endswith("_minor_units"):
+            base_name = lower_name.removesuffix("_minor_units")
+            if base_name in _MONEY_EVIDENCE_FIELDS:
+                result[base_name] = {
+                    "minor_units": int(value),
+                    "currency": currency,
+                    "currency_exponent": int(exponent),
+                }
+                continue
+        result[name] = _json_safe(value)
+    return result
 
 
 def _finding_policies(reason_codes: list[str]) -> list[str]:
@@ -201,7 +253,7 @@ def _prioritized_findings(prioritized: list[Any]) -> list[dict[str, Any]]:
                     {
                         "code": str(signal.name),
                         "score": round(float(signal.score), 2),
-                        "facts": _safe_evidence(signal.evidence),
+                        "facts": _safe_evidence(signal.evidence, row),
                     }
                     for signal in sorted(item.signals, key=lambda signal: signal.name)
                 ],
@@ -361,6 +413,18 @@ def _require_mapping(packet: Mapping[str, Any], key: str) -> Mapping[str, Any]:
     return value
 
 
+def _validate_examples(examples: list[Any]) -> None:
+    for index, example in enumerate(examples):
+        if not isinstance(example, Mapping):
+            raise PacketValidationError(f"examples[{index}] must be an object")
+        unknown = set(str(key) for key in example) - _EXAMPLE_ALLOWED_KEYS
+        if unknown:
+            raise PacketValidationError(
+                f"examples[{index}] contains unsupported fields: {sorted(unknown)}"
+            )
+        _assert_no_forbidden_keys(example, f"examples[{index}]", _EXAMPLE_FORBIDDEN_KEYS)
+
+
 def validate_packet(packet: Mapping[str, Any]) -> None:
     """Validate the stable packet contract before it crosses the file boundary."""
     if not isinstance(packet, Mapping):
@@ -420,6 +484,11 @@ def validate_packet(packet: Mapping[str, Any]) -> None:
         ):
             if key not in transaction:
                 raise PacketValidationError(f"transactions[{index}].{key} is required")
+        flags = transaction.get("flags")
+        if not isinstance(flags, Mapping):
+            raise PacketValidationError(f"transactions[{index}].flags must be an object")
+        if not isinstance(flags.get("projected"), bool):
+            raise PacketValidationError(f"transactions[{index}].flags.projected must be boolean")
 
     for key in ("excluded_transactions", "findings", "category_proposals", "examples"):
         if not isinstance(packet.get(key), list):
@@ -428,6 +497,7 @@ def validate_packet(packet: Mapping[str, Any]) -> None:
         raise PacketValidationError("limitations must be an array")
     if not isinstance(packet.get("policy_references"), list):
         raise PacketValidationError("policy_references must be an array")
+    _validate_examples(packet["examples"])
     _assert_no_forbidden_keys(packet)
     try:
         json.dumps(packet, ensure_ascii=False, sort_keys=True)

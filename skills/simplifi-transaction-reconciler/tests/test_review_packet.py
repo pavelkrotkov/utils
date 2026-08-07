@@ -34,7 +34,7 @@ def _row(transaction_id: str, *, eligible: int = 1) -> dict:
         "payee_raw": "RAW*SECRET DESCRIPTOR",
         "payee_normalized": "Fixture Market",
         "payee_canonical": "fixture market",
-        "payee_display": "Fixture Market",
+        "payee_display": "RAW*SECRET DESCRIPTOR",
         "category": "Shopping",
         "inferred_category": None,
         "is_uncategorized": 0,
@@ -111,7 +111,23 @@ def test_packet_preserves_zero_currency_exponent_and_projection_state():
         source="api",
         analysis_date="2026-08-15",
         rows=[row],
-        prioritized=[],
+        prioritized=[
+            Prioritized(
+                row,
+                [
+                    Signal(
+                        "amount_outlier",
+                        2.0,
+                        {
+                            "amount": 15.0,
+                            "amount_minor_units": 1500,
+                            "median": 1.0,
+                            "median_minor_units": 100,
+                        },
+                    )
+                ],
+            )
+        ],
         proposals=[],
     )
 
@@ -119,6 +135,13 @@ def test_packet_preserves_zero_currency_exponent_and_projection_state():
     assert transaction["amount"]["currency_exponent"] == 0
     assert transaction["flags"]["projected"] is True
     assert "internal-schedule-id" not in json.dumps(packet)
+    facts = packet["findings"][0]["evidence"][0]["facts"]
+    assert facts["amount"] == {
+        "currency": "JPY",
+        "currency_exponent": 0,
+        "minor_units": 1500,
+    }
+    assert facts["median"]["minor_units"] == 100
 
 
 def test_ineligible_rows_are_diagnostic_only():
@@ -140,6 +163,26 @@ def test_ineligible_rows_are_diagnostic_only():
             "reason_codes": ["accounting_kind:spend", "excluded_from_reports"],
         }
     ]
+
+
+def test_packet_uses_safe_merchant_display_and_account_fallback():
+    row = _row("fallback-1")
+    row["account_name"] = row["account_id"]
+
+    packet = build_packet(
+        run_id=42,
+        source="api",
+        analysis_date="2026-08-15",
+        rows=[row],
+        prioritized=[],
+        proposals=[],
+    )
+
+    transaction = packet["transactions"][0]
+    assert transaction["merchant"]["display"] == "Fixture Market"
+    assert transaction["account_name"] == "unknown account"
+    assert "RAW*SECRET DESCRIPTOR" not in json.dumps(packet)
+    assert "sensitive-account-id" not in json.dumps(packet)
 
 
 def test_recurring_finding_does_not_expose_internal_series_key():
@@ -172,4 +215,18 @@ def test_validation_rejects_credentials():
     packet["credentials"] = {"access_token": "do-not-ship"}
 
     with pytest.raises(PacketValidationError, match="forbidden"):
+        validate_packet(packet)
+
+
+def test_validation_requires_projection_flag_and_safe_examples():
+    packet = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    packet["transactions"][0]["flags"].pop("projected")
+
+    with pytest.raises(PacketValidationError, match="projected"):
+        validate_packet(packet)
+
+    packet = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    packet["examples"] = [{"account_id": "should-not-ship", "title": "unsafe"}]
+
+    with pytest.raises(PacketValidationError, match=r"unsupported|forbidden"):
         validate_packet(packet)

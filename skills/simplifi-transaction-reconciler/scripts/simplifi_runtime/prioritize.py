@@ -74,6 +74,13 @@ def _d(iso: str) -> date:
     return date.fromisoformat(iso)
 
 
+def _major_units(row: dict, minor_units: int | float) -> float:
+    exponent = row.get("currency_exponent")
+    if exponent is None:
+        exponent = 2
+    return minor_units / (10 ** int(exponent))
+
+
 def analyse(rows: list[dict], today: date | None = None) -> list[Prioritized]:
     """Score every non-poisoning row. Returns only rows with at least one signal."""
     today = today or date.today()
@@ -154,8 +161,10 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Prioritized]:
                         {
                             "baseline_level": level,
                             "observations": len(peers),
-                            "median": med / 100,
-                            "amount": amt / 100,
+                            "median": _major_units(r, med),
+                            "median_minor_units": med,
+                            "amount": _major_units(r, amt),
+                            "amount_minor_units": amt,
                             "ratio": round(ratio, 2),
                             "robust_z": round(z, 2),
                         },
@@ -193,7 +202,8 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Prioritized]:
                         round(score, 2),
                         {
                             "days_apart": gap,
-                            "amount": abs(b["amount_minor_units"]) / 100,
+                            "amount": _major_units(b, abs(b["amount_minor_units"])),
+                            "amount_minor_units": abs(b["amount_minor_units"]),
                             "first_seen_on": a["posted_on"],
                             "account": b["account_name"],
                         },
@@ -236,8 +246,10 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Prioritized]:
                         2.0,
                         {
                             "merchant": series[i]["payee_display"],
-                            "previous_typical": expected / 100,
-                            "now": amounts[i] / 100,
+                            "previous_typical": _major_units(series[i], expected),
+                            "previous_typical_minor_units": expected,
+                            "now": _major_units(series[i], amounts[i]),
+                            "now_minor_units": amounts[i],
                             "increase_pct": round(100 * (amounts[i] / expected - 1), 1),
                             "observations": len(prior),
                             "median_gap_days": statistics.median(gaps),
@@ -277,7 +289,8 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Prioritized]:
                     1.5,
                     {
                         "merchant": r["payee_display"],
-                        "amount": amt / 100,
+                        "amount": _major_units(r, amt),
+                        "amount_minor_units": amt,
                         "note": "no matching debit within 120 days",
                     },
                 ),
