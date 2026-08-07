@@ -20,6 +20,7 @@ from .semantics import (
     assess_eligibility,
     is_projected,
     is_statistics_eligible,
+    is_statistics_quarantined,
 )
 from .sources.csv_source import SchemaError, SimplifiCsvSource
 from .store import Store
@@ -157,7 +158,10 @@ def _print_summary(records: list[dict], source: str) -> None:
     print(f"INFO fetched {len(records)} rows from {source} ({len(active_records)} active)")
     print(f"INFO accounting kinds: {dict(kinds.most_common())}")
     print(f"INFO deleted tombstones: {sum(bool(r.get('is_deleted')) for r in records)}")
-    print(f"INFO excluded from statistics: {sum(r['poisons_statistics'] for r in active_records)}")
+    print(
+        "INFO excluded from statistics: "
+        f"{sum(is_statistics_quarantined(r) for r in active_records)}"
+    )
     print(f"INFO uncategorized: {sum(r['is_uncategorized'] for r in active_records)}")
     print(
         "INFO review eligible: "
@@ -310,23 +314,27 @@ def _as_of_rows(rows: list[dict], today: date) -> list[dict]:
 def _analysis_limitations(source: str, rows: list[dict]) -> list[str]:
     limitations: list[str] = []
     capabilities = SOURCE_CAPABILITIES.get(source)
+    review_visible = [
+        row for row in rows if row.get("review_eligible", assess_eligibility(row).eligible)
+    ]
     unknown_states = sum(
-        "unsupported_state" in (row.get("eligibility_reason_codes") or "") for row in rows
+        "unsupported_state" in (row.get("eligibility_reason_codes") or "") for row in review_visible
     )
     missing_states = sum(
-        "missing_optional_field" in (row.get("eligibility_reason_codes") or "") for row in rows
+        "missing_optional_field" in (row.get("eligibility_reason_codes") or "")
+        for row in review_visible
     )
     if capabilities and not capabilities.settlement_state:
         limitations.append(
             f"{source.upper()} has no settlement or projection metadata; "
-            f"{missing_states:,} row(s) remain visible for general review, but "
+            f"{missing_states:,} eligible row(s) remain visible for general review, but "
             "settled-only analyses (memory, prioritization, staleness, recurring "
             "charges, and model examples) require explicit CLEARED state."
         )
-    elif unknown_states:
+    elif unknown_states or missing_states:
         limitations.append(
-            f"{unknown_states:,} row(s) have a non-CLEARED state and are excluded "
-            "from settled-only analyses."
+            f"{unknown_states + missing_states:,} eligible row(s) lack a confirmed "
+            "CLEARED state and are excluded from settled-only analyses."
         )
     unknown_exclusions = sum(row.get("exclusion_flag") == 2 for row in rows)
     if capabilities and not capabilities.report_exclusion and unknown_exclusions:

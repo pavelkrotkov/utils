@@ -207,14 +207,51 @@ def test_csv_missing_settlement_state_is_visible_without_erasing_review_rows():
         [
             {
                 "exclusion_flag": 0,
+                "review_eligible": 1,
                 "eligibility_reason_codes": "missing_optional_field,eligible",
             }
         ],
     )
 
     assert len(limitations) == 1
-    assert "1 row(s) remain visible for general review" in limitations[0]
+    assert "1 eligible row(s) remain visible for general review" in limitations[0]
     assert "require explicit CLEARED state" in limitations[0]
+
+
+def test_csv_limitation_excludes_ineligible_rows_from_visible_count():
+    limitations = _analysis_limitations(
+        "csv",
+        [
+            {
+                "exclusion_flag": 0,
+                "review_eligible": 1,
+                "eligibility_reason_codes": "missing_optional_field,eligible",
+            },
+            {
+                "exclusion_flag": 1,
+                "review_eligible": 0,
+                "eligibility_reason_codes": "excluded_from_reports,missing_optional_field",
+            },
+        ],
+    )
+
+    assert "1 eligible row(s) remain visible for general review" in limitations[0]
+
+
+def test_api_missing_settlement_state_is_reported():
+    limitations = _analysis_limitations(
+        "api",
+        [
+            {
+                "exclusion_flag": 0,
+                "review_eligible": 1,
+                "eligibility_reason_codes": "missing_optional_field,eligible",
+            }
+        ],
+    )
+
+    assert any("1 eligible row(s)" in limitation for limitation in limitations)
+    assert any("lack a confirmed CLEARED state" in limitation for limitation in limitations)
 
 
 def test_model_taxonomy_excludes_non_spending_and_unsettled_rows():

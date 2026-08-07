@@ -259,3 +259,8 @@ def is_statistics_eligible(row: dict, *, allow_projected: bool = False) -> bool:
     if row.get("poisons_statistics") or row.get("exclusion_flag") == 2:
         return False
     return is_settled(row) or (allow_projected and is_projected(row))
+
+
+def is_statistics_quarantined(row: dict) -> bool:
+    """True when semantic or source uncertainty bars statistical use."""
+    return bool(row.get("poisons_statistics")) or row.get("exclusion_flag") == 2

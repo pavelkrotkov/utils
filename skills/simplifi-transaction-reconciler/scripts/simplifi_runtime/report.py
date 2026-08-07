@@ -6,6 +6,7 @@ import html
 from datetime import date
 
 from .memory import Proposal
+from .semantics import is_statistics_quarantined
 
 CSS = """
 :root { --bg:#fff; --fg:#1a1a1a; --muted:#666; --line:#e4e4e7; --accent:#4f39d9;
@@ -80,7 +81,7 @@ def render(
 ) -> str:
     total = len(rows)
     uncat = sum(1 for r in rows if r["is_uncategorized"])
-    excluded = sum(1 for r in rows if r["poisons_statistics"])
+    excluded = sum(1 for r in rows if is_statistics_quarantined(r))
     stale = [s for s in staleness if s["status"] == "stale"]
 
     p: list[str] = []

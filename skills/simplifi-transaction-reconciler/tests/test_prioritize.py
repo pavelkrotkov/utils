@@ -50,6 +50,23 @@ def test_activity_staleness_ignores_future_projections():
     ]
 
 
+def test_activity_staleness_keeps_settled_non_spending_activity():
+    result = activity_staleness(
+        [
+            {
+                "account_name": "Checking",
+                "posted_on": "2026-08-01",
+                "txn_state": "CLEARED",
+                "poisons_statistics": 1,
+                "exclusion_flag": 0,
+            }
+        ],
+        today=date(2026, 8, 15),
+    )
+
+    assert result[0]["last_transaction"] == "2026-08-01"
+
+
 def test_subscription_creep_ignores_refunds_and_income():
     rows = []
     for index, posted_on in enumerate(("2026-01-01", "2026-02-01", "2026-03-01", "2026-04-01")):

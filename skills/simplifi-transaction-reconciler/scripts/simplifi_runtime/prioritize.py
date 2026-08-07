@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from itertools import pairwise
 
-from .semantics import is_statistics_eligible
+from .semantics import is_settled, is_statistics_eligible
 
 MIN_BASELINE_N = 5
 ROBUST_Z_THRESHOLD = 4.0
@@ -311,7 +311,7 @@ def activity_staleness(rows: list[dict], today: date | None = None) -> list[dict
     today = today or date.today()
     last: dict[str, date] = {}
     for r in rows:
-        if not is_statistics_eligible(r) or r["posted_on"] > today.isoformat():
+        if not is_settled(r) or r["posted_on"] > today.isoformat():
             continue
         d = _d(r["posted_on"])
         name = r["account_name"]
