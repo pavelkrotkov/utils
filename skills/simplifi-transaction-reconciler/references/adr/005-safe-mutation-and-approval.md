@@ -1,6 +1,10 @@
 # ADR-005: Make mutation explicit, validated, and recoverable
 
-- Status: Accepted
+> **Design record only.** The current Simplifi skill is strictly read-only and
+> does not implement or invoke this protocol. This ADR is retained as sanitized
+> future design input for issue #122; it is not an operational instruction.
+
+- Status: Accepted as future design; not implemented
 - Scope: category edits, native rules, and undo
 
 ## Context

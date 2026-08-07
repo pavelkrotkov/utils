@@ -1,5 +1,10 @@
 # Simplifi private API reference
 
+> **Read-only runtime boundary:** the packaged skill currently performs API
+> reads only. The write and refresh observations below are sanitized reference
+> material for future work; they do not authorize or instruct the skill to call
+> those endpoints.
+
 Verified against the live web app on 2026-08-04/05. The capture recorded
 request/response structure only; no balances, payees, account numbers, or
 tokens were retained. This is a private web-app API, not a portable contract.
@@ -135,7 +140,11 @@ Use `dateOnAfter` to bound transaction history explicitly. `dateStart`/
 `dateEnd` are app view state, not observed API parameters; no `dateBefore` was
 observed.
 
-## Writes and refresh jobs
+## Observed writes and refresh jobs (future reference only)
+
+This section is not part of the current runtime capability surface. Do not call
+these endpoints from the skill. Future mutation or refresh work must define a
+separate explicitly authorized capability and its tests before implementation.
 
 `PUT /transactions/{id}` is a full-document write, not a PATCH. It returns a
 job envelope such as `{ "id": "...", "status": "...", "explanation": "..." }`,

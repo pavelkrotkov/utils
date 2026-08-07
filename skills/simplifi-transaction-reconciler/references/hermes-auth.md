@@ -1,5 +1,9 @@
 # Hermes browser-session authentication
 
+> **Future deployment reference only.** The current Simplifi skill does not
+> refresh access tokens, automate a browser session, or notify an operator. It
+> accepts an externally supplied token and stops when authentication is stale.
+
 Deployment reference for the browser-session refresh architecture, status
 2026-08-05: architecture decided, refresher not yet built.
 
@@ -82,8 +86,9 @@ Persist the possibly rotated state after each successful run.
 
 The only long-lived credential held by Hermes is Pavel's revocable browser
 session. Protect it with the age vault, strict permissions, bounded timeouts,
-and key-only logging. The scheduled pipeline remains read-only: refresh,
-ingest, analyze, report, and notify.
+and key-only logging. The future scheduled pipeline remains read-only: ingest,
+analyze, and report. Token refresh and notifications are outside the current
+skill and require separate implementation and authorization.
 
 Before finalizing the refresher, verify whether the app refreshes on a timer
 and whether reload rotates the refresh token. The latter determines whether

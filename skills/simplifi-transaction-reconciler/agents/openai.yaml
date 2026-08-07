@@ -1,4 +1,4 @@
 interface:
   display_name: "Simplifi Transaction Reconciler"
-  short_description: "Review and reconcile Simplifi transactions safely"
-  default_prompt: "Use $simplifi-transaction-reconciler to analyze Simplifi transactions, review category and recurring-charge findings, and make only guarded, reversible account changes."
+  short_description: "Review Simplifi transactions read-only"
+  default_prompt: "Use $simplifi-transaction-reconciler to analyze Simplifi transactions, review category and recurring-charge findings, and produce auditable read-only reports and proposals. Never change account state, refresh institutions, send notifications, or undo changes."
