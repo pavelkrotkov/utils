@@ -68,7 +68,8 @@ call an observed endpoint from the reference material merely because it exists.
 
 The reusable implementation is under `scripts/`. Run the entrypoint from this
 directory or by absolute path; it has no dependency on any other repository
-files:
+files required at runtime. The curated judgment examples are bundled alongside
+the runtime, with the skill reference used when available:
 
 ```bash
 uv run ./scripts/simplifi_transaction_reconciler.py ingest \
@@ -88,7 +89,7 @@ deterministically ordered, read-only, and contains only normalized review
 evidence plus provenance; it excludes raw descriptors, account IDs, source
 paths, and credentials. It is the artifact passed to agent judgment. The
 runtime loads only the explicitly promoted, sanitized cases from
-`references/examples/judgment-examples.md`, selects relevant cases
+`references/examples/judgment-examples.md` (or its bundled runtime copy), selects relevant cases
 deterministically, and includes them in the packet. The classifier prompt uses
 the same curated context; categorized transaction history is never promoted
 automatically into reusable examples.

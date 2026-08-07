@@ -26,7 +26,7 @@ from typing import Protocol
 
 CHUNK_SIZE = 40
 REQUEST_TIMEOUT = 90
-PROMPT_VERSION = "classification-prompt-v1"
+PROMPT_VERSION = "classification-prompt-v2"
 
 SYSTEM_PROMPT = """\
 You categorise personal financial transactions.

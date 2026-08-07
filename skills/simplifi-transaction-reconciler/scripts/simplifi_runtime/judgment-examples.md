@@ -1,8 +1,7 @@
 # Judgment examples
 
-These compact cases preserve decisions that should shape future reconciliation
-reviews. They are examples of reasoning, not portable transaction data or a
-copy of the current rule set.
+These cases are bundled with the runtime so the script cluster remains usable
+when copied without the surrounding skill references.
 
 ## 1. Projected versus real subscription
 
@@ -24,14 +23,13 @@ settled charge.
 
 **Human decision**
 
-Review the four real charges now; leave the projected schedule out of historical
+Review the real charges now; leave the projected schedule out of historical
 spending and revisit the pending charge after it clears.
 
 **Reusable lesson**
 
-A forecast is a hypothesis, not a transaction. Any recurring-charge detector
-must separate `posted_on <= today` and cleared rows from scheduled projections
-and pending activity before reporting counts or totals.
+A forecast is a hypothesis, not a transaction. Separate cleared rows from
+scheduled projections and pending activity before reporting counts or totals.
 
 ## 2. Statement evidence versus display name
 
@@ -43,28 +41,27 @@ phone service.
 **Evidence**
 
 Richer source evidence identified a mobility provider, and the amounts were
-inconsistent with a phone bill. The renamed display value came from Simplifi's
-merchant inference, not a user rule. The CSV exposed the renamed payee but not
-the richer identity evidence.
+inconsistent with a phone bill. The renamed display value came from merchant
+inference, not a user rule. The CSV exposed the renamed payee but not the
+richer identity evidence.
 
 **Proposal or escalation**
 
-Inspect the richer statement evidence, then emit a narrow correction proposal
-and classify the charges as EV charging.
+Inspect richer statement evidence, then emit a narrow correction proposal and
+classify the charges as EV charging.
 
 **Human decision**
 
-Use the statement evidence as the identity signal, report the likely mobility
+Use statement evidence as the identity signal, report the likely mobility
 provider, and treat the charges as fuel/EV charging rather than phone service.
-Keep the rename and category change as a proposal; this read-only workflow
-does not apply provider changes.
+Keep the rename and category change as a proposal; the workflow does not apply
+provider changes.
 
 **Reusable lesson**
 
-Display names are outputs that can already contain the error under review.
-Prefer richer statement identity evidence for matching and diagnosis; use
-amounts and context as a sanity check, and do not infer rule causes from a
-post-rename export alone.
+Display names can already contain the error under review. Prefer richer
+statement identity evidence for matching and diagnosis, use amounts and context
+as a sanity check, and do not infer rule causes from a renamed export alone.
 
 ## 3. Merchant rebrand and rule drift
 
@@ -86,18 +83,16 @@ vendor-based coverage after confirming that the rebrand is the same vendor.
 
 **Human decision**
 
-The historical human decision was to treat the new descriptors as fitness
-charges and recommend correcting the affected history, with future coverage
-based on a stable vendor token rather than variable customer text. In the
-current read-only workflow, record those outcomes as proposals and do not
-apply them.
+Treat the new descriptors as fitness charges and recommend correcting the
+affected history, with future coverage based on a stable vendor token rather
+than variable customer text. Record outcomes as proposals and do not apply
+them.
 
 **Reusable lesson**
 
-Rule health is not just syntax or match counts. Reconciliation should detect
-merchant identity drift when a familiar recurring charge changes descriptor,
-because silent fallback categorization can distort totals without failing
-loudly.
+Rule health is not just syntax or match counts. Detect merchant identity drift
+when a familiar recurring charge changes descriptor, because silent fallback
+categorization can distort totals without failing loudly.
 
 ## 4. High-value merchant needs human confirmation
 
@@ -124,9 +119,8 @@ as Home Improvement.
 
 **Reusable lesson**
 
-Confidence is not only merchant classification. High-value or processor-fronted
-transactions need an amount/receipt check before finalizing a proposal, even
-when the likely category is obvious.
+High-value or processor-fronted transactions need an amount or receipt check
+before finalizing a proposal, even when the likely category is obvious.
 
 ## 5. Statement credits are neither spending nor income
 

@@ -16,6 +16,7 @@ from typing import Any
 DEFAULT_EXAMPLES_PATH = (
     Path(__file__).resolve().parents[2] / "references" / "examples" / "judgment-examples.md"
 )
+BUNDLED_EXAMPLES_PATH = Path(__file__).with_name("judgment-examples.md")
 
 _FIELD_NAMES = {
     "Situation": "situation",
@@ -30,7 +31,7 @@ _FIELD_HEADING = re.compile(r"^\*\*(.+?)\*\*\s*$")
 _FORBIDDEN_TERMS = re.compile(
     r"\b(?:access_token|account_id|account_name|client_secret|cookie|password|"
     r"payee_raw|raw_descriptor|session_token|source_hash|transaction_id|"
-    r"transaction_ids)\b",
+    r"transaction_ids)\b|\braw\s+(?:statement\s+)?descriptor\b",
     re.IGNORECASE,
 )
 
@@ -66,6 +67,8 @@ def _parse_block(number: str, title: str, lines: list[str]) -> dict[str, str]:
             if label not in _FIELD_NAMES:
                 raise JudgmentExampleError(f"example {number} has unsupported field {label!r}")
             current = _FIELD_NAMES[label]
+            if current in fields:
+                raise JudgmentExampleError(f"example {number} repeats field {label!r}")
             values = []
             continue
         if line.startswith("#"):
@@ -87,11 +90,20 @@ def _parse_block(number: str, title: str, lines: list[str]) -> dict[str, str]:
 
 def load_curated_examples(path: Path | None = None) -> list[dict[str, str]]:
     """Load only the explicitly promoted examples from the packaged reference."""
-    path = Path(path or DEFAULT_EXAMPLES_PATH)
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise JudgmentExampleError(f"cannot read curated examples at {path}") from exc
+    paths = [Path(path)] if path else [DEFAULT_EXAMPLES_PATH, BUNDLED_EXAMPLES_PATH]
+    text = None
+    selected_path = paths[0]
+    for candidate in paths:
+        try:
+            text = candidate.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise JudgmentExampleError(f"cannot read curated examples at {candidate}") from exc
+        selected_path = candidate
+        break
+    if text is None:
+        raise JudgmentExampleError(f"cannot read curated examples at {selected_path}")
 
     matches = list(re.finditer(r"(?m)^##\s+", text))
     examples: list[dict[str, str]] = []

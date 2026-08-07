@@ -326,9 +326,9 @@ def build_packet(
 ) -> dict[str, Any]:
     """Build a stable packet from deterministic analysis outputs.
 
-    ``examples`` is intentionally caller-supplied.  The current runtime does
-    not promote transaction history into examples; the curated-example loader
-    is a separate, explicit concern for the follow-on judgment-context issue.
+    ``examples`` is intentionally caller-supplied. The CLI supplies only the
+    explicitly promoted, sanitized judgment examples; transaction history is
+    never promoted into this field.
     """
     if isinstance(analysis_date, date):
         analysis_date = analysis_date.isoformat()

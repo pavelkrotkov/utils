@@ -76,6 +76,8 @@ transaction history to populate this field. The same curated examples are
 rendered into the optional classifier prompt as general guidance; they are not
 few-shot copies of a user's transactions. Account IDs, transaction IDs,
 account names, source hashes, and raw descriptors are rejected.
+The runtime also carries a copy beside the scripts so the read/analyze entry
+point remains usable when only the script cluster is deployed.
 
 ## Safety and reproducibility
 
