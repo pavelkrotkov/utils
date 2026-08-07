@@ -84,7 +84,11 @@ def test_csv_fixture_reaches_store_and_report_without_false_clean(tmp_path: Path
 
     assert rows
     assert sum(row["review_eligible"] for row in rows) > 0
-    excluded = next(row for row in rows if row["payee_display"] == "Ignored Purchase")
+    excluded = next(
+        (row for row in rows if row["payee_display"] == "Ignored Purchase"),
+        None,
+    )
+    assert excluded is not None, "Expected row with 'Ignored Purchase' payee not found"
     assert excluded["review_eligible"] == 0
     assert "excluded_from_reports" in excluded["eligibility_reason_codes"]
     assert "CSV has no settlement or projection metadata" in html
@@ -114,16 +118,28 @@ def test_api_fixture_reaches_report_with_review_uncategorized_and_recurring_find
     assert "LIMITATION: The API bulk transaction response did not expose" in html
     assert "Excluded from stats</div><div class=v>3" in html
 
-    excluded = next(row for row in rows if row["transaction_id"] == "api-excluded")
+    excluded = next(
+        (row for row in rows if row["transaction_id"] == "api-excluded"),
+        None,
+    )
+    assert excluded is not None, "Expected row with 'api-excluded' transaction_id not found"
     assert excluded["review_eligible"] == 0
     assert "excluded_from_reports" in excluded["eligibility_reason_codes"]
 
-    transfer = next(row for row in rows if row["transaction_id"] == "api-transfer")
+    transfer = next(
+        (row for row in rows if row["transaction_id"] == "api-transfer"),
+        None,
+    )
+    assert transfer is not None, "Expected row with 'api-transfer' transaction_id not found"
     assert transfer["kind"] == "transfer"
     assert transfer["poisons_statistics"] == 1
     assert "category matches an account name" in transfer["semantics_reasons"]
 
-    unknown = next(row for row in rows if row["transaction_id"] == "api-unknown-exclusion")
+    unknown = next(
+        (row for row in rows if row["transaction_id"] == "api-unknown-exclusion"),
+        None,
+    )
+    assert unknown is not None, "Expected row with 'api-unknown-exclusion' transaction_id not found"
     assert unknown["review_eligible"] == 1
     assert unknown["exclusion_flag"] == 2
     assert "report_exclusion_unknown" in unknown["eligibility_reason_codes"]
