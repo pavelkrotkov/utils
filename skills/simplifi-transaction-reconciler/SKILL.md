@@ -36,6 +36,8 @@ material needed for the current decision:
   or improvise that design in the current skill.
 - For storage, incremental sync, or reproducibility, read
   [ADR-006](references/adr/006-provenance-and-incremental-storage.md).
+- For the deterministic agent boundary and its safe field allowlist, read the
+  [review-packet contract](references/review-packet.md).
 - For tokens, unattended execution, or deployment, read
   [ADR-007](references/adr/007-authentication-and-deployment.md).
 - For the future Hermes browser-session authentication architecture, load the
@@ -79,6 +81,13 @@ uv run ./scripts/simplifi_transaction_reconciler.py subs --db /path/to/review.sq
 uv run ./scripts/simplifi_transaction_reconciler.py classify \
   --db /path/to/review.sqlite --dry-run
 ```
+
+`analyze` also emits `review-packet.json` beside the HTML report by default.
+Use `--packet-out` to choose another path. The packet is versioned, validated,
+deterministically ordered, read-only, and contains only normalized review
+evidence plus provenance; it excludes raw descriptors, account IDs, source
+paths, and credentials. It is the artifact passed to agent judgment. The
+runtime does not promote transaction history into reusable judgment examples.
 
 Use `--source api` for read-only API ingestion, or `probe`/`schema` for
 read-only diagnostics. Omit `--modified-after` for normal API ingestion to use

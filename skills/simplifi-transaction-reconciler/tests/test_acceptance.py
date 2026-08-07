@@ -81,8 +81,13 @@ def test_csv_fixture_reaches_store_and_report_without_false_clean(tmp_path: Path
     )
     rows = _current_rows(db, "csv")
     html = _run_analyze(db, report)
+    packet = json.loads((report.parent / "review-packet.json").read_text(encoding="utf-8"))
 
     assert rows
+    assert packet["schema_version"] == "1"
+    assert packet["source"]["kind"] == "csv"
+    assert packet["summary"]["eligible_transaction_count"] > 0
+    assert packet["transaction_ids"]
     assert sum(row["review_eligible"] for row in rows) > 0
     excluded = next(
         (row for row in rows if row["payee_display"] == "Ignored Purchase"),
@@ -110,8 +115,13 @@ def test_api_fixture_reaches_report_with_review_uncategorized_and_recurring_find
     _run_ingest(["ingest", "--source", "api", "--full-rescan", "--db", str(db)])
     rows = _current_rows(db, "api")
     html = _run_analyze(db, report)
+    packet = json.loads((report.parent / "review-packet.json").read_text(encoding="utf-8"))
 
     assert rows
+    assert packet["schema_version"] == "1"
+    assert packet["source"]["kind"] == "api"
+    assert packet["findings"]
+    assert all("payee_raw" not in transaction for transaction in packet["transactions"])
     assert sum(row["review_eligible"] for row in rows) > 0
     assert "subscription_creep" in html
     assert "MYSTERY PURCHASE" in html
