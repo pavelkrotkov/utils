@@ -1,5 +1,10 @@
 # ADR-007: Separate token refresh from API access and deploy with least privilege
 
+> **Current capability boundary:** the packaged skill accepts an externally
+> supplied bearer token and performs read-only API calls. Token refresh,
+> browser-session automation, and scheduled orchestration are future design
+> material, not implemented capabilities.
+
 - Status: Accepted
 - Scope: authentication, unattended operation, and scheduled execution
 
@@ -13,7 +18,7 @@ details.
 ## Decision
 
 Keep authentication and transaction access as separate components. The API
-client consumes a fresh bearer token and performs plain HTTP reads/writes; it
+client consumes a fresh bearer token and performs plain HTTP reads only; it
 does not invent credentials or silently re-authenticate. If unattended refresh
 is required and the provider web app can refresh its own authenticated session,
 run that app in an isolated browser session and read the resulting access token
@@ -28,9 +33,10 @@ stop and alert for interactive reauthentication rather than guessing.
 
 Deploy under a dedicated unprivileged service account with a hardened API
 profile. Keep any browser profile separate and invoke it only when required.
-The scheduled pipeline is read-only: refresh, ingest, analyze, report, and
-notify. Classify outcomes as success, degraded, or hard failure, and base
-alerting on the stored outcome rather than process exit alone.
+The future scheduled pipeline is read-only: validate a supplied token, ingest,
+analyze, and report. Token refresh and notifications are outside the current
+skill. Classify outcomes as success, degraded, or hard failure, and base any
+future alerting on the stored outcome rather than process exit alone.
 
 ## Consequences
 
