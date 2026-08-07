@@ -1,0 +1,8 @@
+Date,Account,Reviewed,Payee,Category,Attachments,Exclusion,Recurring,Amount
+"Jan 1, 2026",Checking,Yes,Streamline Video,Subscriptions,,No,Yes,-10.00
+"Feb 1, 2026",Checking,Yes,Streamline Video,Subscriptions,,No,Yes,-10.00
+"Mar 1, 2026",Checking,Yes,Streamline Video,Subscriptions,,No,Yes,-10.00
+"Apr 1, 2026",Checking,Yes,Streamline Video,Subscriptions,,No,Yes,-10.00
+"May 1, 2026",Checking,No,Mystery Purchase,,,No,No,-25.00
+"May 2, 2026",Checking,Yes,Ignored Purchase,Shopping,,Yes,No,-5.00
+"May 3, 2026",Checking,Yes,Internal Transfer,Checking,,No,No,-100.00
