@@ -20,7 +20,7 @@ from pathlib import Path
 
 from ..money import parse_amount
 from ..normalize import normalize
-from ..semantics import classify
+from ..semantics import annotate_eligibility, classify
 
 EXPECTED_COLUMNS = [
     "Date",
@@ -113,30 +113,32 @@ class SimplifiCsvSource:
             )
 
             records.append(
-                {
-                    "transaction_id": _synthetic_id(
-                        posted_on, account, payee_raw, money.minor_units, seen[key]
-                    ),
-                    "posted_on": posted_on,
-                    "account_name": account,
-                    "amount_minor_units": money.minor_units,
-                    "currency": currency,
-                    "currency_exponent": money.exponent,
-                    "payee_raw": payee_raw,
-                    "payee_normalized": desc.normalized,
-                    "payee_canonical": desc.canonical,
-                    "payee_display": desc.display,
-                    "norm_rules_applied": ",".join(desc.rules_applied),
-                    "original_currency": desc.original_currency,
-                    "original_amount": desc.original_amount,
-                    "is_foreign_charge": int(desc.original_currency is not None),
-                    "category": category,
-                    "is_uncategorized": int(category.lower() in {"", "uncategorized"}),
-                    "exclusion_flag": int(_yes(row["Exclusion"])),
-                    "recurring_flag": int(_yes(row["Recurring"])),
-                    "kind": sem.kind.value,
-                    "poisons_statistics": int(sem.poisons_statistics),
-                    "semantics_reasons": "; ".join(sem.reasons),
-                }
+                annotate_eligibility(
+                    {
+                        "transaction_id": _synthetic_id(
+                            posted_on, account, payee_raw, money.minor_units, seen[key]
+                        ),
+                        "posted_on": posted_on,
+                        "account_name": account,
+                        "amount_minor_units": money.minor_units,
+                        "currency": currency,
+                        "currency_exponent": money.exponent,
+                        "payee_raw": payee_raw,
+                        "payee_normalized": desc.normalized,
+                        "payee_canonical": desc.canonical,
+                        "payee_display": desc.display,
+                        "norm_rules_applied": ",".join(desc.rules_applied),
+                        "original_currency": desc.original_currency,
+                        "original_amount": desc.original_amount,
+                        "is_foreign_charge": int(desc.original_currency is not None),
+                        "category": category,
+                        "is_uncategorized": int(category.lower() in {"", "uncategorized"}),
+                        "exclusion_flag": int(_yes(row["Exclusion"])),
+                        "recurring_flag": int(_yes(row["Recurring"])),
+                        "kind": sem.kind.value,
+                        "poisons_statistics": int(sem.poisons_statistics),
+                        "semantics_reasons": "; ".join(sem.reasons),
+                    }
+                )
             )
         return records

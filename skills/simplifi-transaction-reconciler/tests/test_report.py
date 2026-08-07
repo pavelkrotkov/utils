@@ -65,3 +65,27 @@ def test_report_renders_all_prioritized_rows_and_findings():
 
     assert "Payee 60" in html
     assert "Merchant 40" in html
+
+
+def test_report_counts_unknown_exclusion_as_statistical_quarantine():
+    row = {
+        "transaction_id": "txn-1",
+        "is_uncategorized": 0,
+        "poisons_statistics": 0,
+        "exclusion_flag": 2,
+        "posted_on": "2026-08-01",
+        "payee_display": "Example",
+        "amount_minor_units": -100,
+    }
+
+    html = render(
+        run_id=1,
+        source="api",
+        rows=[row],
+        prioritized=[],
+        staleness=[],
+        proposals=[],
+        memory_stats={},
+    )
+
+    assert "Excluded from stats</div><div class=v>1" in html

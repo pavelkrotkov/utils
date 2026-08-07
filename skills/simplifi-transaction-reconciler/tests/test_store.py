@@ -65,6 +65,24 @@ def test_sources_are_isolated_and_tombstones_retire_only_their_source(tmp_path: 
     store.close()
 
 
+def test_eligibility_diagnostics_are_persisted(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+    run_id = store.start_run("csv", "fixture")
+    record = _record("txn-1")
+    record.update(
+        review_eligible=1,
+        eligibility_reason_codes="missing_optional_field,eligible",
+    )
+
+    assert store.upsert_version(run_id, record) == "new"
+    saved = store.conn.execute(
+        "SELECT review_eligible, eligibility_reason_codes FROM transaction_version"
+    ).fetchone()
+
+    assert tuple(saved) == (1, "missing_optional_field,eligible")
+    store.close()
+
+
 def test_derivation_version_change_appends_a_version(tmp_path: Path):
     store = Store(tmp_path / "review.sqlite")
     run_id = store.start_run("csv", "fixture")

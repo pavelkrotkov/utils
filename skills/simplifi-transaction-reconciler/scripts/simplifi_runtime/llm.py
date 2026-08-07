@@ -24,7 +24,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Protocol
 
-from .semantics import is_settled
+from .semantics import is_statistics_eligible
 
 CHUNK_SIZE = 40
 REQUEST_TIMEOUT = 90
@@ -280,7 +280,7 @@ def build_examples(rows: list[dict], per_category: int = 1, limit: int = 24) -> 
     seen: dict[str, int] = {}
     out: list[dict] = []
     for r in sorted(rows, key=lambda x: x["posted_on"], reverse=True):
-        if r["poisons_statistics"] or r["is_uncategorized"] or not is_settled(r):
+        if not is_statistics_eligible(r) or r["is_uncategorized"]:
             continue
         cat = (r["category"] or "").strip()
         if not cat or seen.get(cat, 0) >= per_category:
