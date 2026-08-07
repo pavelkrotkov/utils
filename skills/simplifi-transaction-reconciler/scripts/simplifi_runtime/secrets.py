@@ -21,7 +21,7 @@ Setup:
     mkdir -p ~/.config/simplifi-transaction-reconciler
     age-keygen -o ~/.config/simplifi-transaction-reconciler/identity.txt
     chmod 600 ~/.config/simplifi-transaction-reconciler/identity.txt
-    grep 'public key' ~/.config/helper-txn/identity.txt
+    grep 'public key' ~/.config/simplifi-transaction-reconciler/identity.txt
 
     cat <<'EOF' | age -r age1YOURKEY > ~/.config/simplifi-transaction-reconciler/secrets.env.age
     SIMPLIFI_ACCESS_TOKEN=...

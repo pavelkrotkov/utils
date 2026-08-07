@@ -13,9 +13,11 @@ from simplifi_runtime.cli import (
     _ensure_model_key,
     _is_complete_snapshot,
     _latest_modified_at,
+    _latest_run,
     _model_taxonomy,
     build_parser,
 )
+from simplifi_runtime.store import Store
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
 ENTRYPOINT = SKILL_DIR / "scripts" / "simplifi_transaction_reconciler.py"
@@ -150,6 +152,7 @@ def test_probe_health_reports_status_code_and_stale_refresh():
             ],
         },
         now=now,
+        expected_refresh_days=14,
     )
 
     assert health[0]["issues"] == [
@@ -157,6 +160,37 @@ def test_probe_health_reports_status_code_and_stale_refresh():
         "care code present",
         "last successful refresh is stale",
     ]
+
+
+def test_probe_health_without_expected_cadence_keeps_age_informational():
+    now = datetime(2026, 8, 6, tzinfo=timezone.utc)
+    health = _aggregator_health(
+        {
+            "name": "Example Bank",
+            "aggregators": [
+                {
+                    "aggStatus": "OK",
+                    "lastRefreshSuccessfulAt": "2026-07-01T00:00:00Z",
+                }
+            ],
+        },
+        now=now,
+    )
+
+    assert health[0]["issues"] == []
+    assert health[0]["age_days"] > 14
+
+
+def test_latest_run_ignores_failed_runs(tmp_path):
+    store = Store(tmp_path / "review.sqlite")
+    successful = store.start_run("csv", "good")
+    store.finish_run(successful, "success", 1)
+    failed = store.start_run("api", "bad")
+    store.finish_run(failed, "failure", 0)
+    store.commit()
+    store.close()
+
+    assert _latest_run(tmp_path / "review.sqlite") == (successful, "csv")
 
 
 def test_api_missing_exclusion_state_is_visible_as_a_report_limitation():

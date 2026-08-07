@@ -212,19 +212,39 @@ class SimplifiApiClient:
                 # when no params are supplied, so the URL goes out verbatim.
                 page = self.get(next_path)
 
-            resources = page.get("resources", [])
-            next_path = (page.get("metaData") or {}).get("nextLink")
+            if not isinstance(page, dict):
+                raise ApiError(f"{path}: response is not a collection envelope")
+            if "resources" not in page:
+                raise ApiError(f"{path}: response collection is missing resources")
+            resources = page["resources"]
+            if not isinstance(resources, list):
+                raise ApiError(f"{path}: response resources is not a list")
+            metadata = page.get("metaData")
+            if metadata is not None and not isinstance(metadata, dict):
+                raise ApiError(f"{path}: response metaData is not an object")
+            next_path = (metadata or {}).get("nextLink")
+            if next_path is not None and not isinstance(next_path, str):
+                raise ApiError(f"{path}: response nextLink is not a string")
             if not resources:
                 if next_path:
                     raise ApiError(f"{path}: pagination cursor advanced to an empty page")
                 break
 
+            page_ids: set[str] = set()
+            for resource in resources:
+                if not isinstance(resource, dict) or not str(resource.get("id") or "").strip():
+                    raise ApiError(f"{path}: collection resource is missing id")
+                resource_id = str(resource["id"])
+                if resource_id in page_ids:
+                    raise ApiError(f"{path}: duplicate resource id within page: {resource_id}")
+                page_ids.add(resource_id)
+
             # Belt and braces: if a cursor ever silently re-serves page one, an
             # all-duplicate page ends the walk instead of looping forever.
-            fresh = [r for r in resources if r.get("id") not in seen_ids]
+            fresh = [r for r in resources if str(r["id"]) not in seen_ids]
             if not fresh:
                 raise ApiError(f"{path}: pagination cursor did not advance")
-            seen_ids.update(r.get("id") for r in fresh)
+            seen_ids.update(str(r["id"]) for r in fresh)
             out.extend(fresh)
 
             if not next_path:
@@ -315,7 +335,7 @@ class SimplifiApiSource:
     def _validate_transaction(t: dict) -> None:
         missing = [
             key
-            for key in ("id", "amount", "postedOn")
+            for key in ("id", "amount", "postedOn", "accountId")
             if key not in t or t[key] is None or (isinstance(t[key], str) and not t[key].strip())
         ]
         if missing:
@@ -393,11 +413,13 @@ class SimplifiApiSource:
 
         try:
             amount = Decimal(str(t.get("amount", 0)))
+            if not amount.is_finite():
+                raise ValueError("amount is not finite")
             scaled = amount * 100
             if scaled != scaled.to_integral_value():
                 raise ValueError("amount has sub-cent precision")
             money = Money(int(scaled), "USD")
-        except (InvalidOperation, ValueError) as exc:
+        except (InvalidOperation, OverflowError, ValueError) as exc:
             raise ApiError(f"transaction {t.get('id', '?')} has invalid amount") from exc
         # `coa.type` states the kind outright — CATEGORY / ACCOUNT /
         # UNCATEGORIZED / BALANCE_ADJUSTMENT. Use it rather than inferring from

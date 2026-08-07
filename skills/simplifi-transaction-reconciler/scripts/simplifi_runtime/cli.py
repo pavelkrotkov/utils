@@ -57,10 +57,11 @@ def _latest_modified_at(records: list[dict], fallback: str | None) -> str | None
     return max(values, key=lambda item: item[1])[0] if values else None
 
 
-REFRESH_STALE_DAYS = 14
-
-
-def _aggregator_health(login: dict, now: datetime | None = None) -> list[dict]:
+def _aggregator_health(
+    login: dict,
+    now: datetime | None = None,
+    expected_refresh_days: float | None = None,
+) -> list[dict]:
     """Return provider-health observations for one institution login."""
     now = now or datetime.now(timezone.utc)
     name = str(login.get("name") or login.get("id") or "unknown")
@@ -86,7 +87,7 @@ def _aggregator_health(login: dict, now: datetime | None = None) -> list[dict]:
                 if refreshed.tzinfo is None:
                     refreshed = refreshed.replace(tzinfo=timezone.utc)
                 age_days = (now - refreshed).total_seconds() / 86400
-                if age_days > REFRESH_STALE_DAYS:
+                if expected_refresh_days is not None and age_days > expected_refresh_days:
                     issues.append("last successful refresh is stale")
             except ValueError:
                 issues.append("last successful refresh has an invalid timestamp")
@@ -124,7 +125,9 @@ def _rows(db: Path, source: str) -> list[dict]:
 
 def _latest_run(db: Path) -> tuple[int, str]:
     with sqlite3.connect(db) as conn:
-        row = conn.execute("SELECT id, source FROM runs ORDER BY id DESC LIMIT 1").fetchone()
+        row = conn.execute(
+            "SELECT id, source FROM runs WHERE outcome = 'success' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
     return (int(row[0]), str(row[1])) if row else (0, "unknown")
 
 
@@ -398,10 +401,14 @@ def cmd_subs(args: argparse.Namespace) -> int:
 
 def cmd_classify(args: argparse.Namespace) -> int:
     try:
-        rows, _, _ = _analysis_rows(args)
+        rows, _, source = _analysis_rows(args)
     except ValueError as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
+    limitations = _analysis_limitations(source, rows)
+    for limitation in limitations:
+        print(f"WARNING {limitation}", file=sys.stderr)
+
     memory = MerchantMemory()
     memory.train(rows)
     residue = [
@@ -466,6 +473,14 @@ def cmd_classify(args: argparse.Namespace) -> int:
                 "rationale",
                 "model",
                 "decision",
+                "source",
+                "source_hash",
+                "transaction_version_id",
+                "run_id",
+                "algorithm_version",
+                "ruleset_version",
+                "prompt_version",
+                "prompt_hash",
             ]
         )
         for proposal in sorted(proposals, key=lambda item: -item.confidence):
@@ -483,6 +498,14 @@ def cmd_classify(args: argparse.Namespace) -> int:
                     _csv_safe_text(proposal.rationale),
                     proposal.model,
                     "",
+                    row.get("source", source),
+                    row.get("source_hash", ""),
+                    row.get("id", ""),
+                    row.get("run_id", ""),
+                    row.get("algorithm_version", ""),
+                    row.get("ruleset_version", ""),
+                    proposal.prompt_version,
+                    proposal.prompt_hash,
                 ]
             )
     resolved = sum(bool(proposal.category) for proposal in proposals)

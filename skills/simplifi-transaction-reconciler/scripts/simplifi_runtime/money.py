@@ -59,6 +59,8 @@ def parse_amount(raw: str | None, currency: str = "USD") -> Money:
         value = Decimal(cleaned)
     except InvalidOperation as exc:
         raise ValueError(f"unparseable amount: {raw!r}") from exc
+    if not value.is_finite():
+        raise ValueError(f"unparseable amount: {raw!r}")
 
     exponent = CURRENCY_EXPONENTS.get(currency, 2)
     scaled = value * (10**exponent)

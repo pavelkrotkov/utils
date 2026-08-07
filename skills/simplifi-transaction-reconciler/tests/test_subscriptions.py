@@ -120,3 +120,11 @@ def test_price_hike_is_reported_even_when_recent_variation_is_high():
     findings = analyse(rows, today=date(2026, 7, 1))
 
     assert "hike" in {finding.kind for finding in findings}
+
+
+def test_single_latest_charge_is_not_a_stable_price_hike():
+    rows = _charges("hike_service", [10.00, 10.00, 10.00, 20.00])
+
+    findings = analyse(rows, today=date(2026, 5, 1))
+
+    assert "hike" not in {finding.kind for finding in findings}

@@ -15,6 +15,7 @@ GUARDRAILS
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -27,6 +28,7 @@ from .semantics import is_settled
 
 CHUNK_SIZE = 40
 REQUEST_TIMEOUT = 90
+PROMPT_VERSION = "classification-prompt-v1"
 
 SYSTEM_PROMPT = """\
 You categorise personal financial transactions.
@@ -56,6 +58,8 @@ class Proposal:
     rationale: str
     model: str
     rejected_category: str | None = None  # set when the model invented one
+    prompt_version: str = PROMPT_VERSION
+    prompt_hash: str = ""
 
 
 @dataclass
@@ -257,6 +261,12 @@ def classify(
         text, usage = backend.complete(SYSTEM_PROMPT, user)
         batch_proposals = _parse(text, allowed, backend.id)
         _validate_batch_ids(batch_proposals, batch)
+        prompt_hash = hashlib.sha256(
+            f"{PROMPT_VERSION}\n{SYSTEM_PROMPT}\n{user}".encode()
+        ).hexdigest()
+        for proposal in batch_proposals:
+            proposal.prompt_version = PROMPT_VERSION
+            proposal.prompt_hash = prompt_hash
         proposals.extend(batch_proposals)
         total.input_tokens += usage.input_tokens
         total.output_tokens += usage.output_tokens

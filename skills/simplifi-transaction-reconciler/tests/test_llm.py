@@ -1,7 +1,7 @@
 import json
 
 import pytest
-from simplifi_runtime.llm import Usage, classify
+from simplifi_runtime.llm import PROMPT_VERSION, Usage, classify
 
 
 class FakeBackend:
@@ -70,3 +70,18 @@ def test_classify_rejects_invalid_confidence(confidence):
 
     with pytest.raises(ValueError, match="confidence"):
         classify(FakeBackend(payload), _rows(), ["Shopping"], [], chunk_size=2)
+
+
+def test_classification_proposals_include_prompt_provenance():
+    payload = {
+        "results": [
+            {"id": "txn-1", "category": "Shopping"},
+            {"id": "txn-2", "category": "Shopping"},
+        ]
+    }
+
+    proposals, _, _ = classify(FakeBackend(payload), _rows(), ["Shopping"], [], chunk_size=2)
+
+    assert proposals[0].prompt_version == PROMPT_VERSION
+    assert proposals[0].prompt_hash
+    assert proposals[0].prompt_hash == proposals[1].prompt_hash

@@ -16,6 +16,25 @@ def test_non_advancing_pagination_cursor_fails_closed():
         client.paginate("/transactions")
 
 
+def test_malformed_collection_envelope_is_rejected():
+    client = object.__new__(SimplifiApiClient)
+    client.get = lambda _path, **_params: {"metaData": {}}
+
+    with pytest.raises(ApiError, match="missing resources"):
+        client.paginate("/transactions")
+
+
+def test_duplicate_ids_within_page_are_rejected():
+    client = object.__new__(SimplifiApiClient)
+    client.get = lambda _path, **_params: {
+        "resources": [{"id": "txn-1"}, {"id": "txn-1"}],
+        "metaData": {},
+    }
+
+    with pytest.raises(ApiError, match="duplicate resource id within page"):
+        client.paginate("/transactions")
+
+
 def test_incomplete_transaction_record_is_rejected():
     source = object.__new__(SimplifiApiSource)
 
@@ -26,7 +45,12 @@ def test_incomplete_transaction_record_is_rejected():
 def test_malformed_api_posted_on_date_is_rejected():
     with pytest.raises(ApiError, match="invalid postedOn date"):
         SimplifiApiSource._validate_transaction(
-            {"id": "txn-1", "amount": "10.00", "postedOn": "08/01/2026"}
+            {
+                "id": "txn-1",
+                "amount": "10.00",
+                "postedOn": "08/01/2026",
+                "accountId": "account-1",
+            }
         )
 
 
@@ -47,6 +71,7 @@ def test_missing_api_exclusion_flag_fails_closed():
             "id": "txn-1",
             "amount": "10.00",
             "postedOn": "2026-08-01",
+            "accountId": "account-1",
             "payee": "Example Store",
             "coa": {"type": "CATEGORY", "id": "cat-1"},
         },
@@ -58,3 +83,10 @@ def test_missing_api_exclusion_flag_fails_closed():
     assert record["exclusion_flag"] == 2
     assert record["poisons_statistics"] == 1
     assert "report-exclusion state unavailable" in record["semantics_reasons"]
+
+
+def test_api_record_requires_account_identity():
+    with pytest.raises(ApiError, match="accountId"):
+        SimplifiApiSource._validate_transaction(
+            {"id": "txn-1", "amount": "10.00", "postedOn": "2026-08-01", "accountId": " "}
+        )

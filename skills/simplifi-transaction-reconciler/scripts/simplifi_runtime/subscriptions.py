@@ -47,6 +47,11 @@ MAX_VARIATION = 0.12
 #: two years ago does not disqualify a live subscription.
 RECENT_WINDOW = 4
 
+# A single latest charge is evidence of a change, not evidence of a new price
+# regime. Require two observations on each side of the change before reporting
+# a stable hike and keep those windows disjoint.
+PRICE_REGIME_OBSERVATIONS = 2
+
 #: A subscription is something you SIGNED UP FOR and can cancel. A mortgage,
 #: insurance premium or tax payment is a fixed recurring obligation — it passes
 #: every statistical test here and belongs in none of these checks. Listing a
@@ -208,10 +213,20 @@ def _has_regular_cadence(s: Series) -> bool:
 
 def _hike(s: Series, interval: float) -> Finding | None:
     """Return a price-hike finding before recent variation can reject a series."""
-    if len(s.amounts) < 4:
+    if len(s.amounts) < PRICE_REGIME_OBSERVATIONS * 2:
         return None
     by_date = [a for _, a in sorted(zip(s.dates, s.amounts, strict=True))]
-    old, new = statistics.median(by_date[:-2]), statistics.median(by_date[-2:])
+    split = len(by_date) - PRICE_REGIME_OBSERVATIONS
+    old_window = by_date[split - PRICE_REGIME_OBSERVATIONS : split]
+    new_window = by_date[split:]
+
+    def stable(values: list[float]) -> bool:
+        median = statistics.median(values)
+        return median > 0 and max(values) - min(values) <= median * MAX_VARIATION
+
+    if not stable(old_window) or not stable(new_window):
+        return None
+    old, new = statistics.median(old_window), statistics.median(new_window)
     if old <= 0 or new / old < HIKE_RATIO:
         return None
     return Finding(

@@ -185,3 +185,38 @@ def test_subscription_creep_keeps_accounts_separate():
     signals = [signal for item in analyse(rows) for signal in item.signals]
 
     assert any(signal.name == "subscription_creep" for signal in signals)
+
+
+def test_refund_does_not_match_same_merchant_on_another_account():
+    rows = [
+        {
+            "transaction_id": "debit",
+            "posted_on": "2026-07-01",
+            "payee_canonical": "merchant",
+            "payee_display": "Merchant",
+            "account_name": "Checking",
+            "account_id": "checking-1",
+            "amount_minor_units": -1000,
+            "category": "Shopping",
+            "kind": "spend",
+            "poisons_statistics": 0,
+            "txn_state": "CLEARED",
+        },
+        {
+            "transaction_id": "refund",
+            "posted_on": "2026-07-15",
+            "payee_canonical": "merchant",
+            "payee_display": "Merchant",
+            "account_name": "Savings",
+            "account_id": "savings-1",
+            "amount_minor_units": 1000,
+            "category": "Shopping",
+            "kind": "refund",
+            "poisons_statistics": 0,
+            "txn_state": "CLEARED",
+        },
+    ]
+
+    signals = [signal.name for item in analyse(rows) for signal in item.signals]
+
+    assert "refund_without_original" in signals

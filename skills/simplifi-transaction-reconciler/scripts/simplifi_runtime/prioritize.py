@@ -247,16 +247,26 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Prioritized]:
                 break  # report the first increase per series, not every one
 
     # --- refund_without_original -------------------------------------------
+    def account_key(row: dict) -> tuple[str, str] | None:
+        account_id = str(row.get("account_id") or "").strip()
+        if account_id:
+            return "id", account_id
+        account_name = str(row.get("account_name") or "").strip()
+        return ("name", account_name) if account_name else None
+
     for r in scored:
         if r["kind"] != "refund":
             continue
         amt = abs(r["amount_minor_units"])
         d = _d(r["posted_on"])
+        refund_account = account_key(r)
         match = any(
             o["payee_canonical"] == r["payee_canonical"]
             and abs(o["amount_minor_units"]) == amt
             and o["amount_minor_units"] < 0
             and 0 <= (d - _d(o["posted_on"])).days <= 120
+            and refund_account is not None
+            and account_key(o) == refund_account
             for o in scored
         )
         if not match:

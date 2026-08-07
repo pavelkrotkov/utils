@@ -17,7 +17,7 @@ def test_parse_amount_export_values(raw, expected):
 
 
 def test_parse_amount_rejects_garbage():
-    for raw in ("", "   ", "-", "abc"):
+    for raw in ("", "   ", "-", "abc", "NaN", "Infinity", "-Infinity"):
         with pytest.raises(ValueError):
             parse_amount(raw)
     with pytest.raises(ValueError):
