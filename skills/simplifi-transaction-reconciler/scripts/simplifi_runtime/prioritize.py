@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from itertools import pairwise
 
-from .semantics import is_settled
+from .semantics import is_statistics_eligible
 
 MIN_BASELINE_N = 5
 ROBUST_Z_THRESHOLD = 4.0
@@ -77,7 +77,7 @@ def _d(iso: str) -> date:
 def analyse(rows: list[dict], today: date | None = None) -> list[Prioritized]:
     """Score every non-poisoning row. Returns only rows with at least one signal."""
     today = today or date.today()
-    scored = [r for r in rows if not r["poisons_statistics"] and is_settled(r)]
+    scored = [r for r in rows if is_statistics_eligible(r)]
 
     # --- baselines, most specific first ------------------------------------
     by_merchant: dict[str, list[int]] = defaultdict(list)
@@ -311,7 +311,7 @@ def activity_staleness(rows: list[dict], today: date | None = None) -> list[dict
     today = today or date.today()
     last: dict[str, date] = {}
     for r in rows:
-        if not is_settled(r) or r["posted_on"] > today.isoformat():
+        if not is_statistics_eligible(r) or r["posted_on"] > today.isoformat():
             continue
         d = _d(r["posted_on"])
         name = r["account_name"]

@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from itertools import pairwise
 
-from .semantics import is_projected, is_settled
+from .semantics import is_projected, is_statistics_eligible
 
 #: A series needs this many cleared charges before we will call it recurring.
 #: Two is coincidence; three is a pattern.
@@ -177,7 +177,7 @@ def _series(rows: list[dict]) -> dict[str, Series]:
     """
     out: dict[str, Series] = defaultdict(lambda: Series(""))
     for r in rows:
-        if r.get("poisons_statistics") or (not is_settled(r) and not is_projected(r)):
+        if not is_statistics_eligible(r, allow_projected=True):
             continue
         if r.get("kind") not in {"spend", "fee"}:
             continue

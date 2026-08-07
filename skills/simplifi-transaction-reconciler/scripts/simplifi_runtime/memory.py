@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 
-from .semantics import is_settled
+from .semantics import is_statistics_eligible
 
 MIN_OBSERVATIONS = 3
 MIN_PURITY = 0.9
@@ -79,7 +79,7 @@ class MerchantMemory:
 
     def train(self, rows: list[dict]) -> None:
         for row in rows:
-            if row["poisons_statistics"] or row["is_uncategorized"] or not is_settled(row):
+            if not is_statistics_eligible(row) or row["is_uncategorized"]:
                 continue
             category = (row["category"] or "").strip()
             if not category:

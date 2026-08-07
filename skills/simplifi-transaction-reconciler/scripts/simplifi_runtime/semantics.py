@@ -247,3 +247,15 @@ def is_settled(row: dict) -> bool:
     outlier statistics as if it were a confirmed charge.
     """
     return not is_projected(row) and (row.get("txn_state") or "").strip().upper() == "CLEARED"
+
+
+def is_statistics_eligible(row: dict, *, allow_projected: bool = False) -> bool:
+    """Whether a row is safe for statistical or learned analysis.
+
+    Review visibility and statistical eligibility are separate. An unknown
+    report-exclusion flag is retained for review but cannot train memory or
+    affect baselines until the source answers that question.
+    """
+    if row.get("poisons_statistics") or row.get("exclusion_flag") == 2:
+        return False
+    return is_settled(row) or (allow_projected and is_projected(row))

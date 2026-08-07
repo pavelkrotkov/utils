@@ -15,7 +15,12 @@ from typing import Any
 from . import llm, prioritize, report, subscriptions
 from .memory import MerchantMemory, Proposal
 from .secrets import SecretsError
-from .semantics import SOURCE_CAPABILITIES, assess_eligibility, is_projected, is_settled
+from .semantics import (
+    SOURCE_CAPABILITIES,
+    assess_eligibility,
+    is_projected,
+    is_statistics_eligible,
+)
 from .sources.csv_source import SchemaError, SimplifiCsvSource
 from .store import Store
 
@@ -290,7 +295,7 @@ def _memory_proposals(
     pending = [
         (row, memory.propose(row))
         for row in rows
-        if row["is_uncategorized"] and not row["poisons_statistics"] and is_settled(row)
+        if row["is_uncategorized"] and is_statistics_eligible(row)
     ]
     pending.sort(key=lambda pair: (pair[1] is None, -abs(pair[0]["amount_minor_units"])))
     return memory, pending
@@ -342,8 +347,7 @@ def _model_taxonomy(rows: list[dict]) -> list[str]:
             if (
                 (row["category"] or "").strip()
                 and not row["is_uncategorized"]
-                and not row["poisons_statistics"]
-                and is_settled(row)
+                and is_statistics_eligible(row)
             )
         }
         - accounts
@@ -431,12 +435,7 @@ def cmd_classify(args: argparse.Namespace) -> int:
     residue = [
         row
         for row in rows
-        if (
-            row["is_uncategorized"]
-            and not row["poisons_statistics"]
-            and is_settled(row)
-            and memory.propose(row) is None
-        )
+        if (row["is_uncategorized"] and is_statistics_eligible(row) and memory.propose(row) is None)
     ]
     if not residue:
         print("INFO nothing left for a model to propose")

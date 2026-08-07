@@ -5,6 +5,7 @@ from simplifi_runtime.semantics import (
     is_projected,
     is_real_charge,
     is_settled,
+    is_statistics_eligible,
 )
 
 
@@ -118,6 +119,19 @@ def test_missing_state_is_not_treated_as_settled_for_csv_rows():
 def test_only_cleared_state_is_settled():
     assert is_settled({"txn_state": "CLEARED"})
     assert not is_settled({"txn_state": "POSTED"})
+
+
+def test_unknown_report_exclusion_is_quarantined_from_statistics_not_review():
+    row = {
+        "txn_state": "CLEARED",
+        "exclusion_flag": 2,
+        "poisons_statistics": 0,
+    }
+
+    assert not is_statistics_eligible(row)
+    assert is_statistics_eligible(
+        {"txn_state": "CLEARED", "exclusion_flag": 0, "poisons_statistics": 0}
+    )
 
 
 def test_unknown_optional_fields_keep_a_row_review_eligible_with_reasons():
