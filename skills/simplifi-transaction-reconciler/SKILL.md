@@ -87,7 +87,11 @@ Use `--packet-out` to choose another path. The packet is versioned, validated,
 deterministically ordered, read-only, and contains only normalized review
 evidence plus provenance; it excludes raw descriptors, account IDs, source
 paths, and credentials. It is the artifact passed to agent judgment. The
-runtime does not promote transaction history into reusable judgment examples.
+runtime loads only the explicitly promoted, sanitized cases from
+`references/examples/judgment-examples.md`, selects relevant cases
+deterministically, and includes them in the packet. The classifier prompt uses
+the same curated context; categorized transaction history is never promoted
+automatically into reusable examples.
 
 Use `--source api` for read-only API ingestion, or `probe`/`schema` for
 read-only diagnostics. Omit `--modified-after` for normal API ingestion to use

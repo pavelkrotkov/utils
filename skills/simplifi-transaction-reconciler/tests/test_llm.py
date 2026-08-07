@@ -1,7 +1,7 @@
 import json
 
 import pytest
-from simplifi_runtime.llm import PROMPT_VERSION, Usage, classify
+from simplifi_runtime.llm import PROMPT_VERSION, Usage, build_prompt, classify
 
 
 class FakeBackend:
@@ -85,3 +85,24 @@ def test_classification_proposals_include_prompt_provenance():
     assert proposals[0].prompt_version == PROMPT_VERSION
     assert proposals[0].prompt_hash
     assert proposals[0].prompt_hash == proposals[1].prompt_hash
+
+
+def test_prompt_uses_curated_decision_examples_without_transaction_history():
+    examples = [
+        {
+            "id": "judgment-1",
+            "title": "Projected versus real subscription",
+            "situation": "A recurring schedule looked too active.",
+            "evidence": "Future rows were projections.",
+            "proposal_or_escalation": "Separate forecast evidence.",
+            "human_decision": "Review only settled activity.",
+            "reusable_lesson": "A forecast is not a transaction.",
+        }
+    ]
+
+    prompt = build_prompt(["Shopping"], examples, _rows())
+
+    assert "CURATED JUDGMENT EXAMPLES" in prompt
+    assert "Projected versus real subscription" in prompt
+    assert "A forecast is not a transaction." in prompt
+    assert "Example  (-1.00, Checking)" not in prompt
