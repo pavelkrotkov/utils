@@ -137,6 +137,63 @@ def test_latest_successful_api_cursor_is_persisted(tmp_path: Path):
     store.close()
 
 
+def test_cursors_are_isolated_by_scope(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+    first = store.start_run("api", "dataset one")
+    store.record_run_scope(first, None, '{"dataset":"one"}')
+    store.finish_run(first, "success", 1, cursor_after="2026-08-06T12:00:00Z")
+    second = store.start_run("api", "dataset two")
+    store.record_run_scope(second, None, '{"dataset":"two"}')
+    store.finish_run(second, "success", 1, cursor_after="2026-01-01T00:00:00Z")
+    store.commit()
+
+    assert store.latest_cursor("api", '{"dataset":"one"}') == "2026-08-06T12:00:00Z"
+    assert store.latest_cursor("api", '{"dataset":"two"}') == "2026-01-01T00:00:00Z"
+    assert store.latest_cursor("api", '{"dataset":"three"}') is None
+    store.close()
+
+
+def test_unscoped_lookup_does_not_see_scoped_cursors(tmp_path: Path):
+    """`IS NULL` is a scope, not a wildcard — otherwise every legacy caller
+    would silently adopt whichever scope happened to run last."""
+    store = Store(tmp_path / "review.sqlite")
+    run_id = store.start_run("api", "scoped")
+    store.record_run_scope(run_id, None, '{"dataset":"one"}')
+    store.finish_run(run_id, "success", 1, cursor_after="2026-08-06T12:00:00Z")
+    store.commit()
+
+    assert store.latest_cursor("api") is None
+    assert store.has_unscoped_cursor("api") is False
+    store.close()
+
+
+def test_legacy_unscoped_cursor_is_visible_but_not_borrowed(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+    run_id = store.start_run("api", "pre-scoping run")
+    store.finish_run(run_id, "success", 1, cursor_after="2026-07-01T00:00:00Z")
+    store.commit()
+
+    assert store.has_unscoped_cursor("api") is True
+    assert store.latest_cursor("api", '{"dataset":"one"}') is None
+    assert store.latest_cursor("api") == "2026-07-01T00:00:00Z"
+    store.close()
+
+
+def test_record_run_scope_persists_scope_cursor_and_detail(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+    run_id = store.start_run("api", "unresolved")
+    store.record_run_scope(run_id, "2026-08-01T00:00:00Z", '{"dataset":"one"}', "api scope=…")
+    store.commit()
+
+    row = store.conn.execute(
+        "SELECT cursor_before, cursor_scope, source_detail FROM runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    assert row["cursor_before"] == "2026-08-01T00:00:00Z"
+    assert row["cursor_scope"] == '{"dataset":"one"}'
+    assert row["source_detail"] == "api scope=…"
+    store.close()
+
+
 def test_failed_run_never_advances_the_cursor(tmp_path: Path):
     """A later failure must not overwrite the last cursor that was earned."""
     store = Store(tmp_path / "review.sqlite")

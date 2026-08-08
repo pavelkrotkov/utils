@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from simplifi_runtime import decisions
+from simplifi_runtime import decisions, sync_scope
 from simplifi_runtime.cli import _latest_run, build_parser
 from simplifi_runtime.sources import api_source
 from simplifi_runtime.store import Store
@@ -16,10 +16,26 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
 
 class FixtureApiClient:
-    """Small read-only API double backed by the sanitized fixture JSON."""
+    """Small read-only API double backed by the sanitized fixture JSON.
 
-    def __init__(self, payload: dict):
+    Carries an identity (profile, dataset, token subject) because the cursor is
+    keyed by it; tests vary these to prove two scopes keep separate histories.
+    """
+
+    def __init__(
+        self,
+        payload: dict,
+        profile_id: str = "profile-1",
+        dataset_id: str = "dataset-1",
+        subject: str | None = "subject-1",
+    ):
         self.payload = payload
+        self.profile_id = profile_id
+        self.dataset_id = dataset_id
+        self.claims = {"sub": subject} if subject is not None else {}
+
+    def verify(self) -> dict:
+        return {"id": self.profile_id}
 
     def accounts(self) -> list[dict]:
         return self.payload["accounts"]
@@ -32,6 +48,15 @@ class FixtureApiClient:
     ) -> api_source.PageResult:
         del date_on_after, modified_after
         return api_source.PageResult(self.payload["transactions"], self.payload.get("asOf"))
+
+
+def _scoped_cursor(db: Path, client: FixtureApiClient, since: str | None = None) -> str | None:
+    """The cursor stored for exactly this client's identity and query scope."""
+    store = Store(db)
+    try:
+        return store.latest_cursor("api", sync_scope.api_scope(client, since=since).key())
+    finally:
+        store.close()
 
 
 def _current_rows(db: Path, source: str) -> list[dict]:
@@ -517,11 +542,7 @@ def test_api_run_without_as_of_does_not_advance_the_cursor(tmp_path: Path, monke
     _run_ingest(["ingest", "--source", "api", "--full-rescan", "--db", str(db)])
 
     assert _current_rows(db, "api")
-    store = Store(db)
-    try:
-        assert store.latest_cursor("api") is None
-    finally:
-        store.close()
+    assert _scoped_cursor(db, FixtureApiClient(payload)) is None
 
 
 def test_stale_as_of_does_not_rewind_an_earned_cursor(tmp_path: Path, monkeypatch):
@@ -531,25 +552,137 @@ def test_stale_as_of_does_not_rewind_an_earned_cursor(tmp_path: Path, monkeypatc
     floor has to come from the stored watermark, not from the request.
     """
     payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
-    monkeypatch.setattr(
-        api_source,
-        "client_from_env_or_age",
-        lambda verbose=False: FixtureApiClient(payload),
-    )
+    client = FixtureApiClient(payload)
+    monkeypatch.setattr(api_source, "client_from_env_or_age", lambda verbose=False: client)
     db = tmp_path / "api.sqlite"
     _run_ingest(["ingest", "--source", "api", "--full-rescan", "--db", str(db)])
 
-    store = Store(db)
-    try:
-        assert store.latest_cursor("api") == "2026-06-01T00:00:00Z"
-    finally:
-        store.close()
+    assert _scoped_cursor(db, client) == "2026-06-01T00:00:00Z"
 
     payload["asOf"] = "2026-05-01T00:00:00Z"
     _run_ingest(["ingest", "--source", "api", "--full-rescan", "--db", str(db)])
 
+    assert _scoped_cursor(db, client) == "2026-06-01T00:00:00Z"
+
+
+def _ingest_as(monkeypatch, client, db: Path, *extra: str) -> None:
+    monkeypatch.setattr(api_source, "client_from_env_or_age", lambda verbose=False: client)
+    _run_ingest(["ingest", "--source", "api", "--db", str(db), *extra])
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("dataset_id", "dataset-2"), ("profile_id", "profile-2"), ("subject", "subject-2")],
+    ids=["dataset", "profile", "auth"],
+)
+def test_each_identity_component_keeps_its_own_cursor_history(
+    tmp_path: Path, monkeypatch, field, value
+):
+    """A second identity must not inherit the first one's high-water mark.
+
+    Inheriting it is silent data loss: the second scope would request only what
+    changed after a mark earned against data it has never read, and everything
+    older would never be fetched. The run would still report success.
+    """
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    first = FixtureApiClient(payload)
+    db = tmp_path / "api.sqlite"
+    _ingest_as(monkeypatch, first, db, "--full-rescan")
+
+    assert _scoped_cursor(db, first) == "2026-06-01T00:00:00Z"
+
+    second = FixtureApiClient(payload, **{field: value})
+    assert _scoped_cursor(db, second) is None, "a different identity must start with no cursor"
+
+    _ingest_as(monkeypatch, second, db, "--full-rescan")
+
+    # Both histories exist and are independent.
+    assert _scoped_cursor(db, first) == "2026-06-01T00:00:00Z"
+    assert _scoped_cursor(db, second) == "2026-06-01T00:00:00Z"
+    with sqlite3.connect(db) as conn:
+        scopes = {row[0] for row in conn.execute("SELECT cursor_scope FROM runs")}
+    assert len(scopes) == 2
+
+
+def test_changing_the_since_scope_starts_a_separate_history(tmp_path: Path, monkeypatch):
+    """Widening --since must not be answered from a narrower window's cursor.
+
+    The inherited mark already sits past the newly requested history, so the
+    wider window would return nothing new and the run would look complete.
+    """
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    client = FixtureApiClient(payload)
+    db = tmp_path / "api.sqlite"
+    _ingest_as(monkeypatch, client, db, "--since", "2026-05-01")
+
+    assert _scoped_cursor(db, client, since="2026-05-01") == "2026-06-01T00:00:00Z"
+    assert _scoped_cursor(db, client, since="2026-01-01") is None
+    assert _scoped_cursor(db, client) is None, "an unbounded run is its own scope"
+
+    _ingest_as(monkeypatch, client, db, "--since", "2026-01-01")
+
+    assert _scoped_cursor(db, client, since="2026-05-01") == "2026-06-01T00:00:00Z"
+    assert _scoped_cursor(db, client, since="2026-01-01") == "2026-06-01T00:00:00Z"
+
+
+def test_incremental_run_reuses_only_its_own_scoped_cursor(tmp_path: Path, monkeypatch, capsys):
+    """The second run of a scope sends the cursor the first one earned."""
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    client = FixtureApiClient(payload)
+    db = tmp_path / "api.sqlite"
+    _ingest_as(monkeypatch, client, db, "--full-rescan")
+    capsys.readouterr()
+
+    _ingest_as(monkeypatch, client, db)
+
+    assert "requested=2026-06-01T00:00:00Z" in capsys.readouterr().out
+
+    # A different dataset under the same database gets no cursor at all.
+    other = FixtureApiClient(payload, dataset_id="dataset-2")
+    _ingest_as(monkeypatch, other, db)
+
+    assert "requested=none" in capsys.readouterr().out
+
+
+def test_legacy_unscoped_cursor_is_not_adopted_and_is_explained(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """A pre-scoping cursor cannot be attributed, so it is not reused.
+
+    Adopting it would apply a mark of unknown provenance to a known scope —
+    exactly the confusion scoping exists to prevent. One wider fetch is the
+    price, and the operator is told why rather than left to wonder.
+    """
+    db = tmp_path / "api.sqlite"
     store = Store(db)
-    try:
-        assert store.latest_cursor("api") == "2026-06-01T00:00:00Z"
-    finally:
-        store.close()
+    legacy = store.start_run("api", "api legacy run")
+    store.finish_run(legacy, "success", 1, cursor_after="2026-07-01T00:00:00Z")
+    store.commit()
+    store.close()
+
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    client = FixtureApiClient(payload)
+    _ingest_as(monkeypatch, client, db)
+    captured = capsys.readouterr()
+
+    assert "cursor from before cursor scoping" in captured.err
+    assert "requested=none" in captured.out
+    assert _scoped_cursor(db, client) == "2026-06-01T00:00:00Z"
+
+
+def test_cursor_scope_is_recorded_and_reported(tmp_path: Path, monkeypatch, capsys):
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    client = FixtureApiClient(payload)
+    db = tmp_path / "api.sqlite"
+    _ingest_as(monkeypatch, client, db, "--since", "2026-05-01")
+    out = capsys.readouterr().out
+
+    assert "INFO api cursor scope: source=api profile=" in out
+    assert "since=2026-05-01" in out
+
+    with sqlite3.connect(db) as conn:
+        scope, detail = conn.execute(
+            "SELECT cursor_scope, source_detail FROM runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    assert json.loads(scope) == json.loads(sync_scope.api_scope(client, since="2026-05-01").key())
+    assert "scope=" in detail

@@ -115,13 +115,63 @@ class Store:
             (_now(), outcome, row_count, cursor_after, run_id),
         )
 
-    def latest_cursor(self, source: str) -> str | None:
+    def record_run_scope(
+        self,
+        run_id: int,
+        cursor_before: str | None,
+        cursor_scope: str | None,
+        source_detail: str | None = None,
+    ) -> None:
+        """Attach scope and cursor provenance discovered after the run started.
+
+        The run row is opened before the API client exists, so that an auth or
+        network failure is still recorded as a failed run rather than vanishing.
+        The scope can only be resolved once that client is up, so it lands here
+        rather than in :meth:`start_run`.
+        """
+        if source_detail is None:
+            self.conn.execute(
+                "UPDATE runs SET cursor_before = ?, cursor_scope = ? WHERE id = ?",
+                (cursor_before, cursor_scope, run_id),
+            )
+            return
+        self.conn.execute(
+            "UPDATE runs SET cursor_before = ?, cursor_scope = ?, source_detail = ? WHERE id = ?",
+            (cursor_before, cursor_scope, source_detail, run_id),
+        )
+
+    def latest_cursor(self, source: str, cursor_scope: str | None = None) -> str | None:
+        """The newest earned cursor for exactly this source and scope.
+
+        `IS` rather than `=` so an unscoped lookup matches the unscoped rows
+        left by installations that predate cursor scoping — under `=` a NULL
+        never matches anything, including itself, and every legacy cursor would
+        be invisible even to the caller that owns it.
+
+        A scope that has never been synchronized returns None. That is the
+        correct answer, not a miss to paper over: this history has no
+        high-water mark, so the run must read its window from the start rather
+        than borrow a mark earned against different data.
+        """
         row = self.conn.execute(
-            "SELECT cursor_after FROM runs WHERE source = ? AND outcome = 'success' "
-            "AND cursor_after IS NOT NULL ORDER BY id DESC LIMIT 1",
-            (source,),
+            "SELECT cursor_after FROM runs WHERE source = ? AND cursor_scope IS ? "
+            "AND outcome = 'success' AND cursor_after IS NOT NULL ORDER BY id DESC LIMIT 1",
+            (source, cursor_scope),
         ).fetchone()
         return str(row["cursor_after"]) if row else None
+
+    def has_unscoped_cursor(self, source: str) -> bool:
+        """Whether an earned but unattributable cursor predates scoping.
+
+        Used only to explain the one-time full window after upgrading, so the
+        wider fetch reads as an expected migration step rather than a fault.
+        """
+        row = self.conn.execute(
+            "SELECT 1 FROM runs WHERE source = ? AND cursor_scope IS NULL "
+            "AND outcome = 'success' AND cursor_after IS NOT NULL LIMIT 1",
+            (source,),
+        ).fetchone()
+        return row is not None
 
     def latest_successful_run(self) -> tuple[int, str]:
         """Return the newest successful run, or ``(0, "unknown")`` when there is none."""

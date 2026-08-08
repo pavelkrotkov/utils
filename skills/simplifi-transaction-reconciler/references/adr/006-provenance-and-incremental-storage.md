@@ -40,6 +40,17 @@ so a stale replica or a clock rollback cannot rewind it and strand the sync in a
 window it re-reads forever. Record the requested cursor and the accepted marker
 on the run so an unexpected window can be diagnosed after the fact.
 
+A cursor is meaningless without the identity it was read against, so key it by
+that identity: who is asking (profile, authentication subject), what they are
+asking about (dataset), and how the question is bounded (explicit query scope).
+Changing any component selects a separate history. Keyed by source name alone,
+a second dataset or a widened query bound inherits a mark earned against
+different data and never fetches what precedes it — the failure is silent and
+the run reports success. Store identity components as digests: they are only
+ever compared, never read back. Cursors recorded before scoping cannot be
+attributed after the fact, so they are retained but never adopted; one wider
+re-read is the correct price, and it is reported rather than left to surprise.
+
 ## Consequences
 
 Re-ingestion is idempotent for unchanged observations, changes become visible,

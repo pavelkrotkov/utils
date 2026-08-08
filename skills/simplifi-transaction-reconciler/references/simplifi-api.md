@@ -153,6 +153,19 @@ safe: the request carried `modifiedAfter=<held cursor>`, so the server returned
 everything past that point whatever its marker claims. A full rescan takes the
 floor from the stored watermark, since it sends no `modifiedAfter` of its own;
 an explicit `--modified-after` is a deliberate rewind and becomes the floor.
+
+Cursors are keyed by the identity they were read against, not by source name.
+The scope covers the profile, the dataset, the token's subject, and the
+`--since` query bound; changing any of them selects a separate history. Keying
+by source alone lets a second dataset or a re-scoped `--since` inherit a
+high-water mark earned against different data, after which the run requests
+only what changed past that mark and never fetches the rest — silently, and
+reporting success. Identity components are stored as short digests, since they
+are only ever compared; `--since` is stored verbatim. The scope is written to
+`runs.cursor_scope` and reported by both `ingest` and `probe`. Cursors written
+before scoping existed keep a NULL scope, match no resolved scope, and are
+never adopted: the first run after upgrading re-reads its window once, says so,
+and earns a scoped cursor.
 The packaged CLI uses the last successful cursor by default; pass
 `ingest --source api --full-rescan` to omit `modifiedAfter` and rebuild the
 current API view after a missed window or derivation-rule change.

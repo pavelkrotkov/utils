@@ -33,6 +33,7 @@ from .semantics import (
 )
 from .sources.csv_source import SchemaError, SimplifiCsvSource
 from .store import Store
+from .sync_scope import SyncScope, api_scope
 
 
 def _positive_int(raw: str) -> int:
@@ -255,21 +256,18 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     store = Store(Path(args.db))
     cursor_before: str | None = None
     cursor_floor: str | None = None
+    cursor_scope: str | None = None
+    scope: SyncScope | None = None
     as_of: str | None = None
+    mode = "full-rescan" if args.full_rescan else "incremental"
     if args.source == "csv":
         detail = f"csv path={args.path or 'missing'}"
     else:
-        stored_cursor = store.latest_cursor("api")
-        cursor_before = None if args.full_rescan else args.modified_after or stored_cursor
-        # A full rescan sends no modifiedAfter, but the watermark it would be
-        # replacing still exists and must not be walked backwards. An explicit
-        # --modified-after is a deliberate rewind, so it becomes the floor
-        # itself rather than being vetoed by the stored value.
-        cursor_floor = cursor_before or stored_cursor
-        mode = "full-rescan" if args.full_rescan else "incremental"
-        detail = (
-            f"api since={args.since or 'all'} mode={mode} modified_after={cursor_before or 'all'}"
-        )
+        # The scope needs a live client, which does not exist yet — the run row
+        # is opened first so an auth failure is still recorded as a failed run.
+        # Cursor selection therefore happens after the client is up, and the
+        # resolved scope is written back onto the run.
+        detail = f"api since={args.since or 'all'} mode={mode} scope=unresolved"
     run_id = store.start_run(args.source, detail, cursor_before=cursor_before)
     store.commit()
 
@@ -297,6 +295,23 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 
         try:
             client = client_from_env_or_age(verbose=args.verbose)
+            scope = api_scope(client, since=args.since)
+            cursor_scope = scope.key()
+            legacy_cursor = store.has_unscoped_cursor("api")
+            stored_cursor = store.latest_cursor("api", cursor_scope)
+            cursor_before = None if args.full_rescan else args.modified_after or stored_cursor
+            # A full rescan sends no modifiedAfter, but the watermark it would
+            # be replacing still exists and must not be walked backwards. An
+            # explicit --modified-after is a deliberate rewind, so it becomes
+            # the floor itself rather than being vetoed by the stored value.
+            cursor_floor = cursor_before or stored_cursor
+            detail = (
+                f"api since={args.since or 'all'} mode={mode} "
+                f"modified_after={cursor_before or 'all'} scope={cursor_scope}"
+            )
+            store.record_run_scope(run_id, cursor_before, cursor_scope, detail)
+            store.commit()
+
             api_source = SimplifiApiSource(
                 client, date_on_after=args.since, modified_after=cursor_before
             )
@@ -307,6 +322,15 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             _finish_failed_run(store, run_id)
             store.close()
             return 1
+
+        if stored_cursor is None and legacy_cursor and not args.full_rescan:
+            print(
+                "WARNING this database holds a cursor from before cursor scoping, which "
+                "cannot be attributed to a profile/dataset/query scope after the fact. "
+                "This run re-reads its full window once and earns a scoped cursor; "
+                "later runs are incremental again.",
+                file=sys.stderr,
+            )
 
     cursor_after: str | None = None
     cursor_warning: str | None = None
@@ -330,8 +354,11 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 
     print(f"INFO run {run_id}: versions {dict(outcomes)}")
     if args.source == "api":
-        # Both halves of the exchange, so a surprising incremental window can be
-        # diagnosed from the log alone rather than by re-deriving it.
+        # Both halves of the exchange plus the identity they belong to, so a
+        # surprising incremental window can be diagnosed from the log alone
+        # rather than by re-deriving it.
+        if scope is not None:
+            print(f"INFO api cursor scope: {scope.describe()}")
         print(
             f"INFO api cursor: requested={cursor_before or 'none (full scan)'} "
             f"asOf={as_of or 'none'} recorded={cursor_after or 'unchanged'}"
@@ -829,6 +856,9 @@ def cmd_probe(args: argparse.Namespace) -> int:
         f"INFO dataset {client.dataset_id[:8]}... · {len(accounts)} accounts · "
         f"{len(logins)} connections"
     )
+    # Which cursor history this token and dataset would read and write. Without
+    # it, "why did that run refetch everything?" is unanswerable from outside.
+    print(f"INFO cursor scope: {api_scope(client, since=args.since).describe()}")
     healthy = True
     for login in logins:
         for health in _aggregator_health(login):
@@ -921,6 +951,7 @@ def build_parser() -> argparse.ArgumentParser:
     subs.set_defaults(func=cmd_subs)
 
     probe = sub.add_parser("probe", help="verify API authentication and connection reads")
+    probe.add_argument("--since", help="report the cursor scope for this dateOnAfter value")
     probe.add_argument("--verbose", action="store_true")
     probe.set_defaults(func=cmd_probe)
 
