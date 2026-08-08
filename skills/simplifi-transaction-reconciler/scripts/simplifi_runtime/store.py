@@ -15,6 +15,28 @@ from pathlib import Path
 ALGORITHM_VERSION = "0.1.0"
 RULESET_VERSION = "0.2.0"
 
+#: Run lifecycle. `started` is written when the row is created and is also what
+#: a run left behind by a killed process keeps forever — we never learned what
+#: happened to it, and inventing a conclusion would be worse than admitting
+#: that. `aborted` is reserved for interruptions the process itself observed
+#: (Ctrl-C, SIGTERM) and could record on the way out.
+RUN_STARTED = "started"
+RUN_SUCCEEDED = "succeeded"
+RUN_FAILED = "failed"
+RUN_ABORTED = "aborted"
+
+#: Only a terminal state may be written by `finish_run`.
+TERMINAL_RUN_STATES = frozenset({RUN_SUCCEEDED, RUN_FAILED, RUN_ABORTED})
+
+#: Legacy `outcome` mirror, derived from `state` so the two cannot drift.
+#: Nothing reads `outcome`; it is written only so an operator's existing ad-hoc
+#: query does not start returning nothing after an upgrade.
+_LEGACY_OUTCOME = {
+    RUN_SUCCEEDED: "success",
+    RUN_FAILED: "failure",
+    RUN_ABORTED: "failure",
+}
+
 #: Column order for `decision_record` inserts. Kept here rather than imported
 #: from `decisions` so the store stays free of validation dependencies.
 DECISION_RECORD_COLUMNS = (
@@ -105,16 +127,56 @@ class Store:
     def finish_run(
         self,
         run_id: int,
-        outcome: str,
+        state: str,
         row_count: int,
         cursor_after: str | None = None,
         complete_snapshot: bool = False,
-    ) -> None:
-        self.conn.execute(
-            "UPDATE runs SET finished_at = ?, outcome = ?, row_count = ?, cursor_after = ?, "
-            "complete_snapshot = ? WHERE id = ?",
-            (_now(), outcome, row_count, cursor_after, int(complete_snapshot), run_id),
+        error_class: str | None = None,
+        error_message: str | None = None,
+    ) -> bool:
+        """Move a run to a terminal state, recording why if it failed.
+
+        Returns whether the transition happened. Terminal means terminal: a run
+        that has already finished is left exactly as it is, and the caller is
+        told nothing changed.
+
+        That guard is load-bearing, not decorative. Anything raised *after* the
+        ingest committed — a `BrokenPipeError` from printing a summary into a
+        closed pipe is the everyday case — would otherwise reach the failure
+        path and rewrite a succeeded run as failed. The rollback that
+        accompanies it cannot take back the committed rows, so the result is a
+        database whose transaction rows are current and whose run says it
+        failed: analysis then rejects complete data, or attributes those rows
+        to some earlier run. Refusing the transition keeps the two consistent
+        however the code around it changes later.
+
+        Rejects a non-terminal or unknown state rather than storing it. A typo
+        like ``"success"`` would otherwise write a value no query matches, and
+        the run would be invisible to analysis while looking finished in the
+        table — the precise failure the lifecycle exists to prevent.
+        """
+        if state not in TERMINAL_RUN_STATES:
+            raise ValueError(
+                f"run state must be one of {sorted(TERMINAL_RUN_STATES)}, got {state!r}"
+            )
+        cur = self.conn.execute(
+            "UPDATE runs SET finished_at = ?, state = ?, outcome = ?, row_count = ?, "
+            "cursor_after = ?, complete_snapshot = ?, error_class = ?, error_message = ? "
+            "WHERE id = ? AND state = ?",
+            (
+                _now(),
+                state,
+                _LEGACY_OUTCOME[state],
+                row_count,
+                cursor_after,
+                int(complete_snapshot),
+                error_class,
+                error_message,
+                run_id,
+                RUN_STARTED,
+            ),
         )
+        return cur.rowcount > 0
 
     def record_run_scope(
         self,
@@ -156,7 +218,7 @@ class Store:
         """
         row = self.conn.execute(
             "SELECT cursor_after FROM runs WHERE source = ? AND cursor_scope IS ? "
-            "AND outcome = 'success' AND cursor_after IS NOT NULL ORDER BY id DESC LIMIT 1",
+            "AND state = 'succeeded' AND cursor_after IS NOT NULL ORDER BY id DESC LIMIT 1",
             (source, cursor_scope),
         ).fetchone()
         return str(row["cursor_after"]) if row else None
@@ -176,7 +238,7 @@ class Store:
         """
         row = self.conn.execute(
             "SELECT cursor_scope FROM runs WHERE source = ? AND complete_snapshot = 1 "
-            "AND outcome = 'success' ORDER BY id DESC LIMIT 1",
+            "AND state = 'succeeded' ORDER BY id DESC LIMIT 1",
             (source,),
         ).fetchone()
         if row is None:
@@ -192,7 +254,7 @@ class Store:
         """
         row = self.conn.execute(
             "SELECT 1 FROM runs WHERE source = ? AND cursor_scope IS NULL "
-            "AND outcome = 'success' AND cursor_after IS NOT NULL LIMIT 1",
+            "AND state = 'succeeded' AND cursor_after IS NOT NULL LIMIT 1",
             (source,),
         ).fetchone()
         return row is not None
@@ -200,9 +262,23 @@ class Store:
     def latest_successful_run(self) -> tuple[int, str]:
         """Return the newest successful run, or ``(0, "unknown")`` when there is none."""
         row = self.conn.execute(
-            "SELECT id, source FROM runs WHERE outcome = 'success' ORDER BY id DESC LIMIT 1"
+            "SELECT id, source FROM runs WHERE state = 'succeeded' ORDER BY id DESC LIMIT 1"
         ).fetchone()
         return (int(row["id"]), str(row["source"])) if row else (0, "unknown")
+
+    def latest_run_summary(self) -> dict | None:
+        """The newest run of any state, for explaining why analysis found none.
+
+        "No successful run" is not an actionable message on its own. Whether
+        the last attempt failed with a recorded error, is still running, or was
+        interrupted changes what the operator should do next, so the caller
+        needs the row rather than just its absence.
+        """
+        row = self.conn.execute(
+            "SELECT id, source, state, error_class, error_message FROM runs "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        return dict(row) if row is not None else None
 
     def begin_immediate(self) -> None:
         """Take the write lock now, so a concurrent ingest cannot slip in later.

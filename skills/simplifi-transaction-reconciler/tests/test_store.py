@@ -2,7 +2,13 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from simplifi_runtime.store import Store
+from simplifi_runtime.store import (
+    RUN_ABORTED,
+    RUN_FAILED,
+    RUN_STARTED,
+    RUN_SUCCEEDED,
+    Store,
+)
 
 
 def _record(transaction_id: str) -> dict:
@@ -118,11 +124,11 @@ def test_failed_run_is_audited_after_transaction_work_is_rolled_back(tmp_path: P
     store.upsert_version(run_id, _record("txn-1"))
 
     store.rollback()
-    store.finish_run(run_id, "failure", 0)
+    store.finish_run(run_id, RUN_FAILED, 0)
     store.commit()
 
-    run = store.conn.execute("SELECT outcome FROM runs WHERE id = ?", (run_id,)).fetchone()
-    assert run[0] == "failure"
+    run = store.conn.execute("SELECT state FROM runs WHERE id = ?", (run_id,)).fetchone()
+    assert run[0] == RUN_FAILED
     assert store.conn.execute("SELECT COUNT(*) FROM transaction_version").fetchone()[0] == 0
     store.close()
 
@@ -130,7 +136,7 @@ def test_failed_run_is_audited_after_transaction_work_is_rolled_back(tmp_path: P
 def test_latest_successful_api_cursor_is_persisted(tmp_path: Path):
     store = Store(tmp_path / "review.sqlite")
     run_id = store.start_run("api", "fixture", cursor_before="2026-08-01T00:00:00Z")
-    store.finish_run(run_id, "success", 2, cursor_after="2026-08-06T12:00:00Z")
+    store.finish_run(run_id, RUN_SUCCEEDED, 2, cursor_after="2026-08-06T12:00:00Z")
     store.commit()
 
     assert store.latest_cursor("api") == "2026-08-06T12:00:00Z"
@@ -141,10 +147,10 @@ def test_cursors_are_isolated_by_scope(tmp_path: Path):
     store = Store(tmp_path / "review.sqlite")
     first = store.start_run("api", "dataset one")
     store.record_run_scope(first, None, '{"dataset":"one"}')
-    store.finish_run(first, "success", 1, cursor_after="2026-08-06T12:00:00Z")
+    store.finish_run(first, RUN_SUCCEEDED, 1, cursor_after="2026-08-06T12:00:00Z")
     second = store.start_run("api", "dataset two")
     store.record_run_scope(second, None, '{"dataset":"two"}')
-    store.finish_run(second, "success", 1, cursor_after="2026-01-01T00:00:00Z")
+    store.finish_run(second, RUN_SUCCEEDED, 1, cursor_after="2026-01-01T00:00:00Z")
     store.commit()
 
     assert store.latest_cursor("api", '{"dataset":"one"}') == "2026-08-06T12:00:00Z"
@@ -159,7 +165,7 @@ def test_unscoped_lookup_does_not_see_scoped_cursors(tmp_path: Path):
     store = Store(tmp_path / "review.sqlite")
     run_id = store.start_run("api", "scoped")
     store.record_run_scope(run_id, None, '{"dataset":"one"}')
-    store.finish_run(run_id, "success", 1, cursor_after="2026-08-06T12:00:00Z")
+    store.finish_run(run_id, RUN_SUCCEEDED, 1, cursor_after="2026-08-06T12:00:00Z")
     store.commit()
 
     assert store.latest_cursor("api") is None
@@ -170,7 +176,7 @@ def test_unscoped_lookup_does_not_see_scoped_cursors(tmp_path: Path):
 def test_legacy_unscoped_cursor_is_visible_but_not_borrowed(tmp_path: Path):
     store = Store(tmp_path / "review.sqlite")
     run_id = store.start_run("api", "pre-scoping run")
-    store.finish_run(run_id, "success", 1, cursor_after="2026-07-01T00:00:00Z")
+    store.finish_run(run_id, RUN_SUCCEEDED, 1, cursor_after="2026-07-01T00:00:00Z")
     store.commit()
 
     assert store.has_unscoped_cursor("api") is True
@@ -198,10 +204,10 @@ def test_snapshot_owner_scope_reports_the_last_replacing_run(tmp_path: Path):
     store = Store(tmp_path / "review.sqlite")
     first = store.start_run("api", "scope one")
     store.record_run_scope(first, None, '{"dataset":"one"}')
-    store.finish_run(first, "success", 1, complete_snapshot=True)
+    store.finish_run(first, RUN_SUCCEEDED, 1, complete_snapshot=True)
     second = store.start_run("api", "scope two incremental")
     store.record_run_scope(second, None, '{"dataset":"two"}')
-    store.finish_run(second, "success", 1, complete_snapshot=False)
+    store.finish_run(second, RUN_SUCCEEDED, 1, complete_snapshot=False)
     store.commit()
 
     # The incremental run did not replace the snapshot, so ownership stands.
@@ -219,7 +225,7 @@ def test_snapshot_owner_scope_distinguishes_never_from_unscoped(tmp_path: Path):
     assert store.snapshot_owner_scope("api") == (False, None)
 
     run_id = store.start_run("api", "pre-scoping snapshot")
-    store.finish_run(run_id, "success", 1, complete_snapshot=True)
+    store.finish_run(run_id, RUN_SUCCEEDED, 1, complete_snapshot=True)
     store.commit()
 
     assert store.snapshot_owner_scope("api") == (True, None)
@@ -230,9 +236,9 @@ def test_failed_run_never_advances_the_cursor(tmp_path: Path):
     """A later failure must not overwrite the last cursor that was earned."""
     store = Store(tmp_path / "review.sqlite")
     good = store.start_run("api", "fixture", cursor_before=None)
-    store.finish_run(good, "success", 2, cursor_after="2026-08-06T12:00:00Z")
+    store.finish_run(good, RUN_SUCCEEDED, 2, cursor_after="2026-08-06T12:00:00Z")
     bad = store.start_run("api", "fixture", cursor_before="2026-08-06T12:00:00Z")
-    store.finish_run(bad, "failure", 0)
+    store.finish_run(bad, RUN_FAILED, 0)
     store.commit()
 
     assert store.latest_cursor("api") == "2026-08-06T12:00:00Z"
@@ -338,9 +344,9 @@ def test_latest_successful_run_ignores_unfinished_and_failed_runs(tmp_path: Path
     assert store.latest_successful_run() == (0, "unknown")
 
     good = store.start_run("csv", "good")
-    store.finish_run(good, "success", 1)
+    store.finish_run(good, RUN_SUCCEEDED, 1)
     failed = store.start_run("api", "bad")
-    store.finish_run(failed, "failure", 0)
+    store.finish_run(failed, RUN_FAILED, 0)
     store.start_run("api", "still running")
     store.commit()
 
@@ -393,3 +399,174 @@ def test_schema_migration_rolls_back_all_statements(tmp_path: Path):
             is None
         )
         assert conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 0
+
+
+def test_finish_run_rejects_a_state_outside_the_lifecycle(tmp_path: Path):
+    """A typo must fail loudly, not write a value no query matches.
+
+    Storing "success" would leave the run looking finished in the table while
+    being invisible to every reader — precisely the confusion the explicit
+    lifecycle exists to remove.
+    """
+    store = Store(tmp_path / "review.sqlite")
+    run_id = store.start_run("csv", "fixture")
+
+    for bad in ("success", "failure", RUN_STARTED, "", "SUCCEEDED"):
+        with pytest.raises(ValueError, match="run state must be one of"):
+            store.finish_run(run_id, bad, 0)
+    store.close()
+
+
+def test_a_new_run_starts_in_the_started_state(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+    run_id = store.start_run("csv", "fixture")
+    store.commit()
+
+    row = store.conn.execute("SELECT state FROM runs WHERE id = ?", (run_id,)).fetchone()
+    assert row["state"] == RUN_STARTED
+    store.close()
+
+
+def test_failed_run_records_its_cause(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+    run_id = store.start_run("api", "fixture")
+    store.finish_run(
+        run_id, RUN_FAILED, 0, error_class="AuthError", error_message="token expired; refresh it"
+    )
+    store.commit()
+
+    row = store.conn.execute(
+        "SELECT state, error_class, error_message FROM runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    assert (row["state"], row["error_class"]) == (RUN_FAILED, "AuthError")
+    assert "refresh it" in row["error_message"]
+    store.close()
+
+
+def test_legacy_outcome_mirrors_state_without_drifting(tmp_path: Path):
+    """`outcome` is written from `state` alone, so the two cannot disagree."""
+    store = Store(tmp_path / "review.sqlite")
+    for state, expected in (
+        (RUN_SUCCEEDED, "success"),
+        (RUN_FAILED, "failure"),
+        (RUN_ABORTED, "failure"),
+    ):
+        run_id = store.start_run("api", "fixture")
+        store.finish_run(run_id, state, 0)
+        row = store.conn.execute(
+            "SELECT state, outcome FROM runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        assert (row["state"], row["outcome"]) == (state, expected)
+    store.commit()
+    store.close()
+
+
+def test_aborted_and_failed_runs_are_both_excluded_from_analysis_input(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+    for state in (RUN_FAILED, RUN_ABORTED):
+        run_id = store.start_run("api", "fixture")
+        store.finish_run(run_id, state, 0, cursor_after="2026-08-06T12:00:00Z")
+    store.start_run("api", "still running")
+    store.commit()
+
+    assert store.latest_successful_run() == (0, "unknown")
+    # Nor may either contribute a cursor, whatever they managed to record.
+    assert store.latest_cursor("api") is None
+    store.close()
+
+
+def test_latest_run_summary_reports_the_newest_run_of_any_state(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+    good = store.start_run("csv", "fixture")
+    store.finish_run(good, RUN_SUCCEEDED, 1)
+    bad = store.start_run("api", "fixture")
+    store.finish_run(bad, RUN_FAILED, 0, error_class="ApiError", error_message="500")
+    store.commit()
+
+    summary = store.latest_run_summary()
+
+    assert summary is not None
+    assert (summary["id"], summary["state"], summary["source"]) == (bad, RUN_FAILED, "api")
+    assert summary["error_class"] == "ApiError"
+    store.close()
+
+
+def test_latest_run_summary_is_none_for_an_empty_database(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+
+    assert store.latest_run_summary() is None
+    store.close()
+
+
+def test_migration_backfills_state_from_legacy_outcome(tmp_path: Path):
+    """An upgraded database must classify its history, not lose it.
+
+    NULL becomes 'aborted' rather than 'started': every pre-migration run
+    belongs to a process that is long gone, and calling it "in progress" would
+    keep a dead run eligible forever.
+    """
+    db = tmp_path / "legacy.sqlite"
+    store = Store(db)
+    store.close()
+
+    # Rewind to the pre-lifecycle schema and write rows the old code would have.
+    with sqlite3.connect(db) as conn:
+        conn.execute("DELETE FROM schema_migrations WHERE name = '012_run_lifecycle.sql'")
+        conn.execute("DROP INDEX IF EXISTS idx_runs_state")
+        for table_column in ("state", "error_class", "error_message"):
+            conn.execute(f"ALTER TABLE runs DROP COLUMN {table_column}")
+        for outcome in ("success", "failure", None):
+            conn.execute(
+                "INSERT INTO runs (started_at, source, source_detail, algorithm_version,"
+                " ruleset_version, outcome) VALUES (?, ?, ?, ?, ?, ?)",
+                ("2026-01-01T00:00:00+00:00", "api", "legacy", "0.1.0", "0.2.0", outcome),
+            )
+
+    reopened = Store(db)
+    try:
+        states = [
+            row["state"] for row in reopened.conn.execute("SELECT state FROM runs ORDER BY id")
+        ]
+        assert states == [RUN_SUCCEEDED, RUN_FAILED, RUN_ABORTED]
+        # The successful legacy run stays usable; the other two never become input.
+        assert reopened.latest_successful_run()[1] == "api"
+    finally:
+        reopened.close()
+
+
+def test_a_terminal_run_cannot_be_transitioned_again(tmp_path: Path):
+    """Terminal means terminal, whatever calls in afterwards.
+
+    An error raised after the ingest committed reaches the failure path with a
+    rollback that can no longer take back the committed rows. Rewriting the run
+    as failed would leave current transaction rows beside a run claiming it
+    failed, so the transition is refused and the caller told nothing changed.
+    """
+    store = Store(tmp_path / "review.sqlite")
+    run_id = store.start_run("api", "fixture")
+
+    assert store.finish_run(run_id, RUN_SUCCEEDED, 9, cursor_after="2026-08-06T12:00:00Z") is True
+    assert store.finish_run(run_id, RUN_FAILED, 0, error_class="BrokenPipeError") is False
+
+    row = store.conn.execute(
+        "SELECT state, row_count, cursor_after, error_class FROM runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    assert row["state"] == RUN_SUCCEEDED
+    assert row["row_count"] == 9
+    assert row["cursor_after"] == "2026-08-06T12:00:00Z"
+    assert row["error_class"] is None
+    store.close()
+
+
+def test_a_started_run_transitions_exactly_once(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+    run_id = store.start_run("api", "fixture")
+
+    assert store.finish_run(run_id, RUN_FAILED, 0, error_class="ApiError") is True
+    assert store.finish_run(run_id, RUN_ABORTED, 0) is False
+
+    assert (
+        store.conn.execute("SELECT state FROM runs WHERE id = ?", (run_id,)).fetchone()["state"]
+        == RUN_FAILED
+    )
+    store.close()

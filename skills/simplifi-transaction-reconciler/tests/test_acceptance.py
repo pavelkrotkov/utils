@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import signal
 import sqlite3
 from pathlib import Path
 
@@ -10,7 +11,7 @@ import pytest
 from simplifi_runtime import decisions, sync_scope
 from simplifi_runtime.cli import _latest_run, build_parser
 from simplifi_runtime.sources import api_source
-from simplifi_runtime.store import Store
+from simplifi_runtime.store import RUN_ABORTED, RUN_FAILED, RUN_SUCCEEDED, Store
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
@@ -337,8 +338,8 @@ def test_an_ingest_racing_the_write_lock_fails_closed(tmp_path: Path, monkeypatc
         with sqlite3.connect(db) as conn:
             conn.execute(
                 "INSERT INTO runs (started_at, source, source_detail, algorithm_version,"
-                " ruleset_version, outcome, row_count) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                ("2026-06-16T00:00:00+00:00", "csv", "racing", "0.1.0", "0.2.0", "success", 1),
+                " ruleset_version, state, row_count) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ("2026-06-16T00:00:00+00:00", "csv", "racing", "0.1.0", "0.2.0", RUN_SUCCEEDED, 1),
             )
         monkeypatch.setattr(Store, "begin_immediate", original)
         original(self)
@@ -656,7 +657,7 @@ def test_legacy_unscoped_cursor_is_not_adopted_and_is_explained(
     db = tmp_path / "api.sqlite"
     store = Store(db)
     legacy = store.start_run("api", "api legacy run")
-    store.finish_run(legacy, "success", 1, cursor_after="2026-07-01T00:00:00Z")
+    store.finish_run(legacy, RUN_SUCCEEDED, 1, cursor_after="2026-07-01T00:00:00Z")
     store.commit()
     store.close()
 
@@ -757,7 +758,7 @@ def test_explicit_modified_after_is_not_described_as_a_full_window(
     db = tmp_path / "api.sqlite"
     store = Store(db)
     legacy = store.start_run("api", "api legacy run")
-    store.finish_run(legacy, "success", 1, cursor_after="2026-07-01T00:00:00Z")
+    store.finish_run(legacy, RUN_SUCCEEDED, 1, cursor_after="2026-07-01T00:00:00Z")
     store.commit()
     store.close()
 
@@ -789,3 +790,339 @@ def test_complete_snapshot_ownership_is_recorded(tmp_path: Path, monkeypatch):
         flags = [row[0] for row in conn.execute("SELECT complete_snapshot FROM runs ORDER BY id")]
     # Only the full rescan replaced the snapshot; the incremental run did not.
     assert flags == [1, 0]
+
+
+def _run_state(db: Path) -> dict:
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        return dict(
+            conn.execute(
+                "SELECT id, state, error_class, error_message, row_count, cursor_after "
+                "FROM runs ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        )
+
+
+class ExplodingApiClient(FixtureApiClient):
+    """A client that fails at the point the caller chooses."""
+
+    def __init__(self, payload: dict, error: BaseException):
+        super().__init__(payload)
+        self.error = error
+
+    def transactions(self, date_on_after=None, modified_after=None):
+        raise self.error
+
+
+def _ingest_expecting_failure(monkeypatch, client, db: Path) -> None:
+    monkeypatch.setattr(api_source, "client_from_env_or_age", lambda verbose=False: client)
+    args = build_parser().parse_args(["ingest", "--source", "api", "--db", str(db)])
+    args.func(args)
+
+
+def test_api_error_records_a_failed_run_with_its_cause(tmp_path: Path, monkeypatch, capsys):
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    db = tmp_path / "api.sqlite"
+    error = api_source.ApiError("/transactions returned 500. Usually a missing header")
+
+    _ingest_expecting_failure(monkeypatch, ExplodingApiClient(payload, error), db)
+    capsys.readouterr()
+
+    run = _run_state(db)
+    assert run["state"] == RUN_FAILED
+    assert run["error_class"] == "ApiError"
+    # A deliberate error already explains itself; it is stored verbatim.
+    assert "returned 500" in run["error_message"]
+    assert run["cursor_after"] is None
+
+
+def test_auth_error_records_its_own_class(tmp_path: Path, monkeypatch, capsys):
+    """The class is stored separately so failures can be counted by kind."""
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    db = tmp_path / "api.sqlite"
+
+    _ingest_expecting_failure(
+        monkeypatch, ExplodingApiClient(payload, api_source.AuthError("token expired")), db
+    )
+    capsys.readouterr()
+
+    assert _run_state(db)["error_class"] == "AuthError"
+
+
+def test_unexpected_exception_still_reaches_a_terminal_state(tmp_path: Path, monkeypatch, capsys):
+    """The headline bug: a surprise used to leave the run unfinished forever.
+
+    A schema drift surfaces as something nobody wrote an `except` for, so the
+    guard catches BaseException rather than a list of anticipated types.
+    """
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    db = tmp_path / "api.sqlite"
+    client = ExplodingApiClient(payload, KeyError("amount"))
+
+    monkeypatch.setattr(api_source, "client_from_env_or_age", lambda verbose=False: client)
+    args = build_parser().parse_args(["ingest", "--source", "api", "--db", str(db)])
+    with pytest.raises(KeyError):
+        args.func(args)
+    capsys.readouterr()
+
+    run = _run_state(db)
+    assert run["state"] == RUN_FAILED
+    assert run["error_class"] == "KeyError"
+    # An unexpected error carries context a bare `KeyError: 'amount'` does not.
+    assert "unexpected KeyError" in run["error_message"]
+    assert "no longer matches the shape" in run["error_message"]
+
+
+def test_interruption_is_recorded_as_aborted_not_failed(tmp_path: Path, monkeypatch, capsys):
+    """Someone stopping a run and a run breaking call for different responses."""
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    db = tmp_path / "api.sqlite"
+    client = ExplodingApiClient(payload, KeyboardInterrupt())
+
+    monkeypatch.setattr(api_source, "client_from_env_or_age", lambda verbose=False: client)
+    args = build_parser().parse_args(["ingest", "--source", "api", "--db", str(db)])
+    with pytest.raises(KeyboardInterrupt):
+        args.func(args)
+    capsys.readouterr()
+
+    run = _run_state(db)
+    assert run["state"] == RUN_ABORTED
+    assert run["error_class"] == "KeyboardInterrupt"
+    assert "interrupted before it finished" in run["error_message"]
+
+
+def test_persistence_failure_leaves_a_failed_run_and_no_rows(tmp_path: Path, monkeypatch, capsys):
+    """A write that dies mid-way must roll back and still be recorded."""
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    db = tmp_path / "api.sqlite"
+    client = FixtureApiClient(payload)
+    monkeypatch.setattr(api_source, "client_from_env_or_age", lambda verbose=False: client)
+
+    calls = {"n": 0}
+    original = Store.upsert_version
+
+    def failing_upsert(self, run_id, record):
+        calls["n"] += 1
+        if calls["n"] > 3:
+            raise sqlite3.OperationalError("database or disk is full")
+        return original(self, run_id, record)
+
+    monkeypatch.setattr(Store, "upsert_version", failing_upsert)
+    args = build_parser().parse_args(["ingest", "--source", "api", "--db", str(db)])
+    with pytest.raises(sqlite3.OperationalError):
+        args.func(args)
+    capsys.readouterr()
+
+    run = _run_state(db)
+    assert run["state"] == RUN_FAILED
+    assert run["error_class"] == "OperationalError"
+    assert run["cursor_after"] is None
+    assert _current_rows(db, "api") == [], "partial work must not survive"
+
+
+def test_schema_error_on_csv_records_a_failed_run(tmp_path: Path, capsys):
+    bad = tmp_path / "bad.csv"
+    bad.write_text("Nope,Not,A,Simplifi,Export\n1,2,3,4,5\n", encoding="utf-8")
+    db = tmp_path / "csv.sqlite"
+
+    args = build_parser().parse_args(["ingest", "--source", "csv", str(bad), "--db", str(db)])
+
+    assert args.func(args) == 1
+    capsys.readouterr()
+    run = _run_state(db)
+    assert run["state"] == RUN_FAILED
+    assert run["error_class"] == "SchemaError"
+
+
+def test_missing_csv_path_records_a_failed_run(tmp_path: Path, capsys):
+    db = tmp_path / "csv.sqlite"
+    missing = tmp_path / "nope.csv"
+    args = build_parser().parse_args(["ingest", "--source", "csv", str(missing), "--db", str(db)])
+
+    assert args.func(args) == 1
+    capsys.readouterr()
+    run = _run_state(db)
+    assert run["state"] == RUN_FAILED
+    assert run["error_class"] == "FileNotFoundError"
+
+
+def test_analysis_refuses_a_database_whose_only_run_failed(tmp_path: Path, monkeypatch, capsys):
+    """A failed run must never become analysis input, even implicitly."""
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    db = tmp_path / "api.sqlite"
+    error = api_source.ApiError("/transactions returned 500")
+    _ingest_expecting_failure(monkeypatch, ExplodingApiClient(payload, error), db)
+    capsys.readouterr()
+
+    args = build_parser().parse_args(
+        ["analyze", "--db", str(db), "--out", str(tmp_path / "r.html")]
+    )
+
+    assert args.func(args) == 1
+    err = capsys.readouterr().err
+    assert "failed" in err
+    assert "returned 500" in err, "the recorded cause should reach the operator"
+
+
+def test_analysis_refuses_an_unfinished_run(tmp_path: Path, capsys):
+    """A run left 'started' by a killed process is not analysis input."""
+    db = tmp_path / "api.sqlite"
+    store = Store(db)
+    store.start_run("api", "never finished")
+    store.commit()
+    store.close()
+
+    args = build_parser().parse_args(
+        ["analyze", "--db", str(db), "--out", str(tmp_path / "r.html")]
+    )
+
+    assert args.func(args) == 1
+    assert "has not finished" in capsys.readouterr().err
+
+
+def test_a_failed_run_does_not_hide_an_earlier_successful_one(tmp_path: Path, monkeypatch, capsys):
+    """Analysis falls back to the last good run rather than refusing outright."""
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    db = tmp_path / "api.sqlite"
+    good = FixtureApiClient(payload)
+    _ingest_as(monkeypatch, good, db, "--full-rescan")
+
+    error = api_source.ApiError("/transactions returned 500")
+    _ingest_expecting_failure(monkeypatch, ExplodingApiClient(payload, error), db)
+    capsys.readouterr()
+
+    args = build_parser().parse_args(
+        ["analyze", "--db", str(db), "--out", str(tmp_path / "r.html")]
+    )
+
+    assert args.func(args) == 0
+    with sqlite3.connect(db) as conn:
+        states = [row[0] for row in conn.execute("SELECT state FROM runs ORDER BY id")]
+    assert states == [RUN_SUCCEEDED, RUN_FAILED]
+
+
+def test_bookkeeping_failure_does_not_mask_the_original_error(tmp_path: Path, monkeypatch, capsys):
+    """Recording the failure must not replace the failure worth reading.
+
+    The database is one of the things that may be broken when this path runs,
+    so a SQLite error three frames from its cause must not become the story.
+    """
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    db = tmp_path / "api.sqlite"
+    original = api_source.ApiError("/transactions returned 500")
+    client = ExplodingApiClient(payload, original)
+    monkeypatch.setattr(api_source, "client_from_env_or_age", lambda verbose=False: client)
+
+    def broken_finish(*_args, **_kwargs):
+        raise sqlite3.OperationalError("attempt to write a readonly database")
+
+    monkeypatch.setattr(Store, "finish_run", broken_finish)
+    args = build_parser().parse_args(["ingest", "--source", "api", "--db", str(db)])
+
+    # The ApiError is an expected failure, so it still returns 1 rather than
+    # raising — and the bookkeeping problem is reported, not swallowed.
+    assert args.func(args) == 1
+    err = capsys.readouterr().err
+    assert "/transactions returned 500" in err
+    assert "could not record run" in err
+    assert "readonly database" in err
+
+
+def test_read_commands_migrate_a_legacy_database(tmp_path: Path, monkeypatch, capsys):
+    """`analyze` must be able to be the first command run after an upgrade.
+
+    Querying `runs.state` through a raw connection ran before any migration
+    could add the column, so a read-only command failed with `no such column`
+    — an error about our own schema, shown to someone who did nothing wrong.
+    """
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    db = tmp_path / "legacy.sqlite"
+    _ingest_as(monkeypatch, FixtureApiClient(payload), db, "--full-rescan")
+    capsys.readouterr()
+
+    # Rewind the database to the pre-lifecycle schema, as an upgrade would find it.
+    with sqlite3.connect(db) as conn:
+        conn.execute("DELETE FROM schema_migrations WHERE name = '012_run_lifecycle.sql'")
+        conn.execute("DROP INDEX IF EXISTS idx_runs_state")
+        for column in ("state", "error_class", "error_message"):
+            conn.execute(f"ALTER TABLE runs DROP COLUMN {column}")
+
+    args = build_parser().parse_args(
+        ["analyze", "--db", str(db), "--out", str(tmp_path / "r.html"), "--today", "2026-06-15"]
+    )
+
+    assert args.func(args) == 0
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT state FROM runs ORDER BY id").fetchone()[0] == RUN_SUCCEEDED
+
+
+def test_an_error_after_commit_does_not_unmake_a_successful_run(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """A broken pipe while printing must not rewrite a committed run as failed.
+
+    The rollback cannot take back committed rows, so flipping the run would
+    leave current transaction rows beside a run that claims it failed —
+    analysis would then reject complete data.
+    """
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    db = tmp_path / "api.sqlite"
+    client = FixtureApiClient(payload)
+    monkeypatch.setattr(api_source, "client_from_env_or_age", lambda verbose=False: client)
+
+    real_print = print
+    calls = {"n": 0}
+
+    def flaky_print(*print_args, **print_kwargs):
+        calls["n"] += 1
+        # Fail once the ingest has committed and is reporting its summary.
+        if calls["n"] > 1 and print_kwargs.get("file") is None:
+            raise BrokenPipeError("broken pipe")
+        real_print(*print_args, **print_kwargs)
+
+    monkeypatch.setattr("builtins.print", flaky_print)
+    args = build_parser().parse_args(["ingest", "--source", "api", "--db", str(db)])
+    with pytest.raises(BrokenPipeError):
+        args.func(args)
+    monkeypatch.undo()
+    capsys.readouterr()
+
+    run = _run_state(db)
+    assert run["state"] == RUN_SUCCEEDED, "a committed run must stay succeeded"
+    assert run["error_class"] is None
+    assert _current_rows(db, "api"), "its rows are legitimately current"
+
+
+def test_sigterm_is_recorded_as_aborted(tmp_path: Path, monkeypatch, capsys):
+    """SIGTERM ends a scheduled run far more often than Ctrl-C does.
+
+    Its default action terminates the process outright, so without an
+    installed handler the run sits at 'started' forever, indistinguishable
+    from one still in flight.
+    """
+    from simplifi_runtime import cli
+
+    assert cli.install_termination_handler()
+    # The installed handler is ours, so invoking it below is the same code path
+    # the kernel would enter on delivery.
+    assert signal.getsignal(signal.SIGTERM) is cli._raise_system_exit
+
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    db = tmp_path / "api.sqlite"
+
+    class TerminatedClient(FixtureApiClient):
+        def transactions(self, date_on_after=None, modified_after=None):
+            cli._raise_system_exit(signal.SIGTERM, None)  # what delivery does, minus the timing
+            raise AssertionError("SIGTERM handler must raise")
+
+    monkeypatch.setattr(
+        api_source, "client_from_env_or_age", lambda verbose=False: TerminatedClient(payload)
+    )
+    args = build_parser().parse_args(["ingest", "--source", "api", "--db", str(db)])
+    with pytest.raises(SystemExit):
+        args.func(args)
+    capsys.readouterr()
+
+    run = _run_state(db)
+    assert run["state"] == RUN_ABORTED
+    assert run["error_class"] == "SystemExit"
