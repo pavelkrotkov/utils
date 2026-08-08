@@ -133,7 +133,10 @@ because CSV exports do not expose settlement or projection state.
    provider transaction ID when available; use a content hash only as the
    fallback for ID-less exports. Record run/fetch state, counts, source hashes,
    current versions, and enough raw evidence to reproduce decisions. Advance
-   an incremental cursor only after a complete successful fetch.
+   an incremental cursor only after a complete successful fetch, and only to
+   the value the response itself declares it is current as of — never to a
+   maximum derived from the returned rows, which can jump past records the
+   provider had not yet published.
 4. **Normalize identity.** Preserve `raw`, deterministic `normalized`, stable
    lowercase `canonical`, and human-facing `display` values. Record rules that
    fired. Group merchants, history, recurring series, and collisions by

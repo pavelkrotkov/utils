@@ -29,6 +29,15 @@ source state, advance it only after a successful fetch, and retain a bounded
 full-scan/reconciliation path for recovery. A failed or partial fetch must not
 advance the cursor or be recorded as a complete run.
 
+The cursor comes from the response's own as-of marker, never from the records
+it returned. A maximum over the returned rows is not a coverage claim: it can
+exceed the point the provider had actually published to, and advancing to it
+skips the gap forever. When the provider supplies no usable marker, ingest the
+rows and leave the cursor where it is — re-reading an overlap is cheap and
+idempotent, while a skipped window is silent and permanent. Record the
+requested cursor and the accepted marker on the run so an unexpected window can
+be diagnosed after the fact.
+
 ## Consequences
 
 Re-ingestion is idempotent for unchanged observations, changes become visible,
