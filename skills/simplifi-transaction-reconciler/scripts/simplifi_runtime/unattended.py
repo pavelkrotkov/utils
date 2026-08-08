@@ -27,6 +27,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 #: Reason codes `semantics.assess_eligibility` can attach, mapped to what an
@@ -106,27 +107,31 @@ class Funnel:
 
     #: Rows read from the store for this source and run.
     input_rows: int = 0
-    #: Rows the eligibility rules admitted, across the whole input.
+    #: Rows the review-eligibility rules admitted — what the report may show at
+    #: all. Deliberately *not* the same as what gets scored: a row with no
+    #: settlement state is eligible for review and invisible to every analyzer.
     eligible_rows: int = 0
     #: Rows the as-of date bound removed, being dated after the analysis date.
     out_of_window_rows: int = 0
-    #: Rows that were both eligible and within the window — what was actually
-    #: considered. Every other input row is discarded, and `reason_counts` says
-    #: on what grounds.
+    #: Rows the deterministic analyzers actually scored. This is the number the
+    #: phrase "nothing met a review threshold" is entitled to be said about,
+    #: and it is smaller than `eligible_rows` whenever settlement is unknown.
     analyzed_rows: int = 0
-    #: Rows flagged for a human.
+    #: Rows flagged for a human, across *every* analyzer — prioritization and
+    #: recurring-charge findings alike. Counting only one of them would let a
+    #: report list findings while announcing that it had none.
     findings: int = 0
     #: Eligibility reason code -> count, over the input rows.
     reason_counts: Mapping[str, int] = field(default_factory=dict)
 
     @property
     def discarded_rows(self) -> int:
-        """Input that never reached consideration, for whatever reason.
+        """Input that never reached an analyzer, for whatever reason.
 
         Defined against `analyzed_rows` rather than against eligibility alone,
-        so a row lost to the date bound counts as discarded too. An operator
-        asking "how many of my transactions did this report actually look at"
-        is owed one number, not a subtraction they have to perform.
+        so rows lost to the date bound or to unknown settlement count too. An
+        operator asking "how many of my transactions did this report actually
+        look at" is owed one number, not a subtraction they have to perform.
         """
         return max(0, self.input_rows - self.analyzed_rows)
 
@@ -134,13 +139,23 @@ class Funnel:
     def ineligible_rows(self) -> int:
         return max(0, self.input_rows - self.eligible_rows)
 
+    @property
+    def unscored_eligible_rows(self) -> int:
+        """Visible for review, but scored by nothing.
+
+        The gap this exposes is the one that made the earlier version of this
+        funnel lie: a CSV export carries no settlement state, so every row is
+        review-eligible and none is statistics-eligible.
+        """
+        return max(0, self.eligible_rows - self.out_of_window_rows - self.analyzed_rows)
+
     def summary(self) -> str:
         """One line, suitable for a log a person skims once a week."""
         return (
-            f"input={self.input_rows} eligible={self.eligible_rows} "
+            f"input={self.input_rows} review_eligible={self.eligible_rows} "
             f"analyzed={self.analyzed_rows} discarded={self.discarded_rows} "
-            f"(ineligible={self.ineligible_rows} out_of_window={self.out_of_window_rows}) "
-            f"findings={self.findings}"
+            f"(ineligible={self.ineligible_rows} out_of_window={self.out_of_window_rows} "
+            f"unscored={self.unscored_eligible_rows}) findings={self.findings}"
         )
 
     def diagnosis(self) -> list[str]:
@@ -166,16 +181,30 @@ class Funnel:
                 f"All {self.input_rows:,} row(s) were ruled ineligible for review, so "
                 f"nothing could be flagged. This is a pipeline result, not a clean bill."
             )
-        elif not self.analyzed_rows:
+        elif not self.analyzed_rows and self.out_of_window_rows >= self.eligible_rows:
             lines.append(
                 f"{self.eligible_rows:,} row(s) were eligible but none survived the "
                 f"analysis date bound, so nothing was examined."
+            )
+        elif not self.analyzed_rows:
+            lines.append(
+                f"{self.eligible_rows:,} row(s) were visible for review but none were "
+                f"scored by any analyzer, because prioritization, merchant memory, "
+                f"staleness, and recurring-charge detection all require a confirmed "
+                f"settled state this source did not supply. Nothing was examined — "
+                f"this is a source limitation, not a clean bill."
             )
         else:
             lines.append(
                 f"{self.analyzed_rows:,} row(s) were examined and none met a review "
                 f"threshold. Nothing needing attention was found."
             )
+            if self.unscored_eligible_rows:
+                lines.append(
+                    f"{self.unscored_eligible_rows:,} further eligible row(s) were "
+                    f"visible but not scored, lacking a confirmed settled state; the "
+                    f"clean result above does not cover them."
+                )
         lines.extend(self.reason_lines())
         return lines
 
@@ -194,13 +223,26 @@ class Funnel:
 def build_funnel(
     *,
     rows: Sequence[Mapping[str, Any]],
-    analyzed: Sequence[Mapping[str, Any]],
+    within_window: Sequence[Mapping[str, Any]],
+    scored: Sequence[Mapping[str, Any]],
     findings: int,
 ) -> Funnel:
     """Measure the pipeline from the rows themselves.
 
-    `analyzed` is what the analysis actually looked at, so the difference
-    between it and `rows` is real loss rather than an estimate.
+    Three populations, and keeping them apart is the whole point:
+
+    * `rows` — everything read for this source.
+    * `within_window` — what survived the analysis date bound.
+    * `scored` — what the deterministic analyzers actually examined.
+
+    `scored` must come from the same predicate the analyzers use, not from
+    review eligibility. The two diverge exactly where it matters: a CSV export
+    carries no settlement state, so every row is eligible for review and *none*
+    is eligible for prioritization, memory, staleness, or recurring detection.
+    Counting review eligibility here would let the report announce that rows
+    were examined and nothing was found when nothing had been examined at all —
+    the false clean this module exists to prevent, produced by the module
+    meant to prevent it.
     """
     reason_counts = Counter()
     eligible = 0
@@ -209,15 +251,11 @@ def build_funnel(
         reason_counts.update(codes)
         if "eligible" in codes:
             eligible += 1
-    # Eligibility and the date bound are independent filters, and a row can
-    # fail both. Counting the intersection rather than subtracting each in turn
-    # is what keeps `discarded` from double-counting those rows.
-    considered = sum(1 for row in analyzed if "eligible" in _reason_codes(row))
     return Funnel(
         input_rows=len(rows),
         eligible_rows=eligible,
-        out_of_window_rows=max(0, len(rows) - len(analyzed)),
-        analyzed_rows=considered,
+        out_of_window_rows=max(0, len(rows) - len(within_window)),
+        analyzed_rows=len(scored),
         findings=findings,
         reason_counts=dict(reason_counts),
     )
@@ -244,10 +282,24 @@ class RunIdentity:
     cursor_before: str | None = None
     cursor_after: str | None = None
     complete_snapshot: bool = False
+    #: Every scope this source has succeeded under. More than one means the
+    #: analyzed rows are a mixture, because `transaction_version` is isolated
+    #: by source alone.
+    known_scopes: tuple[str, ...] = ()
 
     @property
     def dataset(self) -> str:
-        """The scope fingerprint, or an honest admission that there is none."""
+        """What the analyzed rows actually cover — not what one run covered.
+
+        Naming the latest run's scope here would be a lie whenever a database
+        holds more than one: the rows are selected by source, so a report can
+        contain scope A's transactions while claiming to be about scope B.
+        Until the stored state is scoped too (issue #136), the honest answer is
+        that the dataset is composite, and saying so is better than picking one
+        of the scopes and sounding certain.
+        """
+        if len(self.known_scopes) > 1:
+            return f"composite of {len(self.known_scopes)} scopes: " + ", ".join(self.known_scopes)
         return self.cursor_scope or "unscoped"
 
     def items(self) -> list[tuple[str, str]]:
@@ -262,12 +314,14 @@ class RunIdentity:
         ]
 
 
-def format_status(runs: Iterable[Mapping[str, Any]]) -> list[str]:
-    """Render run rows for `status`, newest per source first."""
+def format_status(runs: Iterable[Mapping[str, Any]], *, stale: Iterable[Any] = ()) -> list[str]:
+    """Render run rows for `status`, newest per schedule."""
+    stale_ids = {run.get("id") for run in stale}
     lines = []
     for run in runs:
         state = str(run.get("state") or "unknown")
-        marker = "OK " if state == "succeeded" else "!! "
+        healthy = state == "succeeded" and run.get("id") not in stale_ids
+        marker = "OK " if healthy else "!! "
         line = (
             f"{marker}{run.get('source', '?')}: run {run.get('id', '?')} {state}"
             f" started={run.get('started_at', '?')}"
@@ -278,8 +332,48 @@ def format_status(runs: Iterable[Mapping[str, Any]]) -> list[str]:
             f"→{run.get('cursor_after') or 'unchanged'}"
         )
         lines.append(line)
+        if run.get("id") in stale_ids:
+            lines.append("   stale: no run since this one, past the expected cadence")
         if run.get("error_class") or run.get("error_message"):
             lines.append(
                 f"   {run.get('error_class') or 'error'}: {run.get('error_message') or ''}".rstrip()
             )
     return lines
+
+
+def stale_runs(
+    runs: Iterable[Mapping[str, Any]], *, max_age_hours: float | None, now: datetime | None = None
+) -> list[Mapping[str, Any]]:
+    """Runs whose success is too old to mean the schedule is still firing.
+
+    A schedule that stops being invoked — cron removed, service manager
+    disabled, host retired — leaves its last run recorded as `succeeded`
+    forever. Every state check then passes while no ingest has happened for
+    weeks, which is the same false clean as an empty report: nothing looks
+    wrong because nothing is happening.
+
+    Only checkable against a stated expectation, which is why `max_age_hours`
+    has no default. There is no cadence this runtime can infer, and inventing
+    one would fail every interactive database that simply has not been touched
+    today.
+    """
+    if not max_age_hours:
+        return []
+    moment = now or datetime.now(timezone.utc)
+    cutoff = moment - timedelta(hours=float(max_age_hours))
+    stale = []
+    for run in runs:
+        stamp = _parse_timestamp(run.get("finished_at") or run.get("started_at"))
+        if stamp is not None and stamp < cutoff:
+            stale.append(run)
+    return stale
+
+
+def _parse_timestamp(raw: Any) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)

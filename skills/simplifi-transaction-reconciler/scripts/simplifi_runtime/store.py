@@ -301,20 +301,37 @@ class Store:
         "error_class, error_message"
     )
 
-    def latest_run_per_source(self) -> list[dict]:
-        """The newest run for each source, whatever state it reached.
+    def latest_run_per_schedule(self) -> list[dict]:
+        """The newest run for each (source, cursor scope) pair.
 
-        Per source rather than overall: an operator running both a CSV and an
-        API schedule needs to see that one of them stopped succeeding, and a
-        single global "latest run" would hide that behind whichever ran most
-        recently.
+        A schedule's identity is its source *and* its cursor scope, because
+        that is what the cursor itself is keyed by: two API schedules over
+        different profiles, datasets, tokens, or `--since` bounds keep separate
+        histories by design. Grouping by source alone would let a later success
+        for one of them bury a failure in the other, and `status` would report
+        healthy while a synchronization had been dead for weeks — which is the
+        exact silence these safeguards exist to break.
         """
         rows = self.conn.execute(
             f"SELECT {self.RUN_STATUS_COLUMNS} FROM runs WHERE id IN ("
-            "  SELECT MAX(id) FROM runs GROUP BY source"
-            ") ORDER BY source"
+            "  SELECT MAX(id) FROM runs GROUP BY source, IFNULL(cursor_scope, '')"
+            ") ORDER BY source, IFNULL(cursor_scope, '')"
         )
         return [dict(row) for row in rows]
+
+    def cursor_scopes(self, source: str) -> list[str]:
+        """Distinct cursor scopes a source has succeeded under.
+
+        Used to tell whether a report covers one dataset or several, since
+        `transaction_version` is isolated by source alone.
+        """
+        rows = self.conn.execute(
+            "SELECT DISTINCT cursor_scope FROM runs "
+            "WHERE source = ? AND state = ? AND cursor_scope IS NOT NULL "
+            "ORDER BY cursor_scope",
+            (source, RUN_SUCCEEDED),
+        )
+        return [row["cursor_scope"] for row in rows]
 
     def run_history(self, limit: int = 10, source: str | None = None) -> list[dict]:
         """Recent runs, newest first — the trail behind the current state."""

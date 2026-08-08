@@ -46,29 +46,67 @@ reviewed the payload (ADR-009). That is not a step a timer can perform, so the
 permission it grants does not transfer to one.
 
 **`status` makes failure visible without reading logs.** It reports the latest
-run *per source* — not the latest overall, which would hide a dead API schedule
-behind a healthy CSV one — with state, run ID, cursor scope, cursor movement,
-row count, and any recorded error. The exit code carries the same information
-for a monitor that parses nothing: `0` when every source's latest run
-succeeded, `1` when any did not, `2` when there is nothing to report. That last
-case is deliberately not success: a schedule that has never run looks identical
-to a healthy one if you only check for errors.
+run *per schedule*, where a schedule is identified by source **and cursor
+scope** — the same pair the cursor itself is keyed by. Grouping by source alone
+would let a later success for one API profile bury a failure in another, which
+is the same silence in a smaller box. Each line carries state, run ID, cursor
+scope, cursor movement, row count, and any recorded error. The exit code
+carries the same information for a monitor that parses nothing: `0` when every
+schedule's latest run succeeded, `1` when any did not, `2` when there is
+nothing to report. That last case is deliberately not success: a schedule that
+has never run looks identical to a healthy one if you only check for errors.
 
-**Reports identify what they are reports of.** Run ID, source, dataset (the
-cursor scope fingerprint), the cursor window covered, and whether the run was a
-complete snapshot or incremental. A periodic report that does not name its own
-inputs cannot be compared with last week's, and cannot be told apart from one
-produced against a different dataset.
+**A schedule that stops firing is a failure with no failed run.** If cron is
+removed or the host retired, the last run stays `succeeded` forever and every
+state check passes while no ingest happens for weeks. `--max-age-hours` states
+the expected cadence and makes an older latest run unhealthy. It has no default
+because there is no cadence this runtime can infer, and inventing one would
+fail every interactive database that simply has not been touched today — so
+when it is absent, `status` says so rather than implying a coverage it does not
+have.
+
+**Reports identify what they are reports of.** Run ID, source, dataset, the
+cursor window covered, and whether the run was a complete snapshot or
+incremental. A periodic report that does not name its own inputs cannot be
+compared with last week's, and cannot be told apart from one produced against a
+different dataset.
+
+The dataset field describes the *analyzed rows*, not the latest run. Those
+differ: `transaction_version` is isolated by source alone, so a database
+holding two cursor scopes produces a report containing both while only one run
+supplied the scope. Naming that run's scope would be a confident lie, so a
+multi-scope source is reported as a composite and the scopes are listed. Issue
+#136 would make the state itself scoped and this honest hedge unnecessary.
 
 **A zero result carries its own diagnosis.** The `Funnel` records how many rows
-entered, how many were eligible, how many survived the date bound, how many
-were analyzed, and how many findings resulted — measured at the points where
-rows are actually lost, not recomputed from the output, because a count derived
-from the output cannot describe what the output is missing. When there are no
-findings, the report says which of four things happened: nothing was read at
-all, everything was ineligible, everything fell outside the window, or the rows
-were genuinely examined and nothing met a threshold. Only the last is a clean
-bill, and it is the only one phrased as one.
+entered, how many were eligible for review, how many survived the date bound,
+how many were actually *scored*, and how many findings resulted — measured
+where rows are lost rather than recomputed from the output, because a count
+derived from the survivors cannot describe what is missing.
+
+The distinction between review-eligible and scored is load-bearing, and getting
+it wrong is how the first version of this funnel produced the very failure it
+was written to prevent. `assess_eligibility` marks a row eligible even when
+settlement is unknown — that is correct, since the row is still visible for
+review. But `prioritize.analyse`, merchant memory, staleness, and
+recurring-charge detection all require `is_statistics_eligible`, which requires
+a confirmed `CLEARED` state. A CSV export carries no settlement state at all,
+so every row is review-eligible and *none* is ever scored. Counting review
+eligibility as "analyzed" made the report announce that seven rows were
+examined and nothing was found when no analyzer had looked at any of them.
+`scored` therefore comes from the analyzers' own predicate.
+
+`findings` counts every analyzer's output, not just prioritization's.
+Recurring-charge findings appear in the same report, and counting one and not
+the other would let a report list a price hike above a sentence saying nothing
+was found.
+
+With no findings, the report says which of five things happened: nothing was
+read at all, everything was ineligible, everything fell outside the window,
+rows were visible but none could be scored, or rows were genuinely examined and
+nothing met a threshold. Only the last is a clean bill. When some rows were
+scored and others were not, the clean statement is qualified with what it does
+not cover.
 
 `discarded` is defined against what was analyzed rather than against
 eligibility alone, so a row lost to the date bound counts too, and rows failing

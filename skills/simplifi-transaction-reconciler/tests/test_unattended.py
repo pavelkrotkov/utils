@@ -314,7 +314,7 @@ def ineligible_row(reason="excluded_from_reports", **overrides):
 def test_the_funnel_counts_each_stage():
     rows = [eligible_row(), eligible_row(), ineligible_row()]
 
-    funnel = unattended.build_funnel(rows=rows, analyzed=rows, findings=1)
+    funnel = unattended.build_funnel(rows=rows, within_window=rows, scored=rows[:2], findings=1)
 
     assert funnel.input_rows == 3
     assert funnel.eligible_rows == 2
@@ -323,11 +323,10 @@ def test_the_funnel_counts_each_stage():
     assert funnel.findings == 1
 
 
-def test_rows_failing_both_filters_are_counted_once():
-    """Subtracting each filter in turn would double-count the overlap."""
+def test_rows_out_of_window_and_ineligible_are_each_counted():
     rows = [eligible_row(), ineligible_row(), ineligible_row()]
 
-    funnel = unattended.build_funnel(rows=rows, analyzed=rows[:2], findings=0)
+    funnel = unattended.build_funnel(rows=rows, within_window=rows[:2], scored=rows[:1], findings=0)
 
     assert funnel.analyzed_rows == 1
     assert funnel.discarded_rows == 2
@@ -336,13 +335,15 @@ def test_rows_failing_both_filters_are_counted_once():
 
 
 def test_findings_need_no_diagnosis():
-    funnel = unattended.build_funnel(rows=[eligible_row()], analyzed=[eligible_row()], findings=1)
+    rows = [eligible_row()]
+
+    funnel = unattended.build_funnel(rows=rows, within_window=rows, scored=rows, findings=1)
 
     assert funnel.diagnosis() == []
 
 
 def test_reading_nothing_at_all_is_distinguished_from_a_clean_result():
-    funnel = unattended.build_funnel(rows=[], analyzed=[], findings=0)
+    funnel = unattended.build_funnel(rows=[], within_window=[], scored=[], findings=0)
 
     assert "No transactions were read at all" in funnel.diagnosis()[0]
     assert "check `status`" in funnel.diagnosis()[0]
@@ -351,7 +352,9 @@ def test_reading_nothing_at_all_is_distinguished_from_a_clean_result():
 def test_everything_ineligible_is_not_reported_as_a_clean_bill():
     rows = [ineligible_row(), ineligible_row()]
 
-    diagnosis = unattended.build_funnel(rows=rows, analyzed=rows, findings=0).diagnosis()
+    diagnosis = unattended.build_funnel(
+        rows=rows, within_window=rows, scored=[], findings=0
+    ).diagnosis()
 
     assert "ruled ineligible" in diagnosis[0]
     assert "not a clean bill" in diagnosis[0]
@@ -360,7 +363,9 @@ def test_everything_ineligible_is_not_reported_as_a_clean_bill():
 def test_everything_out_of_window_says_so():
     rows = [eligible_row(), eligible_row()]
 
-    diagnosis = unattended.build_funnel(rows=rows, analyzed=[], findings=0).diagnosis()
+    diagnosis = unattended.build_funnel(
+        rows=rows, within_window=[], scored=[], findings=0
+    ).diagnosis()
 
     assert "none survived the analysis date bound" in diagnosis[0]
 
@@ -368,15 +373,44 @@ def test_everything_out_of_window_says_so():
 def test_a_genuinely_clean_result_says_so_plainly():
     rows = [eligible_row(), eligible_row()]
 
-    diagnosis = unattended.build_funnel(rows=rows, analyzed=rows, findings=0).diagnosis()
+    diagnosis = unattended.build_funnel(
+        rows=rows, within_window=rows, scored=rows, findings=0
+    ).diagnosis()
 
     assert "none met a review threshold" in diagnosis[0]
+
+
+def test_review_eligible_but_unscored_rows_are_not_a_clean_bill():
+    """A CSV export is eligible for review and invisible to every analyzer."""
+    rows = [eligible_row(), eligible_row()]
+
+    diagnosis = unattended.build_funnel(
+        rows=rows, within_window=rows, scored=[], findings=0
+    ).diagnosis()
+
+    assert "none were scored by any analyzer" in diagnosis[0]
+    assert "source limitation, not a clean bill" in diagnosis[0]
+    assert "none met a review threshold" not in "\n".join(diagnosis)
+
+
+def test_a_partial_clean_result_names_the_rows_it_does_not_cover():
+    rows = [eligible_row(), eligible_row(), eligible_row()]
+
+    diagnosis = unattended.build_funnel(
+        rows=rows, within_window=rows, scored=rows[:1], findings=0
+    ).diagnosis()
+    joined = "\n".join(diagnosis)
+
+    assert "none met a review threshold" in joined
+    assert "does not cover them" in joined
 
 
 def test_the_diagnosis_explains_each_reason_code():
     rows = [ineligible_row("unsupported_state"), ineligible_row("missing_required_field")]
 
-    diagnosis = unattended.build_funnel(rows=rows, analyzed=rows, findings=0).diagnosis()
+    diagnosis = unattended.build_funnel(
+        rows=rows, within_window=rows, scored=[], findings=0
+    ).diagnosis()
     joined = "\n".join(diagnosis)
 
     assert "not settled" in joined
@@ -387,7 +421,9 @@ def test_an_unrecognized_reason_code_is_still_reported():
     """A code we do not have prose for is still evidence."""
     rows = [ineligible_row("some_future_code")]
 
-    joined = "\n".join(unattended.build_funnel(rows=rows, analyzed=rows, findings=0).diagnosis())
+    joined = "\n".join(
+        unattended.build_funnel(rows=rows, within_window=rows, scored=[], findings=0).diagnosis()
+    )
 
     assert "some_future_code" in joined
 
@@ -424,3 +460,118 @@ def test_a_report_with_no_findings_explains_itself(ingested):
 
     html = (ingested / "report.html").read_text()
     assert "Why this report has no findings" in html
+
+
+# --- review findings, each named for the false clean it would have allowed ---
+
+
+def test_a_csv_report_does_not_claim_its_rows_were_examined(ingested):
+    """CSV carries no settlement state, so no analyzer scores any row."""
+    assert run(["analyze", "--today", "2026-06-15"]) == 0
+
+    html = (ingested / "report.html").read_text()
+    assert "none were scored by any analyzer" in html
+    assert "source limitation, not a clean bill" in html
+    assert "none met a review threshold" not in html
+
+
+def test_recurring_findings_count_as_findings():
+    """A report listing a price hike must not announce that it found nothing."""
+    rows = [eligible_row(), eligible_row()]
+
+    funnel = unattended.build_funnel(rows=rows, within_window=rows, scored=rows, findings=1)
+
+    assert funnel.findings == 1
+    assert funnel.diagnosis() == []
+
+
+def test_status_keeps_each_cursor_scope_separate(ingested, capsys):
+    """A later success for one scope must not bury a failure in another."""
+    db = ingested / "simplifi.sqlite"
+    store = Store(db)
+    try:
+        broken = store.start_run("api", "profile-a")
+        store.record_run_scope(broken, None, "scope-a")
+        store.finish_run(broken, RUN_FAILED, 0, error_class="ApiError", error_message="401")
+        store.commit()
+        healthy = store.start_run("api", "profile-b")
+        store.record_run_scope(healthy, None, "scope-b")
+        store.finish_run(healthy, RUN_SUCCEEDED, 12, cursor_after="2026-06-01T00:00:00Z")
+        store.commit()
+    finally:
+        store.close()
+
+    assert run(["status"]) == 1
+
+    captured = capsys.readouterr()
+    assert "scope=scope-a" in captured.out
+    assert "scope=scope-b" in captured.out
+    assert "scope scope-a" in captured.err
+
+
+def test_status_fails_when_a_schedule_stopped_firing(ingested, capsys):
+    """Every state stays `succeeded` forever if cron simply stops invoking."""
+    db = ingested / "simplifi.sqlite"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE runs SET started_at = ?, finished_at = ?",
+            ("2020-01-01T00:00:00+00:00", "2020-01-01T00:00:00+00:00"),
+        )
+
+    assert run(["status", "--max-age-hours", "24"]) == 1
+
+    captured = capsys.readouterr()
+    assert "stale: no run since this one" in captured.out
+    assert "has not run since" in captured.err
+
+
+def test_a_recent_run_is_not_stale(ingested):
+    assert run(["status", "--max-age-hours", "24"]) == 0
+
+
+def test_status_says_when_it_cannot_detect_a_stopped_schedule(ingested, capsys):
+    assert run(["status"]) == 0
+
+    assert "cannot be distinguished from a healthy one" in capsys.readouterr().out
+
+
+def test_stale_detection_is_off_without_a_stated_cadence():
+    runs = [{"id": 1, "finished_at": "2020-01-01T00:00:00+00:00"}]
+
+    assert unattended.stale_runs(runs, max_age_hours=None) == []
+
+
+def test_an_unparsable_timestamp_is_not_treated_as_stale():
+    """Refusing to guess beats reporting a failure we cannot substantiate."""
+    runs = [{"id": 1, "finished_at": "not a date"}]
+
+    assert unattended.stale_runs(runs, max_age_hours=1) == []
+
+
+def test_a_report_over_two_scopes_says_its_dataset_is_composite():
+    """Rows are isolated by source alone, so one scope name would be a lie."""
+    identity = unattended.RunIdentity(
+        run_id=4, source="api", cursor_scope="scope-b", known_scopes=("scope-a", "scope-b")
+    )
+
+    assert "composite of 2 scopes" in identity.dataset
+    assert "scope-a" in identity.dataset
+
+
+def test_a_single_scope_report_names_that_scope():
+    identity = unattended.RunIdentity(
+        run_id=4, source="api", cursor_scope="scope-a", known_scopes=("scope-a",)
+    )
+
+    assert identity.dataset == "scope-a"
+
+
+def test_the_transactions_card_reconciles_with_the_discard_count(ingested):
+    """The card was the post-date-filter count while discards used the input."""
+    assert run(["analyze", "--today", "2026-06-15"]) == 0
+
+    html = (ingested / "report.html").read_text()
+    assert "Eligible for review" in html
+    # 7 fixture rows, all within the window, none settled: nothing is scored.
+    assert "Transactions</div><div class=v>7" in html
+    assert "Discarded</div><div class=v>7" in html

@@ -757,6 +757,7 @@ def _run_identity(db: Path, run_id: int, source: str) -> unattended.RunIdentity:
     store = Store(db)
     try:
         run = store.run_by_id(run_id) or {}
+        scopes = store.cursor_scopes(source)
     finally:
         store.close()
     return unattended.RunIdentity(
@@ -766,6 +767,7 @@ def _run_identity(db: Path, run_id: int, source: str) -> unattended.RunIdentity:
         cursor_before=run.get("cursor_before"),
         cursor_after=run.get("cursor_after"),
         complete_snapshot=bool(run.get("complete_snapshot")),
+        known_scopes=tuple(scopes),
     )
 
 
@@ -791,7 +793,18 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     # Measured from the rows themselves at the points where they are actually
     # lost, so a zero result can say which stage consumed them rather than
     # leaving an operator to guess between "clean week" and "broken ingest".
-    funnel = unattended.build_funnel(rows=rows, analyzed=analysis_rows, findings=len(prioritized))
+    funnel = unattended.build_funnel(
+        rows=rows,
+        within_window=analysis_rows,
+        # The same predicate `prioritize.analyse` filters on, so the count
+        # describes what was actually scored rather than what was merely
+        # visible. The two diverge for any source without settlement state.
+        scored=[row for row in analysis_rows if is_statistics_eligible(row)],
+        # Every analyzer's findings, not only prioritization's: a report that
+        # lists a recurring-charge anomaly while announcing that nothing was
+        # found is the precise failure this funnel exists to catch.
+        findings=len(prioritized) + len(findings),
+    )
     identity = _run_identity(Path(args.db), run_id, source)
     print(f"INFO funnel: {funnel.summary()}")
     for line in funnel.diagnosis():
@@ -1308,7 +1321,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         return 2
     store = Store(db)
     try:
-        latest = store.latest_run_per_source()
+        latest = store.latest_run_per_schedule()
         history = store.run_history(limit=args.limit) if args.verbose else []
     finally:
         store.close()
@@ -1317,20 +1330,39 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"ERROR no runs recorded in {db}", file=sys.stderr)
         return 2
 
-    for line in unattended.format_status(latest):
+    stale = unattended.stale_runs(latest, max_age_hours=args.max_age_hours)
+    for line in unattended.format_status(latest, stale=stale):
         print(line)
     if history:
         print("\nRecent runs:")
         for line in unattended.format_status(history):
             print(f"  {line}")
-
-    unhealthy = [run for run in latest if run.get("state") != RUN_SUCCEEDED]
-    if unhealthy:
-        names = ", ".join(str(run.get("source")) for run in unhealthy)
+    if not args.max_age_hours:
+        # Said out loud, because the gap is invisible otherwise: without a
+        # stated cadence this command cannot tell a live schedule from one
+        # that stopped firing after its last success, and reporting healthy
+        # would be the same false clean the reports were taught to avoid.
         print(
-            f"ERROR the latest run did not succeed for: {names}",
-            file=sys.stderr,
+            "INFO no --max-age-hours given, so a schedule that stopped firing "
+            "after a success cannot be distinguished from a healthy one"
         )
+
+    failed = [run for run in latest if run.get("state") != RUN_SUCCEEDED]
+    if failed or stale:
+        for run in failed:
+            print(
+                f"ERROR the latest run for {run.get('source')} "
+                f"(scope {run.get('cursor_scope') or 'unscoped'}) did not succeed: "
+                f"{run.get('state')}",
+                file=sys.stderr,
+            )
+        for run in stale:
+            print(
+                f"ERROR {run.get('source')} (scope {run.get('cursor_scope') or 'unscoped'}) "
+                f"has not run since {run.get('finished_at') or run.get('started_at')}, "
+                f"which is older than the expected {args.max_age_hours}h cadence",
+                file=sys.stderr,
+            )
         return 1
     return 0
 
@@ -1470,6 +1502,14 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--db", default="simplifi.sqlite")
     status.add_argument("--limit", type=_positive_int, default=10)
     status.add_argument("--verbose", action="store_true", help="also list recent runs")
+    status.add_argument(
+        "--max-age-hours",
+        type=float,
+        help=(
+            "treat a schedule whose latest run is older than this as unhealthy, "
+            "so a job that stopped firing is not reported as succeeding"
+        ),
+    )
     _add_storage_args(status)
     status.set_defaults(func=cmd_status)
 

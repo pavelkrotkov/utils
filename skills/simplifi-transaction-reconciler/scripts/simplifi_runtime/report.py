@@ -120,9 +120,13 @@ def render(
         ("Inactive accounts", str(len(stale))),
     ]
     if funnel is not None:
+        # `rows` here is already date-bounded, so its length cannot be the
+        # input figure the other counts are computed against — showing it as
+        # "Transactions" alongside a discard count drawn from the full input
+        # gives an operator two numbers that do not reconcile.
         cards = [
-            cards[0],
-            ("Eligible", f"{funnel.eligible_rows:,}"),
+            ("Transactions", f"{funnel.input_rows:,}"),
+            ("Eligible for review", f"{funnel.eligible_rows:,}"),
             ("Analyzed", f"{funnel.analyzed_rows:,}"),
             ("Discarded", f"{funnel.discarded_rows:,}"),
             ("Findings", f"{funnel.findings:,}"),

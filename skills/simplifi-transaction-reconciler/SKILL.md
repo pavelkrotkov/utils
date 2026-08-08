@@ -319,11 +319,17 @@ payload, which a timer cannot do). All problems are reported together, so
 fixing a schedule takes one iteration.
 
 Use `status` for monitoring rather than log scraping. It reports the latest run
-**per source** — a dead API schedule stays visible behind a healthy CSV one —
-with state, run ID, cursor scope, cursor movement, row count, and any recorded
-error. Exit codes: `0` every source's latest run succeeded, `1` some did not,
-`2` nothing to report. The last is deliberately not success, since a schedule
-that has never run looks healthy if you only check for errors.
+**per schedule** — identified by source *and* cursor scope, the same pair the
+cursor is keyed by, so one API profile's success cannot bury another's failure
+— with state, run ID, cursor scope, cursor movement, row count, and any
+recorded error. Exit codes: `0` every schedule's latest run succeeded, `1` some
+did not, `2` nothing to report. The last is deliberately not success, since a
+schedule that has never run looks healthy if you only check for errors.
+
+Pass `--max-age-hours` to catch a schedule that stopped firing altogether. Its
+last run stays `succeeded` forever, so without a stated cadence no state check
+can tell it from a live one; `status` says as much when the flag is absent
+rather than implying coverage it does not have.
 
 ```bash
 uv run ./scripts/simplifi_transaction_reconciler.py ingest \
@@ -334,13 +340,23 @@ uv run ./scripts/simplifi_transaction_reconciler.py status --data-dir /path/to/d
 ```
 
 **Reports never present a false clean.** Every report identifies its own
-inputs — run ID, source, dataset scope, the cursor window covered, and whether
-the run was a complete snapshot — and carries input/eligible/analyzed/discarded
-counts. When there are no findings it says which of four things happened:
-nothing was read at all, everything was ineligible, everything fell outside the
-analysis date bound, or rows were genuinely examined and nothing met a
-threshold. Only the last is a clean bill and only it is phrased as one. See
-ADR-010.
+inputs — run ID, source, dataset, the cursor window covered, and whether the
+run was a complete snapshot — and carries input/eligible/analyzed/discarded
+counts. Since transaction state is isolated by source alone, a database holding
+several cursor scopes is reported as a composite dataset with the scopes
+listed, rather than being labelled with whichever run happened to be latest.
+
+Note that *eligible for review* and *analyzed* are different populations, and
+the gap between them matters: a CSV export carries no settlement state, so all
+its rows are review-eligible while none is ever scored by prioritization,
+merchant memory, staleness, or recurring detection. The report counts what was
+scored. With no findings it says which of five things happened: nothing was
+read, everything was ineligible, everything fell outside the date bound, rows
+were visible but none could be scored, or rows were genuinely examined and
+nothing met a threshold. Only the last is a clean bill, and when some rows went
+unscored the statement is qualified with what it does not cover. Findings count
+every analyzer, so a recurring-charge anomaly can never sit under a sentence
+saying nothing was found. See ADR-010.
 
 Re-running a schedule is idempotent in data and honest in provenance: a repeat
 ingest of the same input adds no versions but still records the run, because
