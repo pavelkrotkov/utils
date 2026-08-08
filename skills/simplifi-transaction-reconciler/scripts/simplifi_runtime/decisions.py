@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import artifacts
+
 PROPOSALS_TYPE = "simplifi.transaction.proposals"
 PROPOSALS_VERSION = "1"
 DECISIONS_TYPE = "simplifi.transaction.decisions"
@@ -717,9 +719,10 @@ def stage_decisions(document: Mapping[str, Any], path: Path) -> Path:
     the database commit instead of after it. A caller that cannot produce the
     artifact must not leave immutable records behind that it cannot retract.
     """
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = artifacts.ensure_parent(path)
     payload = json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    # `mkstemp` is already 0600; the staged file is renamed into place, so the
+    # published artifact keeps that mode rather than the umask's.
     descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     staged = Path(name)
     try:

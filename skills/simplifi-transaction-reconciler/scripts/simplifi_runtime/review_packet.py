@@ -16,6 +16,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from . import artifacts
 from .semantics import SOURCE_CAPABILITIES, assess_eligibility, is_projected
 from .store import ALGORITHM_VERSION, RULESET_VERSION
 
@@ -508,9 +509,7 @@ def validate_packet(packet: Mapping[str, Any]) -> None:
 def write_packet(packet: Mapping[str, Any], path: Path) -> None:
     """Validate and write a canonical, newline-terminated JSON packet."""
     validate_packet(packet)
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
+    artifacts.secure_write_text(
+        path,
         json.dumps(packet, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
     )
