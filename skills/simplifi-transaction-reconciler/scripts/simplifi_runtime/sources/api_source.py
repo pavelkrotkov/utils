@@ -28,6 +28,7 @@ import urllib.request
 import uuid
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from typing import NamedTuple
 
 from ..money import Money
 from ..normalize import normalize
@@ -57,6 +58,20 @@ class ApiError(RuntimeError):
 
 class AuthError(ApiError):
     """Token rejected. Distinct because it needs a human, not a retry."""
+
+
+class PageResult(NamedTuple):
+    """A completed collection walk plus the server's own point-in-time marker.
+
+    ``as_of`` is the response-level ``metaData.asOf``, which is what the server
+    says the payload is current as of. It is the authoritative next
+    synchronization cursor — not ``max(modifiedAt)`` over the rows, which is
+    only the newest thing that happened to come back and says nothing about
+    rows the server considered but did not return.
+    """
+
+    resources: list[dict]
+    as_of: str | None
 
 
 def decode_jwt_claims(token: str) -> dict:
@@ -168,7 +183,26 @@ class SimplifiApiClient:
         except TimeoutError as exc:
             raise ApiError(f"{path} timed out after {TIMEOUT}s") from exc
 
+    @staticmethod
+    def _page_as_of(metadata: dict) -> str | None:
+        """Read `metaData.asOf`, or None when it is absent or unusable.
+
+        Deliberately not an error. A missing or malformed `asOf` must stop the
+        cursor from advancing, but it does not make the rows we did fetch
+        wrong — they are still ingested, and the next run simply re-requests
+        from the last cursor that was trustworthy. Refetching an overlap is
+        cheap; skipping a window is not.
+        """
+        raw = metadata.get("asOf")
+        if not isinstance(raw, str) or not raw.strip():
+            return None
+        return raw.strip()
+
     def paginate(self, path: str, **params) -> list[dict]:
+        """Walk a collection and discard the response metadata."""
+        return self.walk(path, **params).resources
+
+    def walk(self, path: str, **params) -> PageResult:
         """Follow the server-supplied `metaData.nextLink` cursor to the end.
 
         HOW THIS WAS GOT WRONG, because the mistake is instructive. The first
@@ -195,11 +229,19 @@ class SimplifiApiClient:
 
         So: follow `nextLink` verbatim. It is the server's own opinion about
         where the next page starts, and it stays correct if the scheme changes.
+
+        Returns the rows together with the FIRST page's `metaData.asOf`. First,
+        not last, and that choice matters: a multi-page walk of a live feed can
+        span minutes, and the only instant the whole payload is guaranteed to
+        cover is the one the walk started from. Taking the last page's marker
+        would silently claim coverage of everything modified mid-walk.
         """
         out: list[dict] = []
         seen_ids: set[str] = set()
         next_path: str | None = None
         pages = 0
+        as_of: str | None = None
+        first_page = True
 
         while True:
             if next_path is None:
@@ -222,6 +264,13 @@ class SimplifiApiClient:
             metadata = page.get("metaData")
             if metadata is not None and not isinstance(metadata, dict):
                 raise ApiError(f"{path}: response metaData is not an object")
+            if first_page:
+                # Read asOf before the empty-response break below: an empty
+                # successful response is the normal "nothing changed since your
+                # cursor" answer, and its asOf is exactly the value that lets
+                # the next run skip the window we just proved to be quiet.
+                as_of = self._page_as_of(metadata or {})
+                first_page = False
             next_path = (metadata or {}).get("nextLink")
             if next_path is not None and not isinstance(next_path, str):
                 raise ApiError(f"{path}: response nextLink is not a string")
@@ -253,7 +302,7 @@ class SimplifiApiClient:
             pages += 1
             if pages > MAX_PAGES:
                 raise ApiError(f"{path}: exceeded {MAX_PAGES} pages; refusing to loop further")
-        return out
+        return PageResult(out, as_of)
 
     # --- identity -----------------------------------------------------------
 
@@ -284,10 +333,14 @@ class SimplifiApiClient:
 
     def transactions(
         self, date_on_after: str | None = None, modified_after: str | None = None
-    ) -> list[dict]:
-        return self.paginate(
-            "/transactions", dateOnAfter=date_on_after, modifiedAfter=modified_after
-        )
+    ) -> PageResult:
+        """Fetch transactions with the server's `asOf` marker attached.
+
+        Returns a :class:`PageResult` rather than a bare list because the
+        caller needs the response-level marker to advance its cursor, and
+        rediscovering it from the rows is precisely the mistake this replaces.
+        """
+        return self.walk("/transactions", dateOnAfter=date_on_after, modifiedAfter=modified_after)
 
 
 class SimplifiApiSource:
@@ -304,13 +357,19 @@ class SimplifiApiSource:
         self.client = client or SimplifiApiClient()
         self.date_on_after = date_on_after
         self.modified_after = modified_after
+        #: Response-level `metaData.asOf` from the last :meth:`fetch`. None
+        #: until a fetch completes, and None afterwards when the server did not
+        #: supply a usable marker — in which case the caller must not advance.
+        self.as_of: str | None = None
 
     def fetch(self) -> list[dict]:
         accounts = {a["id"]: a for a in self.client.accounts()}
         categories = {c["id"]: c for c in self.client.categories()}
         account_names = {a.get("name", "") for a in accounts.values()} - {""}
 
-        raw = self.client.transactions(self.date_on_after, self.modified_after)
+        page = self.client.transactions(self.date_on_after, self.modified_after)
+        self.as_of = page.as_of
+        raw = page.resources
         return [
             self._tombstone(t)
             if t.get("isDeleted")
@@ -529,11 +588,13 @@ def schema_report(client: SimplifiApiClient, sample: int = 400) -> str:
 
     accounts = {a["id"]: a for a in client.accounts()}
     categories = {c["id"]: c for c in client.categories()}
-    all_txns = client.transactions()
+    transactions = client.transactions()
+    all_txns = transactions.resources
     txns = all_txns[:sample]
 
     lines = [
         f"transactions fetched : {len(all_txns)}",
+        f"response metaData.asOf: {transactions.as_of or '(absent or unusable)'}",
         f"accounts             : {len(accounts)}",
         f"categories           : {len(categories)}",
         "",
@@ -676,6 +737,7 @@ def client_from_env_or_age(verbose: bool = False) -> SimplifiApiClient:
 __all__ = [
     "ApiError",
     "AuthError",
+    "PageResult",
     "SimplifiApiClient",
     "SimplifiApiSource",
     "client_from_env_or_age",

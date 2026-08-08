@@ -48,28 +48,69 @@ def _positive_int(raw: str) -> int:
 MAX_CURSOR_FUTURE_SKEW = timedelta(minutes=5)
 
 
-def _parse_modified_at(raw: str) -> datetime:
+def _parse_cursor_timestamp(raw: str) -> datetime:
     value = str(raw).strip()
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
-        raise ValueError(f"invalid modifiedAt timestamp: {value!r}") from exc
+        raise ValueError(f"invalid cursor timestamp: {value!r}") from exc
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     if parsed > datetime.now(timezone.utc) + MAX_CURSOR_FUTURE_SKEW:
-        raise ValueError(f"modifiedAt timestamp is too far in the future: {value!r}")
+        raise ValueError(f"cursor timestamp is too far in the future: {value!r}")
     return parsed
 
 
-def _latest_modified_at(records: list[dict], fallback: str | None) -> str | None:
-    values = [
-        (str(row["modified_at"]), _parse_modified_at(row["modified_at"]))
-        for row in records
-        if row.get("modified_at")
-    ]
-    if fallback:
-        values.append((fallback, _parse_modified_at(fallback)))
-    return max(values, key=lambda item: item[1])[0] if values else None
+def _next_cursor(as_of: str | None, floor: str | None = None) -> tuple[str | None, str | None]:
+    """Turn the response's `metaData.asOf` into the next cursor, or refuse to.
+
+    Returns ``(cursor, warning)``. A None cursor leaves ``cursor_after`` unset
+    on the run, so :meth:`Store.latest_cursor` keeps returning the last value
+    that was actually trustworthy and the following run re-requests the window.
+
+    This replaces advancing by ``max(modifiedAt)`` over the returned rows. That
+    was wrong in a way that loses data rather than merely being imprecise: the
+    rows are what the server chose to return, so the maximum over them can sit
+    *ahead* of records the server has not yet made visible, and the next
+    request skips straight past them. ``asOf`` is the server's own statement of
+    what the payload covers, which is the only claim we are entitled to make.
+
+    ``floor`` is the cursor this run already stood on. The cursor is a
+    watermark and only ever moves forward: a stale read replica or a clock
+    rollback can hand back an older but perfectly well-formed ``asOf``, and
+    recording it would drag the watermark backwards. That is not merely a
+    wasted refetch — if the replica stays behind, every run rewinds again and
+    the incremental sync never converges. Keeping the floor is also safe:
+    the request was made with ``modifiedAfter=floor``, so the server returned
+    everything it had past that point regardless of what its marker claims.
+    """
+    if not as_of:
+        return None, (
+            "API response did not supply a usable metaData.asOf; the synchronization "
+            "cursor was left unchanged and the next run will re-request this window"
+        )
+    try:
+        parsed = _parse_cursor_timestamp(as_of)
+    except ValueError as exc:
+        return None, (
+            f"{exc} in response metaData.asOf; the synchronization cursor was left "
+            "unchanged and the next run will re-request this window"
+        )
+    if floor:
+        try:
+            parsed_floor = _parse_cursor_timestamp(floor)
+        except ValueError:
+            # An unusable floor cannot order anything, so it cannot veto. The
+            # marker we did parse is still the best claim available.
+            return as_of, None
+        if parsed < parsed_floor:
+            return None, (
+                f"API response metaData.asOf {as_of!r} predates the cursor this run "
+                f"already held ({floor!r}), which suggests a stale replica or a clock "
+                "rollback; the synchronization cursor was left unchanged rather than "
+                "moved backwards"
+            )
+    return as_of, None
 
 
 def _aggregator_health(
@@ -213,12 +254,18 @@ def _ensure_model_key(model: str, verbose: bool) -> None:
 def cmd_ingest(args: argparse.Namespace) -> int:
     store = Store(Path(args.db))
     cursor_before: str | None = None
+    cursor_floor: str | None = None
+    as_of: str | None = None
     if args.source == "csv":
         detail = f"csv path={args.path or 'missing'}"
     else:
-        cursor_before = (
-            None if args.full_rescan else args.modified_after or store.latest_cursor("api")
-        )
+        stored_cursor = store.latest_cursor("api")
+        cursor_before = None if args.full_rescan else args.modified_after or stored_cursor
+        # A full rescan sends no modifiedAfter, but the watermark it would be
+        # replacing still exists and must not be walked backwards. An explicit
+        # --modified-after is a deliberate rewind, so it becomes the floor
+        # itself rather than being vetoed by the stored value.
+        cursor_floor = cursor_before or stored_cursor
         mode = "full-rescan" if args.full_rescan else "incremental"
         detail = (
             f"api since={args.since or 'all'} mode={mode} modified_after={cursor_before or 'all'}"
@@ -250,14 +297,21 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 
         try:
             client = client_from_env_or_age(verbose=args.verbose)
-            records = SimplifiApiSource(
+            api_source = SimplifiApiSource(
                 client, date_on_after=args.since, modified_after=cursor_before
-            ).fetch()
+            )
+            records = api_source.fetch()
+            as_of = api_source.as_of
         except (SecretsError, ApiError) as exc:
             print(f"ERROR {exc}", file=sys.stderr)
             _finish_failed_run(store, run_id)
             store.close()
             return 1
+
+    cursor_after: str | None = None
+    cursor_warning: str | None = None
+    if args.source == "api":
+        cursor_after, cursor_warning = _next_cursor(as_of, cursor_floor)
 
     try:
         outcomes = Counter(store.upsert_version(run_id, record) for record in records)
@@ -266,14 +320,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         store.record_accounts(
             {r["account_name"] for r in records if not r.get("is_deleted") and r["account_name"]}
         )
-        store.finish_run(
-            run_id,
-            "success",
-            len(records),
-            cursor_after=(
-                _latest_modified_at(records, cursor_before) if args.source == "api" else None
-            ),
-        )
+        store.finish_run(run_id, "success", len(records), cursor_after=cursor_after)
         store.commit()
     except BaseException:
         _finish_failed_run(store, run_id)
@@ -282,6 +329,15 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         store.close()
 
     print(f"INFO run {run_id}: versions {dict(outcomes)}")
+    if args.source == "api":
+        # Both halves of the exchange, so a surprising incremental window can be
+        # diagnosed from the log alone rather than by re-deriving it.
+        print(
+            f"INFO api cursor: requested={cursor_before or 'none (full scan)'} "
+            f"asOf={as_of or 'none'} recorded={cursor_after or 'unchanged'}"
+        )
+        if cursor_warning:
+            print(f"WARNING {cursor_warning}", file=sys.stderr)
     _print_summary(records, args.source)
     print(f"INFO wrote {args.db}")
     return 0

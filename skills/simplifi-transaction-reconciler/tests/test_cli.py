@@ -13,9 +13,9 @@ from simplifi_runtime.cli import (
     _ensure_model_key,
     _is_complete_snapshot,
     _known_categories,
-    _latest_modified_at,
     _latest_run,
     _model_taxonomy,
+    _next_cursor,
     build_parser,
 )
 from simplifi_runtime.store import Store
@@ -105,13 +105,67 @@ def test_snapshot_retirement_is_limited_to_complete_imports():
     assert not _is_complete_snapshot(api_partial_args)
 
 
-def test_modified_at_cursor_rejects_invalid_values():
-    try:
-        _latest_modified_at([{"modified_at": "not-a-timestamp"}], None)
-    except ValueError as exc:
-        assert "invalid modifiedAt timestamp" in str(exc)
-    else:
-        raise AssertionError("accepted an invalid modifiedAt cursor")
+def test_response_as_of_becomes_the_next_cursor():
+    cursor, warning = _next_cursor("2026-08-06T12:00:00Z")
+
+    assert cursor == "2026-08-06T12:00:00Z"
+    assert warning is None
+
+
+def test_missing_as_of_leaves_the_cursor_unchanged():
+    cursor, warning = _next_cursor(None)
+
+    assert cursor is None
+    assert warning is not None and "metaData.asOf" in warning
+
+
+def test_malformed_as_of_leaves_the_cursor_unchanged():
+    cursor, warning = _next_cursor("not-a-timestamp")
+
+    assert cursor is None
+    assert warning is not None and "invalid cursor timestamp" in warning
+
+
+def test_future_as_of_leaves_the_cursor_unchanged():
+    cursor, warning = _next_cursor("2999-01-01T00:00:00Z")
+
+    assert cursor is None
+    assert warning is not None and "too far in the future" in warning
+
+
+def test_as_of_that_predates_the_held_cursor_is_refused():
+    """A stale replica must not drag the watermark backwards.
+
+    Without this the sync never converges: each rewind makes the next run
+    re-request a wider window, which the same stale replica rewinds again.
+    """
+    cursor, warning = _next_cursor("2026-08-01T00:00:00Z", "2026-08-06T12:00:00Z")
+
+    assert cursor is None
+    assert warning is not None and "predates the cursor" in warning
+
+
+def test_as_of_equal_to_the_held_cursor_is_accepted():
+    """Standing still is not moving backwards."""
+    cursor, warning = _next_cursor("2026-08-06T12:00:00Z", "2026-08-06T12:00:00Z")
+
+    assert cursor == "2026-08-06T12:00:00Z"
+    assert warning is None
+
+
+def test_as_of_newer_than_the_held_cursor_advances():
+    cursor, warning = _next_cursor("2026-08-06T12:00:00Z", "2026-08-01T00:00:00Z")
+
+    assert cursor == "2026-08-06T12:00:00Z"
+    assert warning is None
+
+
+def test_unusable_floor_cannot_veto_a_valid_as_of():
+    """A floor that cannot be ordered cannot outrank anything."""
+    cursor, warning = _next_cursor("2026-08-06T12:00:00Z", "not-a-timestamp")
+
+    assert cursor == "2026-08-06T12:00:00Z"
+    assert warning is None
 
 
 def test_ingest_records_failed_run_for_missing_csv(tmp_path):

@@ -132,6 +132,27 @@ window: the app syncs broadly, caches, and filters locally. The API's real
 incremental cursor is `modifiedAfter`; persist it with fetch provenance and
 advance it only after a complete successful fetch. A failed or partial fetch
 must not advance the cursor. Keep a deliberate full-scan/reconciliation path.
+
+The next cursor value is the response-level `metaData.asOf`, taken from the
+first page of a walk — the server's own statement of what the payload covers,
+at the instant the walk began. Do not derive it from the returned rows:
+`max(modifiedAt)` describes only what came back, so it can sit ahead of records
+the server had not yet published, and the next request skips them permanently.
+A first page whose `asOf` is absent, blank, non-string, unparseable, or in the
+future leaves the cursor unchanged; the rows are still ingested and the next
+run re-requests the window. An empty successful response is the normal
+"nothing changed" answer and its `asOf` is a usable cursor. Runs record both
+halves: the requested cursor in `runs.cursor_before` and the accepted `asOf` in
+`runs.cursor_after`.
+
+The cursor is a watermark and only moves forward. A stale read replica or a
+clock rollback can return an older but well-formed `asOf`; recording it is
+refused, because a persistently behind replica would otherwise rewind on every
+run and the incremental sync would never converge. Keeping the held cursor is
+safe: the request carried `modifiedAfter=<held cursor>`, so the server returned
+everything past that point whatever its marker claims. A full rescan takes the
+floor from the stored watermark, since it sends no `modifiedAfter` of its own;
+an explicit `--modified-after` is a deliberate rewind and becomes the floor.
 The packaged CLI uses the last successful cursor by default; pass
 `ingest --source api --full-rescan` to omit `modifiedAfter` and rebuild the
 current API view after a missed window or derivation-rule change.

@@ -137,6 +137,19 @@ def test_latest_successful_api_cursor_is_persisted(tmp_path: Path):
     store.close()
 
 
+def test_failed_run_never_advances_the_cursor(tmp_path: Path):
+    """A later failure must not overwrite the last cursor that was earned."""
+    store = Store(tmp_path / "review.sqlite")
+    good = store.start_run("api", "fixture", cursor_before=None)
+    store.finish_run(good, "success", 2, cursor_after="2026-08-06T12:00:00Z")
+    bad = store.start_run("api", "fixture", cursor_before="2026-08-06T12:00:00Z")
+    store.finish_run(bad, "failure", 0)
+    store.commit()
+
+    assert store.latest_cursor("api") == "2026-08-06T12:00:00Z"
+    store.close()
+
+
 def test_csv_replacement_snapshot_retires_absent_and_edited_rows(tmp_path: Path):
     store = Store(tmp_path / "review.sqlite")
     first_run = store.start_run("csv", "first snapshot")

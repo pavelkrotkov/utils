@@ -29,9 +29,9 @@ class FixtureApiClient:
 
     def transactions(
         self, date_on_after: str | None = None, modified_after: str | None = None
-    ) -> list[dict]:
+    ) -> api_source.PageResult:
         del date_on_after, modified_after
-        return self.payload["transactions"]
+        return api_source.PageResult(self.payload["transactions"], self.payload.get("asOf"))
 
 
 def _current_rows(db: Path, source: str) -> list[dict]:
@@ -410,6 +410,14 @@ def test_api_fixture_reaches_report_with_review_uncategorized_and_recurring_find
     assert sum(row["review_eligible"] for row in rows) > 0
     assert "subscription_creep" in html
     assert "MYSTERY PURCHASE" in html
+
+    # The run persists the response's asOf, not the newest modifiedAt among the
+    # rows (2026-05-18T12:00:00Z in this fixture).
+    with sqlite3.connect(db) as conn:
+        cursor_after = conn.execute(
+            "SELECT cursor_after FROM runs WHERE outcome = 'success' ORDER BY id DESC LIMIT 1"
+        ).fetchone()[0]
+    assert cursor_after == "2026-06-01T00:00:00Z"
     assert "LIMITATION: The API bulk transaction response did not expose" in html
     assert "Excluded from stats</div><div class=v>3" in html
 
@@ -488,3 +496,60 @@ def test_analyze_rejects_report_and_packet_path_collision(tmp_path: Path):
 
     assert db_collision_args.func(db_collision_args) == 2
     assert db.read_bytes().startswith(b"SQLite format 3\x00")
+
+
+def test_api_run_without_as_of_does_not_advance_the_cursor(tmp_path: Path, monkeypatch):
+    """A run that ingests fine but yields no marker must leave the cursor alone.
+
+    The rows are still stored — refusing them would discard good data over a
+    metadata defect — but the next run re-requests the same window rather than
+    trusting a boundary the server never stated.
+    """
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    payload.pop("asOf")
+    monkeypatch.setattr(
+        api_source,
+        "client_from_env_or_age",
+        lambda verbose=False: FixtureApiClient(payload),
+    )
+    db = tmp_path / "api.sqlite"
+
+    _run_ingest(["ingest", "--source", "api", "--full-rescan", "--db", str(db)])
+
+    assert _current_rows(db, "api")
+    store = Store(db)
+    try:
+        assert store.latest_cursor("api") is None
+    finally:
+        store.close()
+
+
+def test_stale_as_of_does_not_rewind_an_earned_cursor(tmp_path: Path, monkeypatch):
+    """A later run reading a stale replica must not walk the watermark back.
+
+    The second run is a full rescan, which sends no modifiedAfter — so the
+    floor has to come from the stored watermark, not from the request.
+    """
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    monkeypatch.setattr(
+        api_source,
+        "client_from_env_or_age",
+        lambda verbose=False: FixtureApiClient(payload),
+    )
+    db = tmp_path / "api.sqlite"
+    _run_ingest(["ingest", "--source", "api", "--full-rescan", "--db", str(db)])
+
+    store = Store(db)
+    try:
+        assert store.latest_cursor("api") == "2026-06-01T00:00:00Z"
+    finally:
+        store.close()
+
+    payload["asOf"] = "2026-05-01T00:00:00Z"
+    _run_ingest(["ingest", "--source", "api", "--full-rescan", "--db", str(db)])
+
+    store = Store(db)
+    try:
+        assert store.latest_cursor("api") == "2026-06-01T00:00:00Z"
+    finally:
+        store.close()
