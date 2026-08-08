@@ -434,6 +434,7 @@ def _validate_proposal(
     path: str,
     *,
     known_transaction_ids: set[str],
+    retired_transaction_ids: set[str],
     allowed_categories: set[str],
     seen_proposal_ids: set[str],
     seen_transaction_ids: set[str],
@@ -487,6 +488,19 @@ def _validate_proposal(
                 "unknown_transaction_id",
                 f"{transaction_id!r} is not in the review packet's transaction_ids; "
                 "a proposal cannot reach a transaction the packet did not offer",
+            )
+        )
+    elif transaction_id in retired_transaction_ids:
+        # The packet still offers it, because the packet describes the database
+        # as it was. Recording a judgment about a transaction the provider has
+        # since deleted — or that a complete scan no longer sees — would append
+        # an immutable decision about something that is not there.
+        errors.append(
+            ProposalError(
+                f"{path}.transaction_id",
+                "retired_transaction_id",
+                f"{transaction_id!r} has been retired since the review packet was built; "
+                "re-run `analyze` and review the packet it writes",
             )
         )
     elif transaction_id in seen_transaction_ids:
@@ -551,12 +565,19 @@ def validate_proposals(
     *,
     allowed_categories: Iterable[str],
     latest_run_id: int | None = None,
+    retired_transaction_ids: Iterable[str] = (),
 ) -> list[ValidatedProposal]:
     """Validate a proposal document against one review packet.
 
     ``allowed_categories`` is the closed set of category labels the dataset
     already uses; the runtime cannot create a category, so a proposal may not
     name one. ``latest_run_id`` rejects a review of a superseded run.
+
+    ``retired_transaction_ids`` rejects a proposal about a transaction that has
+    been retired since the packet was built. The packet still lists it, because
+    a packet describes the database as it was; without this check the runtime
+    would append an immutable decision about a transaction that is no longer
+    there, and say nothing about it having gone.
 
     Raises :class:`ProposalValidationError` carrying every rejection reason.
     """
@@ -609,6 +630,7 @@ def validate_proposals(
             str(item) for item in (packet.get("transaction_ids") or []) if str(item)
         }
         allowed = {_text(category) for category in allowed_categories if _text(category)}
+        retired = {_text(item) for item in retired_transaction_ids if _text(item)}
         seen_proposal_ids: set[str] = set()
         seen_transaction_ids: set[str] = set()
         for index, raw in enumerate(proposals):
@@ -616,6 +638,7 @@ def validate_proposals(
                 raw,
                 f"proposals[{index}]",
                 known_transaction_ids=known_transaction_ids,
+                retired_transaction_ids=retired,
                 allowed_categories=allowed,
                 seen_proposal_ids=seen_proposal_ids,
                 seen_transaction_ids=seen_transaction_ids,

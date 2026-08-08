@@ -38,6 +38,29 @@ keyboard. A run whose process was killed outright and could not be unwound
 keeps `started`: we never learned what happened, and inventing a conclusion is
 worse than admitting that.
 
+Retirement is an event, not a flag. Clearing a current-version marker records
+that a transaction is no longer current and nothing about why, which run
+decided so, or on what grounds — the row survives and the event does not. Append
+a retirement record naming the transaction, the exact prior version, the
+retiring run, the reason, the timestamp, and the source. The version reference
+matters because a transaction can be retired, reappear, and be retired again;
+without it those events are indistinguishable.
+
+Keep the grounds distinct. A provider tombstone is testimony that a transaction
+was deleted; an absence from a full scan is our own inference from a response we
+believed complete. A truncated response mistaken for a complete one produces a
+wave of the second kind that looks exactly like the first, so the reason must be
+recorded when it is known rather than reconstructed afterwards. Retirement
+history stays queryable independently of current state — a retired transaction
+is precisely the one whose story the current view cannot tell — while
+current-state queries exclude retired rows by default. Retirement is not
+permanent: a provider may resurrect a transaction, so "currently retired" is
+history confirmed against the absence of a current version, not history alone.
+A judgment proposed against a transaction retired since its review packet was
+built is refused; the packet still lists it because a packet describes the
+database as it was, and appending an immutable decision about something no
+longer there would record the judgment and not its irrelevance.
+
 A terminal state is final. Anything raised after a run commits — reporting into
 a closed pipe is the everyday case — must not rewrite it, because the rollback
 that accompanies a failure cannot take back committed rows, and the result
