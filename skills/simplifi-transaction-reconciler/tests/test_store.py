@@ -194,6 +194,38 @@ def test_record_run_scope_persists_scope_cursor_and_detail(tmp_path: Path):
     store.close()
 
 
+def test_snapshot_owner_scope_reports_the_last_replacing_run(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+    first = store.start_run("api", "scope one")
+    store.record_run_scope(first, None, '{"dataset":"one"}')
+    store.finish_run(first, "success", 1, complete_snapshot=True)
+    second = store.start_run("api", "scope two incremental")
+    store.record_run_scope(second, None, '{"dataset":"two"}')
+    store.finish_run(second, "success", 1, complete_snapshot=False)
+    store.commit()
+
+    # The incremental run did not replace the snapshot, so ownership stands.
+    assert store.snapshot_owner_scope("api") == (True, '{"dataset":"one"}')
+    store.close()
+
+
+def test_snapshot_owner_scope_distinguishes_never_from_unscoped(tmp_path: Path):
+    """ "No snapshot has ever run" and "the legacy history owns it" differ.
+
+    A bare None cannot tell them apart, and the caller's decision does.
+    """
+    store = Store(tmp_path / "review.sqlite")
+
+    assert store.snapshot_owner_scope("api") == (False, None)
+
+    run_id = store.start_run("api", "pre-scoping snapshot")
+    store.finish_run(run_id, "success", 1, complete_snapshot=True)
+    store.commit()
+
+    assert store.snapshot_owner_scope("api") == (True, None)
+    store.close()
+
+
 def test_failed_run_never_advances_the_cursor(tmp_path: Path):
     """A later failure must not overwrite the last cursor that was earned."""
     store = Store(tmp_path / "review.sqlite")

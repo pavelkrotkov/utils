@@ -91,6 +91,33 @@ class SyncScope:
             f"since={self.since or 'all'}"
         )
 
+    def reuse_blocker(self) -> str | None:
+        """Why a stored cursor may not be carried into this run, if it may not.
+
+        An opaque (non-JWT) token exposes no stable subject, so two different
+        principals reading the same profile and dataset produce the same key. A
+        replacement token with broader entitlements would then inherit a mark
+        earned by a narrower one and never fetch what only it can see.
+
+        The fix is not to fingerprint the bearer token itself. Tokens here live
+        one hour, so that would mint a fresh scope every run — incremental sync
+        would never engage, and the run table would fill with single-use scopes
+        that explain nothing. Better to say the honest thing: this principal is
+        unidentifiable, so no cursor can be attributed to it. The run still
+        reads its full window and still records provenance; it simply never
+        claims a high-water mark it cannot justify.
+
+        JWTs — the documented normal case, and what expiry checking already
+        assumes — carry `sub` and are unaffected.
+        """
+        if self.auth is None:
+            return (
+                "the access token exposes no stable subject claim, so one principal "
+                "cannot be told from another; this run reads its full window rather "
+                "than reusing a cursor that may belong to a different principal"
+            )
+        return None
+
 
 #: Profile resources were never captured field-by-field during recon, so the
 #: identifier is looked up under the plausible spellings rather than assumed.
@@ -108,6 +135,26 @@ def profile_identifier(profile: dict) -> str | None:
     return None
 
 
+def scope_from_profile(client, profile: dict, since: str | None = None) -> SyncScope:
+    """Build the scope from a profile the caller already fetched.
+
+    Separate from :func:`api_scope` so a caller holding a profile does not pay
+    for a second `/userprofiles/me`. That is not only wasted latency: a repeat
+    call is a fresh chance to fail, and a caller that has already passed its
+    error guard would surface the failure as a traceback rather than the clean
+    message and exit code it promises.
+    """
+    claims = getattr(client, "claims", None) or {}
+    subject = claims.get("sub")
+    return SyncScope(
+        source="api",
+        profile=fingerprint(profile_identifier(profile)),
+        dataset=fingerprint(client.dataset_id),
+        auth=fingerprint(str(subject) if subject is not None else None),
+        since=since,
+    )
+
+
 def api_scope(client, since: str | None = None) -> SyncScope:
     """Resolve the cursor scope for an API run.
 
@@ -116,15 +163,7 @@ def api_scope(client, since: str | None = None) -> SyncScope:
     identity and an early auth failure for the price of one call, rather than
     discovering the dead token part-way through a long walk.
     """
-    claims = getattr(client, "claims", None) or {}
-    subject = claims.get("sub")
-    return SyncScope(
-        source="api",
-        profile=fingerprint(profile_identifier(client.verify())),
-        dataset=fingerprint(client.dataset_id),
-        auth=fingerprint(str(subject) if subject is not None else None),
-        since=since,
-    )
+    return scope_from_profile(client, client.verify(), since=since)
 
 
 __all__ = [
@@ -132,4 +171,5 @@ __all__ = [
     "api_scope",
     "fingerprint",
     "profile_identifier",
+    "scope_from_profile",
 ]

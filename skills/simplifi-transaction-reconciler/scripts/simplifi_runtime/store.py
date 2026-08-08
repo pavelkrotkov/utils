@@ -108,11 +108,12 @@ class Store:
         outcome: str,
         row_count: int,
         cursor_after: str | None = None,
+        complete_snapshot: bool = False,
     ) -> None:
         self.conn.execute(
-            "UPDATE runs SET finished_at = ?, outcome = ?, row_count = ?, cursor_after = ? "
-            "WHERE id = ?",
-            (_now(), outcome, row_count, cursor_after, run_id),
+            "UPDATE runs SET finished_at = ?, outcome = ?, row_count = ?, cursor_after = ?, "
+            "complete_snapshot = ? WHERE id = ?",
+            (_now(), outcome, row_count, cursor_after, int(complete_snapshot), run_id),
         )
 
     def record_run_scope(
@@ -159,6 +160,29 @@ class Store:
             (source, cursor_scope),
         ).fetchone()
         return str(row["cursor_after"]) if row else None
+
+    def snapshot_owner_scope(self, source: str) -> tuple[bool, str | None]:
+        """Which scope last replaced this source's materialized snapshot.
+
+        Returns ``(found, scope)``. The flag matters: "no complete snapshot has
+        ever run" and "the snapshot belongs to the unscoped legacy history" are
+        different situations, and a bare None cannot tell them apart.
+
+        Current rows are still isolated by source alone, so a complete rescan
+        under one scope retires every other scope's rows. A cursor earned before
+        that retirement is still a truthful statement about the provider — and
+        completely wrong about what is on disk. Callers compare this against
+        their own scope and decline the cursor when it does not match.
+        """
+        row = self.conn.execute(
+            "SELECT cursor_scope FROM runs WHERE source = ? AND complete_snapshot = 1 "
+            "AND outcome = 'success' ORDER BY id DESC LIMIT 1",
+            (source,),
+        ).fetchone()
+        if row is None:
+            return False, None
+        scope = row["cursor_scope"]
+        return True, (str(scope) if scope is not None else None)
 
     def has_unscoped_cursor(self, source: str) -> bool:
         """Whether an earned but unattributable cursor predates scoping.

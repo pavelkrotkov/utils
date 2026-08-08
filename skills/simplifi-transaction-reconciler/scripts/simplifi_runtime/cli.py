@@ -33,7 +33,7 @@ from .semantics import (
 )
 from .sources.csv_source import SchemaError, SimplifiCsvSource
 from .store import Store
-from .sync_scope import SyncScope, api_scope
+from .sync_scope import SyncScope, api_scope, scope_from_profile
 
 
 def _positive_int(raw: str) -> int:
@@ -299,6 +299,18 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             cursor_scope = scope.key()
             legacy_cursor = store.has_unscoped_cursor("api")
             stored_cursor = store.latest_cursor("api", cursor_scope)
+
+            # A cursor can be a truthful statement about the provider and still
+            # be wrong about what is on disk. Current rows are isolated by
+            # source alone, so a complete rescan under another scope retires
+            # this scope's rows; resuming from a mark earned before that
+            # retirement would fetch only deltas and never restore them.
+            snapshot_found, snapshot_scope = store.snapshot_owner_scope("api")
+            foreign_snapshot = snapshot_found and snapshot_scope != cursor_scope
+            reuse_blocker = scope.reuse_blocker()
+            if stored_cursor is not None and (foreign_snapshot or reuse_blocker):
+                stored_cursor = None
+
             cursor_before = None if args.full_rescan else args.modified_after or stored_cursor
             # A full rescan sends no modifiedAfter, but the watermark it would
             # be replacing still exists and must not be walked backwards. An
@@ -323,28 +335,51 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             store.close()
             return 1
 
-        if stored_cursor is None and legacy_cursor and not args.full_rescan:
-            print(
-                "WARNING this database holds a cursor from before cursor scoping, which "
-                "cannot be attributed to a profile/dataset/query scope after the fact. "
-                "This run re-reads its full window once and earns a scoped cursor; "
-                "later runs are incremental again.",
-                file=sys.stderr,
-            )
+        # Every one of these claims a full window was read, so all of them are
+        # gated on cursor_before actually being None. An explicit
+        # --modified-after starts where the operator said to start, and telling
+        # them older records were recovered when they were not is worse than
+        # saying nothing.
+        if cursor_before is None and not args.full_rescan:
+            if reuse_blocker:
+                print(f"WARNING {reuse_blocker}.", file=sys.stderr)
+            if foreign_snapshot:
+                print(
+                    "WARNING this database's current API rows were last replaced by a "
+                    "complete rescan under a different cursor scope, so this scope's "
+                    "cursor no longer describes what is stored. This run re-reads its "
+                    "full window rather than resuming past rows that are not there.",
+                    file=sys.stderr,
+                )
+            elif legacy_cursor and not stored_cursor:
+                print(
+                    "WARNING this database holds a cursor from before cursor scoping, which "
+                    "cannot be attributed to a profile/dataset/query scope after the fact. "
+                    "This run re-reads its full window once and earns a scoped cursor; "
+                    "later runs are incremental again.",
+                    file=sys.stderr,
+                )
 
     cursor_after: str | None = None
     cursor_warning: str | None = None
     if args.source == "api":
         cursor_after, cursor_warning = _next_cursor(as_of, cursor_floor)
 
+    complete_snapshot = _is_complete_snapshot(args)
     try:
         outcomes = Counter(store.upsert_version(run_id, record) for record in records)
-        if _is_complete_snapshot(args):
+        if complete_snapshot:
             store.retire_absent_snapshot(run_id, {r["transaction_id"] for r in records})
         store.record_accounts(
             {r["account_name"] for r in records if not r.get("is_deleted") and r["account_name"]}
         )
-        store.finish_run(run_id, "success", len(records), cursor_after=cursor_after)
+        store.finish_run(
+            run_id,
+            "success",
+            len(records),
+            cursor_after=cursor_after,
+            complete_snapshot=complete_snapshot,
+        )
         store.commit()
     except BaseException:
         _finish_failed_run(store, run_id)
@@ -848,6 +883,11 @@ def cmd_probe(args: argparse.Namespace) -> int:
         profile = client.verify()
         accounts = client.accounts()
         logins = client.institution_logins()
+        # Built from the profile already in hand. Calling verify() a second time
+        # would put a network round trip outside this guard, where a transient
+        # failure becomes a traceback instead of the clean error and exit code
+        # the command promises.
+        scope = scope_from_profile(client, profile, since=args.since)
     except (ValueError, ApiError) as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
@@ -858,7 +898,10 @@ def cmd_probe(args: argparse.Namespace) -> int:
     )
     # Which cursor history this token and dataset would read and write. Without
     # it, "why did that run refetch everything?" is unanswerable from outside.
-    print(f"INFO cursor scope: {api_scope(client, since=args.since).describe()}")
+    print(f"INFO cursor scope: {scope.describe()}")
+    blocker = scope.reuse_blocker()
+    if blocker:
+        print(f"WARNING {blocker}.", file=sys.stderr)
     healthy = True
     for login in logins:
         for health in _aggregator_health(login):

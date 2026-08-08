@@ -1,7 +1,13 @@
 import json
 
 import pytest
-from simplifi_runtime.sync_scope import SyncScope, api_scope, fingerprint, profile_identifier
+from simplifi_runtime.sync_scope import (
+    SyncScope,
+    api_scope,
+    fingerprint,
+    profile_identifier,
+    scope_from_profile,
+)
 
 
 class StubClient:
@@ -124,3 +130,39 @@ def test_api_scope_separates_two_tokens_over_one_dataset():
     second = api_scope(StubClient({"id": "profile-2"}, claims={"sub": "subject-2"}))
 
     assert first.key() != second.key()
+
+
+def test_scope_from_profile_makes_no_second_request():
+    """A caller holding a profile must not pay for another round trip.
+
+    Beyond the wasted latency, a repeat call is a fresh chance to fail — and a
+    caller past its error guard would surface that as a traceback rather than
+    the clean message and exit code it promises.
+    """
+
+    class ExplodingVerify(StubClient):
+        def verify(self):
+            raise AssertionError("verify() must not be called again")
+
+    scope = scope_from_profile(
+        ExplodingVerify({}, claims={"sub": "subject-1"}), {"id": "profile-1"}
+    )
+
+    assert scope.profile == fingerprint("profile-1")
+
+
+def test_identified_principal_permits_cursor_reuse():
+    assert api_scope(StubClient({"id": "p"}, claims={"sub": "subject-1"})).reuse_blocker() is None
+
+
+def test_unidentifiable_principal_blocks_cursor_reuse():
+    """Opaque tokens carry no subject, so two principals share a key.
+
+    Rather than let a broader replacement token inherit a narrower token's
+    high-water mark, refuse to reuse a cursor at all. Fingerprinting the bearer
+    token instead would be safe but useless: these tokens live one hour, so
+    every run would mint a new scope and incremental sync would never engage.
+    """
+    blocker = api_scope(StubClient({"id": "p"}, claims={})).reuse_blocker()
+
+    assert blocker is not None and "no stable subject claim" in blocker

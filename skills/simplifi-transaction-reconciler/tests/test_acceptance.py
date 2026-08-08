@@ -686,3 +686,106 @@ def test_cursor_scope_is_recorded_and_reported(tmp_path: Path, monkeypatch, caps
         ).fetchone()
     assert json.loads(scope) == json.loads(sync_scope.api_scope(client, since="2026-05-01").key())
     assert "scope=" in detail
+
+
+def test_foreign_full_rescan_invalidates_this_scope_cursor(tmp_path: Path, monkeypatch, capsys):
+    """The reported bug: A's cursor is valid, but A's rows are gone.
+
+    Current rows are isolated by source alone, so B's complete rescan retires
+    A's. Resuming A from its own — entirely truthful — cursor would fetch only
+    post-cursor deltas and never restore the history B retired, while reporting
+    success.
+    """
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    first = FixtureApiClient(payload)
+    second = FixtureApiClient(payload, dataset_id="dataset-2")
+    db = tmp_path / "api.sqlite"
+
+    _ingest_as(monkeypatch, first, db, "--full-rescan")
+    assert _scoped_cursor(db, first) == "2026-06-01T00:00:00Z"
+
+    _ingest_as(monkeypatch, second, db, "--full-rescan")
+    capsys.readouterr()
+
+    # A still owns a cursor, but must not resume from it.
+    _ingest_as(monkeypatch, first, db)
+    captured = capsys.readouterr()
+
+    assert "requested=none" in captured.out
+    assert "last replaced by a complete rescan under a different cursor scope" in captured.err
+
+
+def test_same_scope_rescan_does_not_invalidate_its_own_cursor(tmp_path: Path, monkeypatch, capsys):
+    """The guard must not fire on the ordinary case of one scope in one database."""
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    client = FixtureApiClient(payload)
+    db = tmp_path / "api.sqlite"
+    _ingest_as(monkeypatch, client, db, "--full-rescan")
+    capsys.readouterr()
+
+    _ingest_as(monkeypatch, client, db)
+    captured = capsys.readouterr()
+
+    assert "requested=2026-06-01T00:00:00Z" in captured.out
+    assert "different cursor scope" not in captured.err
+
+
+def test_opaque_token_never_resumes_from_a_stored_cursor(tmp_path: Path, monkeypatch, capsys):
+    """Without a subject claim, one principal cannot be told from another."""
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    client = FixtureApiClient(payload, subject=None)
+    db = tmp_path / "api.sqlite"
+    _ingest_as(monkeypatch, client, db, "--full-rescan")
+    assert _scoped_cursor(db, client) == "2026-06-01T00:00:00Z"
+    capsys.readouterr()
+
+    _ingest_as(monkeypatch, client, db)
+    captured = capsys.readouterr()
+
+    assert "requested=none" in captured.out
+    assert "no stable subject claim" in captured.err
+
+
+def test_explicit_modified_after_is_not_described_as_a_full_window(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """A run that starts where the operator said must not claim it read everything.
+
+    Telling them older records were recovered when the fetch began at their
+    explicit cursor is worse than saying nothing at all.
+    """
+    db = tmp_path / "api.sqlite"
+    store = Store(db)
+    legacy = store.start_run("api", "api legacy run")
+    store.finish_run(legacy, "success", 1, cursor_after="2026-07-01T00:00:00Z")
+    store.commit()
+    store.close()
+
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    client = FixtureApiClient(payload)
+    _ingest_as(monkeypatch, client, db, "--modified-after", "2026-05-01T00:00:00Z")
+    captured = capsys.readouterr()
+
+    assert "requested=2026-05-01T00:00:00Z" in captured.out
+    assert "re-reads its full window" not in captured.err
+
+
+def test_complete_snapshot_ownership_is_recorded(tmp_path: Path, monkeypatch):
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    client = FixtureApiClient(payload)
+    db = tmp_path / "api.sqlite"
+    _ingest_as(monkeypatch, client, db, "--full-rescan")
+    _ingest_as(monkeypatch, client, db)
+
+    store = Store(db)
+    try:
+        found, owner = store.snapshot_owner_scope("api")
+    finally:
+        store.close()
+
+    assert found
+    assert owner == sync_scope.api_scope(client).key()
+    with sqlite3.connect(db) as conn:
+        flags = [row[0] for row in conn.execute("SELECT complete_snapshot FROM runs ORDER BY id")]
+    # Only the full rescan replaced the snapshot; the incremental run did not.
+    assert flags == [1, 0]
