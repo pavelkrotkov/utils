@@ -144,6 +144,15 @@ run re-requests the window. An empty successful response is the normal
 "nothing changed" answer and its `asOf` is a usable cursor. Runs record both
 halves: the requested cursor in `runs.cursor_before` and the accepted `asOf` in
 `runs.cursor_after`.
+
+The cursor is a watermark and only moves forward. A stale read replica or a
+clock rollback can return an older but well-formed `asOf`; recording it is
+refused, because a persistently behind replica would otherwise rewind on every
+run and the incremental sync would never converge. Keeping the held cursor is
+safe: the request carried `modifiedAfter=<held cursor>`, so the server returned
+everything past that point whatever its marker claims. A full rescan takes the
+floor from the stored watermark, since it sends no `modifiedAfter` of its own;
+an explicit `--modified-after` is a deliberate rewind and becomes the floor.
 The packaged CLI uses the last successful cursor by default; pass
 `ingest --source api --full-rescan` to omit `modifiedAfter` and rebuild the
 current API view after a missed window or derivation-rule change.

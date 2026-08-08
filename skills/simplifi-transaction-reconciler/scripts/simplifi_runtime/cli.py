@@ -61,7 +61,7 @@ def _parse_cursor_timestamp(raw: str) -> datetime:
     return parsed
 
 
-def _next_cursor(as_of: str | None) -> tuple[str | None, str | None]:
+def _next_cursor(as_of: str | None, floor: str | None = None) -> tuple[str | None, str | None]:
     """Turn the response's `metaData.asOf` into the next cursor, or refuse to.
 
     Returns ``(cursor, warning)``. A None cursor leaves ``cursor_after`` unset
@@ -74,6 +74,15 @@ def _next_cursor(as_of: str | None) -> tuple[str | None, str | None]:
     *ahead* of records the server has not yet made visible, and the next
     request skips straight past them. ``asOf`` is the server's own statement of
     what the payload covers, which is the only claim we are entitled to make.
+
+    ``floor`` is the cursor this run already stood on. The cursor is a
+    watermark and only ever moves forward: a stale read replica or a clock
+    rollback can hand back an older but perfectly well-formed ``asOf``, and
+    recording it would drag the watermark backwards. That is not merely a
+    wasted refetch — if the replica stays behind, every run rewinds again and
+    the incremental sync never converges. Keeping the floor is also safe:
+    the request was made with ``modifiedAfter=floor``, so the server returned
+    everything it had past that point regardless of what its marker claims.
     """
     if not as_of:
         return None, (
@@ -81,12 +90,26 @@ def _next_cursor(as_of: str | None) -> tuple[str | None, str | None]:
             "cursor was left unchanged and the next run will re-request this window"
         )
     try:
-        _parse_cursor_timestamp(as_of)
+        parsed = _parse_cursor_timestamp(as_of)
     except ValueError as exc:
         return None, (
             f"{exc} in response metaData.asOf; the synchronization cursor was left "
             "unchanged and the next run will re-request this window"
         )
+    if floor:
+        try:
+            parsed_floor = _parse_cursor_timestamp(floor)
+        except ValueError:
+            # An unusable floor cannot order anything, so it cannot veto. The
+            # marker we did parse is still the best claim available.
+            return as_of, None
+        if parsed < parsed_floor:
+            return None, (
+                f"API response metaData.asOf {as_of!r} predates the cursor this run "
+                f"already held ({floor!r}), which suggests a stale replica or a clock "
+                "rollback; the synchronization cursor was left unchanged rather than "
+                "moved backwards"
+            )
     return as_of, None
 
 
@@ -231,13 +254,18 @@ def _ensure_model_key(model: str, verbose: bool) -> None:
 def cmd_ingest(args: argparse.Namespace) -> int:
     store = Store(Path(args.db))
     cursor_before: str | None = None
+    cursor_floor: str | None = None
     as_of: str | None = None
     if args.source == "csv":
         detail = f"csv path={args.path or 'missing'}"
     else:
-        cursor_before = (
-            None if args.full_rescan else args.modified_after or store.latest_cursor("api")
-        )
+        stored_cursor = store.latest_cursor("api")
+        cursor_before = None if args.full_rescan else args.modified_after or stored_cursor
+        # A full rescan sends no modifiedAfter, but the watermark it would be
+        # replacing still exists and must not be walked backwards. An explicit
+        # --modified-after is a deliberate rewind, so it becomes the floor
+        # itself rather than being vetoed by the stored value.
+        cursor_floor = cursor_before or stored_cursor
         mode = "full-rescan" if args.full_rescan else "incremental"
         detail = (
             f"api since={args.since or 'all'} mode={mode} modified_after={cursor_before or 'all'}"
@@ -283,7 +311,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     cursor_after: str | None = None
     cursor_warning: str | None = None
     if args.source == "api":
-        cursor_after, cursor_warning = _next_cursor(as_of)
+        cursor_after, cursor_warning = _next_cursor(as_of, cursor_floor)
 
     try:
         outcomes = Counter(store.upsert_version(run_id, record) for record in records)
