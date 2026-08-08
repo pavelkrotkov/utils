@@ -427,3 +427,151 @@ def test_the_proposals_csv_is_owner_only(tmp_path):
         fh.write("transaction_id,proposed_category\r\ntxn-1,Groceries\r\n")
 
     assert mode_of(tmp_path / "proposals.csv") == artifacts.FILE_MODE
+
+
+# --- review findings, each with the failure it would have allowed -----------
+
+
+def test_rewriting_an_exposed_artifact_is_private_during_the_write(tmp_path):
+    """`os.open`'s mode applies only on creation, so a rerun kept the old mode."""
+    target = tmp_path / "report.html"
+    target.write_text("yesterday's report")
+    target.chmod(0o644)
+
+    with artifacts.secure_open(target, "w", encoding="utf-8") as handle:
+        assert mode_of(target) == artifacts.FILE_MODE  # mid-write, not after
+        handle.write("today's report")
+
+    assert mode_of(target) == artifacts.FILE_MODE
+
+
+def test_a_failed_write_still_leaves_an_owner_only_file(tmp_path):
+    target = tmp_path / "report.html"
+    target.write_text("old")
+    target.chmod(0o666)
+
+    with pytest.raises(RuntimeError), artifacts.secure_open(target, "w", encoding="utf-8") as fh:
+        fh.write("partial")
+        raise RuntimeError("render failed")
+
+    assert mode_of(target) == artifacts.FILE_MODE
+
+
+def test_a_symlinked_artifact_is_refused(tmp_path):
+    """A pre-created link in a sticky directory must not redirect `O_TRUNC`."""
+    victim = tmp_path / "important"
+    victim.write_text("do not truncate me")
+    link = tmp_path / "report.html"
+    link.symlink_to(victim)
+
+    with pytest.raises(artifacts.ArtifactError, match="symbolic link"):
+        artifacts.resolve_artifact(link, tmp_path)
+    with (
+        pytest.raises(artifacts.ArtifactError, match="symbolic link"),
+        artifacts.secure_open(link, "w", encoding="utf-8"),
+    ):
+        pass
+
+    assert victim.read_text() == "do not truncate me"
+
+
+def test_a_dangling_symlink_is_refused(tmp_path):
+    link = tmp_path / "simplifi.sqlite"
+    link.symlink_to(tmp_path / "nowhere")
+
+    with pytest.raises(artifacts.ArtifactError, match="symbolic link"):
+        artifacts.create_private(link)
+
+
+def test_a_writable_grandparent_is_refused(tmp_path):
+    """A 0700 parent is no protection if its own parent can be renamed away."""
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    shared.chmod(0o777)
+    private = shared / "private"
+    private.mkdir(mode=artifacts.DIR_MODE)
+
+    with pytest.raises(artifacts.ArtifactError, match="ancestor"):
+        artifacts.resolve_artifact(private / "simplifi.sqlite", tmp_path)
+
+
+def test_a_sticky_ancestor_is_accepted(tmp_path):
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    shared.chmod(0o1777)
+    private = shared / "private"
+    private.mkdir(mode=artifacts.DIR_MODE)
+
+    assert artifacts.resolve_artifact(private / "db", tmp_path) == private / "db"
+
+
+def test_a_data_directory_under_a_writable_ancestor_is_refused(tmp_path):
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    shared.chmod(0o777)
+
+    with pytest.raises(artifacts.ArtifactError, match="other users can write to"):
+        artifacts.prepare_data_dir(shared / "data")
+
+
+def test_a_directory_named_as_an_artifact_is_not_chmodded(tmp_path):
+    """A mistyped `--db` must not strip a directory's execute bit."""
+    directory = tmp_path / "reports"
+    directory.mkdir(mode=0o755)
+
+    with pytest.raises(artifacts.ArtifactError, match="is a directory"):
+        artifacts.create_private(directory)
+
+    assert mode_of(directory) == 0o755
+
+
+def test_a_relative_data_dir_override_is_refused(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(artifacts.ArtifactError, match="relative to the current directory"):
+        artifacts.prepare_data_dir("data")
+
+
+def test_a_relative_data_dir_environment_value_is_refused(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(artifacts.DATA_DIR_ENV, "data")
+
+    with pytest.raises(artifacts.ArtifactError, match="relative to the current directory"):
+        artifacts.prepare_data_dir()
+
+
+def test_a_relative_data_dir_is_allowed_under_the_override(monkeypatch, tmp_path, capsys):
+    monkeypatch.chdir(tmp_path)
+
+    resolved = artifacts.prepare_data_dir("data", allow_unsafe=True)
+
+    assert resolved == (tmp_path / "data").resolve()
+    assert "WARN" in capsys.readouterr().err
+
+
+def test_decide_refuses_an_exposed_proposals_file(tmp_path, monkeypatch, capsys):
+    """Another local user could edit judgments between proposal and record."""
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv(artifacts.DATA_DIR_ENV, str(data_dir))
+    monkeypatch.setattr(artifacts, "_owned_by_us", lambda path: False)
+    data_dir.mkdir(mode=artifacts.DIR_MODE)
+    for name in ("simplifi.sqlite", "review-packet.json", "proposals.json"):
+        (data_dir / name).write_text("{}")
+        (data_dir / name).chmod(0o666)
+
+    assert run(["decide"]) == 2
+    assert "not owned by you" in capsys.readouterr().err
+
+
+def test_decide_tightens_its_inputs_before_reading_them(tmp_path, monkeypatch, capsys):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv(artifacts.DATA_DIR_ENV, str(data_dir))
+    data_dir.mkdir(mode=artifacts.DIR_MODE)
+    for name in ("simplifi.sqlite", "review-packet.json", "proposals.json"):
+        (data_dir / name).write_text("{}")
+        (data_dir / name).chmod(0o644)
+
+    run(["decide"])  # fails later on content; the permission work is the subject
+
+    assert mode_of(data_dir / "review-packet.json") == artifacts.FILE_MODE
+    assert mode_of(data_dir / "proposals.json") == artifacts.FILE_MODE

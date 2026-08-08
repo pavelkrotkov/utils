@@ -51,8 +51,24 @@ opt-in that most runs would skip.
   depending on where the command ran. A run cannot be reproduced or audited if
   its outputs move with the shell.
 - A path inside the installed skill directory, for the reasons above.
-- A path in a directory other users can write to. The sticky bit is exempted,
-  since it removes exactly the power that makes such a directory dangerous.
+- A path with *any* ancestor other users can write to. Checking the immediate
+  parent is not enough: with `/shared` group-writable and `/shared/private` a
+  pristine `0700`, nobody can touch a file inside `private`, but they can
+  rename `private` aside and leave their own directory in its place — so the
+  next run opens their database having verified a parent that no longer exists.
+  The sticky bit is exempted, since it removes exactly that power.
+
+Separately, and *not* subject to the override, an artifact path whose final
+component is a symbolic link is refused, and every write uses `O_NOFOLLOW`. The
+location rules express a preference about where files belong; this one is about
+whether the path we vetted is the file we open. In a sticky world-writable
+directory another user cannot replace our file, but they can pre-create the
+name as a link to something we own, and an `O_TRUNC` write would then empty
+that target instead — a shell profile, a key, an older database. The `lstat`
+check exists to fail with an explanation rather than an `ELOOP`; `O_NOFOLLOW`
+closes the window between the check and the open. The cost is that a
+deliberately symlinked report is refused, which is the right trade for an
+artifact class where substitution is the threat.
 
 `--allow-unsafe-paths`, or `SIMPLIFI_ALLOW_UNSAFE_PATHS=1`, downgrades these
 refusals to warnings. It exists because a user who states an unusual location
@@ -62,7 +78,12 @@ around in ways that are worse than the thing it prevented.
 **Permissions are not negotiable.** Every artifact is created `0600` by an
 `os.open` with an explicit mode, not by a write followed by a `chmod` — the
 latter leaves the file world-readable for the length of the write, which for a
-full report is not a short time. The database is created by us before SQLite
+full report is not a short time. That mode argument applies only when the file
+is *created*, so an artifact that already exists at `0644` keeps `0644`: it is
+tightened before the open, and `fchmod` re-asserts the mode on the open
+descriptor, so the guarantee holds during the write and does not depend on the
+write finishing. Rerunning `analyze` over yesterday's report is the ordinary
+way to reach that case. The database is created by us before SQLite
 opens it, so its `-wal` and `-shm` sidecars inherit the mode rather than the
 umask. The override loosens locations and never permissions: where a ledger
 lives is the user's business, but a world-readable ledger is not something
@@ -73,6 +94,12 @@ artifact can predate this policy or come back from a backup that flattened its
 mode. If it is over-permissive and we own it, it is tightened and the change is
 reported; if we do not own it, the run fails rather than proceeding on a file
 it cannot protect.
+
+This applies to the review packet and the proposals file as well as to what we
+write. They are artifacts of this workflow rather than foreign inputs, and a
+group-writable proposals file is worth failing over: another local user could
+edit the judgments in the window between an agent producing them and `decide`
+recording them immutably.
 
 **Inputs are reported, not rewritten.** An exported CSV arrives with whatever
 mode the browser or bank gave it. Saying so is useful; changing a file the user

@@ -124,17 +124,22 @@ A bare filename resolves inside that directory, so the shipped defaults
 Absolute paths are honoured. Three locations are refused: a relative path with
 separators, because it names a different file depending on where the command
 ran; anything inside the installed skill directory, because a reinstall or a
-`git clean` destroys it and a commit publishes it; and any directory other
-users can write to, because they could substitute the file between runs.
-`--allow-unsafe-paths` (or `SIMPLIFI_ALLOW_UNSAFE_PATHS=1`) turns those
-refusals into warnings.
+`git clean` destroys it and a commit publishes it; and anything with an
+ancestor other users can write to, because they could rename it aside and
+substitute their own. `--allow-unsafe-paths` (or
+`SIMPLIFI_ALLOW_UNSAFE_PATHS=1`) turns those refusals into warnings. The same
+absolute-path rule applies to `--data-dir` itself. Symlinked artifact paths are
+refused outright and are not covered by the override — a link the runtime does
+not control can redirect a truncating write onto an unrelated file.
 
 The data directory is created `0700` and every artifact — database, report,
 review packet, prompt, proposal CSV, decision ledger — is created `0600`, with
 the mode set at creation rather than applied afterwards. Existing artifacts are
-permission-checked before use: an over-permissive file we own is tightened and
-the change reported, and one we do not own fails the run. An over-permissive
-*input* CSV is reported but never modified. The override relaxes locations
+permission-checked before use — including the `decide` inputs, since a
+group-writable proposals file could be edited between an agent producing it and
+`decide` recording it. An over-permissive file we own is tightened and the
+change reported; one we do not own fails the run. An over-permissive *input*
+CSV is reported but never modified. The override relaxes locations
 only; permissions are enforced unconditionally.
 
 Back up the whole data directory, preserving permissions. The database and the

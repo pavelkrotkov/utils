@@ -865,6 +865,19 @@ def cmd_decide(args: argparse.Namespace) -> int:
         print(f"ERROR --out must name a file, not a directory: {out}", file=sys.stderr)
         return 2
 
+    # The packet and the proposals are artifacts of this workflow, not foreign
+    # inputs like an exported CSV, so they get the same treatment as the files
+    # we write. A group-writable proposals file is worth failing over rather
+    # than warning about: another local user could edit the judgments in the
+    # window between an agent producing them and `decide` recording them
+    # immutably.
+    try:
+        for path in (packet_path, proposals_path):
+            artifacts.harden_existing(path)
+    except artifacts.ArtifactError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
+
     try:
         packet = _load_json(packet_path, "review packet")
         document = _load_json(proposals_path, "proposals file")

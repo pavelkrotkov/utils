@@ -26,12 +26,30 @@ user's business, but a world-readable ledger is never what anyone meant.
 
 from __future__ import annotations
 
+import errno
 import os
 import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import IO, Any
+
+#: Never follow a symbolic link at the final component. Absent on non-POSIX
+#: platforms, where it degrades to the `lstat` check alone rather than an
+#: import error.
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+
+#: What the kernel reports when `O_NOFOLLOW` refuses. Linux says ELOOP;
+#: some BSDs say EMLINK or EFTYPE.
+_NOFOLLOW_ERRNOS = frozenset(
+    value
+    for value in (
+        errno.ELOOP,
+        getattr(errno, "EMLINK", None),
+        getattr(errno, "EFTYPE", None),
+    )
+    if value is not None
+)
 
 #: Environment overrides. The flag is honoured as well as `--allow-unsafe-paths`
 #: so a scheduled run can carry the decision in its own configuration rather
@@ -74,6 +92,16 @@ def allow_unsafe_from_env() -> bool:
     return raw not in ("", "0", "false", "no")
 
 
+def _data_dir_source(override: str | Path | None = None) -> tuple[str, str] | None:
+    """The raw override in force and where it came from, before resolution."""
+    if override is not None and str(override).strip():
+        return str(override).strip(), "--data-dir"
+    from_env = os.environ.get(DATA_DIR_ENV, "").strip()
+    if from_env:
+        return from_env, f"${DATA_DIR_ENV}"
+    return None
+
+
 def resolve_data_dir(override: str | Path | None = None) -> Path:
     """Pick the data directory without creating it.
 
@@ -82,11 +110,9 @@ def resolve_data_dir(override: str | Path | None = None) -> Path:
     inside the skill, is this the same file as that one — is between absolute
     paths and cannot be fooled by `..` or a symlink.
     """
-    if override is not None and str(override).strip():
-        return Path(str(override).strip()).expanduser().resolve()
-    from_env = os.environ.get(DATA_DIR_ENV, "").strip()
-    if from_env:
-        return Path(from_env).expanduser().resolve()
+    source = _data_dir_source(override)
+    if source is not None:
+        return Path(source[0]).expanduser().resolve()
     return default_data_dir().resolve()
 
 
@@ -97,14 +123,39 @@ def prepare_data_dir(path: str | Path | None = None, *, allow_unsafe: bool = Fal
     those two calls a world-readable directory exists, and that is exactly the
     window a scheduled run would hit.
     """
+    _check_absolute_override(path, allow_unsafe=allow_unsafe)
     directory = resolve_data_dir(path)
+    _check_inside_skill(directory, allow_unsafe=allow_unsafe, label="data directory")
+    _check_ancestors_replaceable(directory, allow_unsafe=allow_unsafe, label="data directory")
     if not directory.exists():
         directory.mkdir(parents=True, mode=DIR_MODE, exist_ok=True)
     elif not directory.is_dir():
         raise ArtifactError(f"data directory is not a directory: {directory}")
-    _check_inside_skill(directory, allow_unsafe=allow_unsafe, label="data directory")
     harden_directory(directory)
     return directory
+
+
+def _check_absolute_override(path: str | Path | None, *, allow_unsafe: bool) -> None:
+    """A relative data directory is the same ambiguity artifacts are refused for.
+
+    `--data-dir data` names a different database every time the working
+    directory changes, which for a scheduled job means the transaction and
+    decision history quietly forks. Refusing it here keeps the rule about the
+    working directory a single rule rather than one that applies to artifacts
+    and not to the place they all live.
+    """
+    source = _data_dir_source(path)
+    if source is None:
+        return
+    raw, origin = source
+    candidate = Path(raw).expanduser()
+    if candidate.is_absolute():
+        return
+    _refuse(
+        f"{origin} {raw!r} is relative to the current directory, which a "
+        f"scheduled run does not control; give an absolute path",
+        allow_unsafe=allow_unsafe,
+    )
 
 
 def harden_directory(directory: Path) -> None:
@@ -163,8 +214,35 @@ def resolve_artifact(
         return candidate.resolve()
     resolved = _resolve_without_requiring_existence(candidate)
     _check_inside_skill(resolved, allow_unsafe=allow_unsafe, label=label)
-    _check_parent_writable_by_others(resolved, allow_unsafe=allow_unsafe, label=label)
+    _check_ancestors_replaceable(resolved, allow_unsafe=allow_unsafe, label=label)
+    _reject_symlink(resolved, label=label)
     return resolved
+
+
+def _reject_symlink(path: Path, *, label: str) -> None:
+    """Refuse an artifact path whose final component is a symlink.
+
+    Not subject to `--allow-unsafe-paths`, unlike the location rules. Those
+    express a preference about where files belong; this one is about whether
+    the path we vetted is the file we open. In a sticky world-writable
+    directory another user cannot replace our file but can *pre-create* the
+    name as a symlink pointing at something we own, and `secure_open`'s
+    `O_TRUNC` would then empty that target instead — a shell profile, a key, an
+    older database. The check is deliberately narrow: it rejects the leaf, not
+    symlinked parent directories, which are ordinary and harmless because the
+    ancestor walk vets what they resolve to.
+
+    `O_NOFOLLOW` at open time is the enforcement; this check exists to fail
+    with an explanation rather than an `ELOOP` errno, and the two together
+    close the window between the check and the open.
+    """
+    if not path.is_symlink():
+        return
+    raise ArtifactError(
+        f"{label} {path} is a symbolic link; artifacts are written through the "
+        f"path given, never through a link that something else controls — "
+        f"name the target directly"
+    )
 
 
 def _resolve_without_requiring_existence(path: Path) -> Path:
@@ -192,25 +270,40 @@ def _check_inside_skill(path: Path, *, allow_unsafe: bool, label: str) -> None:
     )
 
 
-def _check_parent_writable_by_others(path: Path, *, allow_unsafe: bool, label: str) -> None:
-    """Refuse a directory another user can write to, unless it is sticky.
+def _check_ancestors_replaceable(path: Path, *, allow_unsafe: bool, label: str) -> None:
+    """Refuse if *any* ancestor lets another user substitute what is beneath it.
 
-    Write permission on a directory is permission to replace the files in it,
-    so a group-writable parent means someone else can substitute the database
-    that the next run trusts. The sticky bit (as on ``/tmp``) removes that
-    specific power, which is why it is exempted.
+    Write permission on a directory is permission to rename and replace the
+    entries in it — not only files, but subdirectories. Checking the immediate
+    parent alone is therefore not enough: with `/shared` group-writable and
+    `/shared/private` a pristine 0700, another user cannot touch a file inside
+    `private`, but they can rename `private` aside and put their own directory
+    of the same name in its place. The next run then opens their database,
+    having verified a 0700 parent that is no longer the one it inspected.
+
+    The sticky bit (as on ``/tmp``) removes exactly that power — entries there
+    can only be renamed or removed by their owner — which is why it is
+    exempted. Ancestors that do not exist yet are skipped; they will be created
+    by us, under a parent this walk has already vetted.
     """
-    parent = path.parent
-    if not parent.exists():
+    for ancestor in [path.parent, *path.parent.parents]:
+        try:
+            mode = stat.S_IMODE(ancestor.stat().st_mode)
+        except OSError:
+            continue
+        if not mode & 0o022 or mode & stat.S_ISVTX:
+            continue
+        detail = (
+            f"its parent directory (mode {mode:04o})"
+            if ancestor == path.parent
+            else f"its ancestor {ancestor} (mode {mode:04o})"
+        )
+        _refuse(
+            f"{label} {path} sits under a directory other users can write to: "
+            f"{detail}; they could substitute it between runs",
+            allow_unsafe=allow_unsafe,
+        )
         return
-    mode = stat.S_IMODE(parent.stat().st_mode)
-    if not mode & 0o022 or mode & stat.S_ISVTX:
-        return
-    _refuse(
-        f"{label} {path} is in a directory other users can write to "
-        f"(mode {mode:04o}); they could replace the file between runs",
-        allow_unsafe=allow_unsafe,
-    )
 
 
 def _refuse(message: str, *, allow_unsafe: bool) -> None:
@@ -242,8 +335,13 @@ def harden_existing(path: str | Path) -> None:
     every time the file is used, not only when it is created.
     """
     target = Path(path)
+    if target.is_symlink():
+        # Checked before `exists()`, which follows the link and answers False
+        # for a dangling one. A chmod here would land on the link's target.
+        _reject_symlink(target, label="artifact")
     if not target.exists():
         return
+    _require_regular_file(target)
     mode = stat.S_IMODE(target.stat().st_mode)
     if not mode & NON_OWNER_BITS:
         return
@@ -254,6 +352,20 @@ def harden_existing(path: str | Path) -> None:
         )
     target.chmod(FILE_MODE)
     _warn(f"tightened {target} to {FILE_MODE:04o} (was {mode:04o})")
+
+
+def _require_regular_file(path: Path) -> None:
+    """Refuse to apply file permissions to something that is not a file.
+
+    A mistyped `--db` naming an existing directory would otherwise be chmod-ed
+    to 0600 — stripping its execute bit and making the user's directory
+    unusable — before SQLite got as far as reporting that it could not open a
+    database there. An ordinary input error must not damage anything.
+    """
+    if path.is_dir():
+        raise ArtifactError(f"{path} is a directory, not an artifact file")
+    if not path.is_file():
+        raise ArtifactError(f"{path} is not a regular file")
 
 
 def warn_if_exposed(path: str | Path) -> None:
@@ -281,10 +393,10 @@ def create_private(path: str | Path) -> Path:
     """
     target = Path(path)
     ensure_parent(target)
-    if target.exists():
+    if target.exists() or target.is_symlink():
         harden_existing(target)
         return target
-    descriptor = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, FILE_MODE)
+    descriptor = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY | _NOFOLLOW, FILE_MODE)
     os.close(descriptor)
     return target
 
@@ -303,19 +415,33 @@ def secure_open(path: str | Path, mode: str = "w", **kwargs: Any) -> Iterator[IO
     `os.open` with an explicit mode rather than `Path.open` followed by a
     chmod: the latter leaves the file world-readable for the length of the
     write, which for a full report is not a short time.
+
+    The mode argument to `os.open` applies only when the file is *created*, so
+    an artifact that already exists at 0644 keeps 0644 — and `O_TRUNC` would
+    start rewriting it while other users can still read along. It is therefore
+    tightened before the open, and `fchmod` re-asserts the mode on the open
+    descriptor afterwards so the guarantee does not depend on the write
+    completing. A rerun of `analyze` over yesterday's world-readable report is
+    the ordinary way to reach this.
     """
     target = ensure_parent(path)
-    flags = os.O_WRONLY | os.O_CREAT
+    harden_existing(target)
+    flags = os.O_WRONLY | os.O_CREAT | _NOFOLLOW
     flags |= os.O_APPEND if "a" in mode else os.O_TRUNC
-    descriptor = os.open(target, flags, FILE_MODE)
     try:
+        descriptor = os.open(target, flags, FILE_MODE)
+    except OSError as exc:
+        if getattr(exc, "errno", None) in _NOFOLLOW_ERRNOS and Path(target).is_symlink():
+            raise ArtifactError(f"artifact {target} is a symbolic link") from exc
+        raise
+    try:
+        os.fchmod(descriptor, FILE_MODE)
         handle = os.fdopen(descriptor, mode, **kwargs)
     except BaseException:
         os.close(descriptor)
         raise
     with handle:
         yield handle
-    harden_existing(target)
 
 
 def secure_write_text(path: str | Path, text: str, *, encoding: str = "utf-8") -> Path:
