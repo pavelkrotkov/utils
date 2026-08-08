@@ -24,11 +24,9 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Protocol
 
-from .semantics import is_statistics_eligible
-
 CHUNK_SIZE = 40
 REQUEST_TIMEOUT = 90
-PROMPT_VERSION = "classification-prompt-v1"
+PROMPT_VERSION = "classification-prompt-v2"
 
 SYSTEM_PROMPT = """\
 You categorise personal financial transactions.
@@ -166,9 +164,14 @@ def build_prompt(taxonomy: list[str], examples: list[dict], batch: list[dict]) -
     lines += [f"  {c}" for c in taxonomy]
     if examples:
         lines.append("")
-        lines.append("EXAMPLES FROM THIS USER'S OWN HISTORY:")
+        lines.append("CURATED JUDGMENT EXAMPLES (general guidance; never transaction history):")
         for e in examples:
-            lines.append(f"  {e['payee']}  ({e['amount']:.2f}, {e['account']}) -> {e['category']}")
+            lines.append(f"  [{e['id']}] {e['title']}")
+            lines.append(f"    situation: {e['situation']}")
+            lines.append(f"    evidence: {e['evidence']}")
+            lines.append(f"    proposal or escalation: {e['proposal_or_escalation']}")
+            lines.append(f"    human decision: {e['human_decision']}")
+            lines.append(f"    reusable lesson: {e['reusable_lesson']}")
     lines.append("")
     lines.append("TRANSACTIONS TO CATEGORISE:")
     for r in batch:
@@ -273,27 +276,3 @@ def classify(
         total.requests += usage.requests
 
     return proposals, total, prompts
-
-
-def build_examples(rows: list[dict], per_category: int = 1, limit: int = 24) -> list[dict]:
-    """Few-shot pairs drawn from the user's own categorised, non-transfer history."""
-    seen: dict[str, int] = {}
-    out: list[dict] = []
-    for r in sorted(rows, key=lambda x: x["posted_on"], reverse=True):
-        if not is_statistics_eligible(r) or r["is_uncategorized"]:
-            continue
-        cat = (r["category"] or "").strip()
-        if not cat or seen.get(cat, 0) >= per_category:
-            continue
-        seen[cat] = seen.get(cat, 0) + 1
-        out.append(
-            {
-                "payee": r["payee_display"],
-                "amount": r["amount_minor_units"] / 100,
-                "account": r["account_name"],
-                "category": cat,
-            }
-        )
-        if len(out) >= limit:
-            break
-    return out

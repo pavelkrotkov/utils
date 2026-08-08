@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from . import llm, prioritize, report, review_packet, subscriptions
+from . import judgment_examples, llm, prioritize, report, review_packet, subscriptions
 from .memory import MerchantMemory, Proposal
 from .secrets import SecretsError
 from .semantics import (
@@ -362,6 +362,16 @@ def _model_taxonomy(rows: list[dict]) -> list[str]:
     )
 
 
+def _curated_examples(
+    prioritized: list[Any],
+    subscription_findings: list[Any],
+    proposals: list[tuple[dict[str, Any], Any]],
+) -> list[dict[str, str]]:
+    curated = judgment_examples.load_curated_examples()
+    context = judgment_examples.context_from_review(prioritized, subscription_findings, proposals)
+    return judgment_examples.select_relevant_examples(curated, context)
+
+
 def cmd_analyze(args: argparse.Namespace) -> int:
     try:
         rows, run_id, source = _analysis_rows(args)
@@ -375,6 +385,11 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     staleness = prioritize.activity_staleness(analysis_rows, today)
     findings = subscriptions.analyse(analysis_rows, today)
     limitations = _analysis_limitations(source, analysis_rows)
+    try:
+        examples = _curated_examples(prioritized, findings, proposals)
+    except judgment_examples.JudgmentExampleError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
     out = Path(args.out)
     packet_path = Path(args.packet_out) if args.packet_out else out.with_name("review-packet.json")
     if out.resolve() == packet_path.resolve():
@@ -394,6 +409,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         subscription_findings=findings,
         stale_account_count=sum(s["status"] == "stale" for s in staleness),
         limitations=limitations,
+        examples=examples,
     )
     review_packet.write_packet(packet, packet_path)
     out.write_text(
@@ -470,7 +486,11 @@ def cmd_classify(args: argparse.Namespace) -> int:
         return 0
 
     taxonomy = _model_taxonomy(rows)
-    examples = llm.build_examples(rows)
+    try:
+        examples = _curated_examples([], [], [(row, None) for row in residue])
+    except judgment_examples.JudgmentExampleError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
     try:
         if not args.dry_run:
             _ensure_model_key(args.model, args.verbose)

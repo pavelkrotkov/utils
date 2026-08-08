@@ -68,12 +68,16 @@ agent should evaluate.
 Category proposals carry confidence only when deterministic merchant memory
 provided the proposal; unresolved rows carry `null`.
 
-`examples` is an explicit input to packet construction and is checked against a
-small safe field allowlist. The current runtime does not promote transaction
-history into that field. A later judgment-context layer may supply only
-deliberately curated and sanitized examples from
-`references/examples/judgment-examples.md`; account IDs, transaction IDs,
+`examples` contains the small, explicitly promoted set selected from
+`references/examples/judgment-examples.md`. The loader accepts only the five
+portable decision headings, rejects sensitive field names, and ranks examples
+by deterministic topic overlap with the current findings. It never reads
+transaction history to populate this field. The same curated examples are
+rendered into the optional classifier prompt as general guidance; they are not
+few-shot copies of a user's transactions. Account IDs, transaction IDs,
 account names, source hashes, and raw descriptors are rejected.
+The runtime also carries a copy beside the scripts so the read/analyze entry
+point remains usable when only the script cluster is deployed.
 
 ## Safety and reproducibility
 
