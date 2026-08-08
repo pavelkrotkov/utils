@@ -724,3 +724,48 @@ def test_tombstoning_an_unknown_transaction_records_nothing(tmp_path: Path):
 
     assert store.retirements() == []
     store.close()
+
+
+def test_retirement_history_cannot_be_rewritten_or_deleted(tmp_path: Path):
+    """Append-only is enforced by the database, not by convention.
+
+    A provenance table defended only by the code that happens to write it today
+    is defended by nothing — and a rewritten record still looks authoritative
+    afterwards, which is the whole problem.
+    """
+    store = Store(tmp_path / "review.sqlite")
+    seed = store.start_run("api", "seed")
+    store.upsert_version(seed, _record("txn-1"))
+    retiring = store.start_run("api", "tombstone")
+    store.upsert_version(retiring, {"transaction_id": "txn-1", "is_deleted": True})
+    store.commit()
+
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        store.conn.execute(f"UPDATE retirement_record SET reason = '{RETIRED_BY_ABSENCE}'")
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        store.conn.execute("DELETE FROM retirement_record")
+    store.rollback()
+
+    assert [item["reason"] for item in store.retirements()] == [RETIRED_BY_TOMBSTONE]
+    store.close()
+
+
+def test_a_current_row_in_another_source_does_not_mask_a_retirement(tmp_path: Path):
+    """The retired set is per source, including its current-version check.
+
+    CSV and API identifiers are not interchangeable, so a live `csv` row with
+    the same transaction ID says nothing about whether the `api` one is gone.
+    """
+    store = Store(tmp_path / "review.sqlite")
+    csv_run = store.start_run("csv", "seed")
+    api_run = store.start_run("api", "seed")
+    store.upsert_version(csv_run, _record("txn-1"))
+    store.upsert_version(api_run, _record("txn-1"))
+    tombstone = store.start_run("api", "tombstone")
+    store.upsert_version(tombstone, {"transaction_id": "txn-1", "is_deleted": True})
+    store.commit()
+
+    # csv still holds a current txn-1; that must not hide the api retirement.
+    assert store.retired_transaction_ids("api") == {"txn-1"}
+    assert store.retired_transaction_ids("csv") == set()
+    store.close()

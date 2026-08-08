@@ -37,3 +37,23 @@ CREATE INDEX IF NOT EXISTS idx_retirement_transaction
 
 CREATE INDEX IF NOT EXISTS idx_retirement_run
     ON retirement_record (run_id, id);
+
+-- Append-only is enforced by the database, not by convention — the same guard
+-- `decision_record` carries. A provenance table defended only by the code that
+-- happens to write it today is defended by nothing: ad-hoc maintenance, a
+-- migration written in a hurry, or a future path with a connection can rewrite
+-- the reason, the run, or the timestamp, and the record would still look
+-- authoritative afterwards. A retirement that turns out to be wrong is
+-- corrected by the transaction reappearing in a later run, which appends its
+-- own evidence; it is never corrected by editing history.
+CREATE TRIGGER IF NOT EXISTS retirement_record_forbids_update
+BEFORE UPDATE ON retirement_record
+BEGIN
+    SELECT RAISE(ABORT, 'retirement_record is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS retirement_record_forbids_delete
+BEFORE DELETE ON retirement_record
+BEGIN
+    SELECT RAISE(ABORT, 'retirement_record is append-only');
+END;
