@@ -6,6 +6,7 @@ import argparse
 import csv
 import json
 import os
+import signal
 import sqlite3
 import sys
 from collections import Counter
@@ -182,11 +183,19 @@ def _rows(db: Path, source: str) -> list[dict]:
 
 
 def _latest_run(db: Path) -> tuple[int, str]:
-    with sqlite3.connect(db) as conn:
-        row = conn.execute(
-            "SELECT id, source FROM runs WHERE state = 'succeeded' ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-    return (int(row[0]), str(row[1])) if row else (0, "unknown")
+    """The newest succeeded run, opening through `Store` so migrations run.
+
+    Deliberately not a raw `sqlite3.connect`. A read-only command can be the
+    first thing invoked after an upgrade, and querying a column a pending
+    migration has not added yet fails with `no such column` — an error about
+    our own schema, reported to someone who did nothing wrong. Going through
+    `Store` means any command can upgrade a database, not just `ingest`.
+    """
+    store = Store(db)
+    try:
+        return store.latest_successful_run()
+    finally:
+        store.close()
 
 
 def _parse_today(raw: str | None) -> date | None:
@@ -276,7 +285,7 @@ def _finalize_failed_run(store: Store, run_id: int, state: str, exc: BaseExcepti
     """
     try:
         store.rollback()
-        store.finish_run(
+        transitioned = store.finish_run(
             run_id,
             state,
             0,
@@ -284,6 +293,15 @@ def _finalize_failed_run(store: Store, run_id: int, state: str, exc: BaseExcepti
             error_message=_failure_message(exc) if exc is not None else None,
         )
         store.commit()
+        if not transitioned:
+            # The run had already finished, so this error struck after its data
+            # was committed. Saying so is the useful diagnostic; rewriting the
+            # run as failed would contradict rows that are legitimately current.
+            print(
+                f"WARNING run {run_id} had already completed; the error above occurred "
+                "afterwards and did not affect the data it committed.",
+                file=sys.stderr,
+            )
     except sqlite3.Error as bookkeeping:
         print(
             f"WARNING could not record run {run_id} as {state}: {bookkeeping}. "
@@ -1133,7 +1151,41 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def install_termination_handler() -> bool:
+    """Make SIGTERM raise, so a terminated run can record that it was aborted.
+
+    Ctrl-C already raises KeyboardInterrupt, but SIGTERM's default action ends
+    the process outright — no exception, no unwinding, no chance to finalize.
+    That is the ordinary way a service manager, a container stop, or a plain
+    `kill` ends a scheduled run, so without this the lifecycle's promise that
+    an interruption is recorded as `aborted` would hold only for the case
+    someone was sitting at a keyboard. The run would instead sit at `started`
+    forever, indistinguishable from one still in flight.
+
+    Returns whether the handler was installed. Signal handlers can only be set
+    from the main thread, and SIGTERM does not exist on every platform, so an
+    embedding caller gets a no-op rather than an exception — losing the
+    guarantee, not the command.
+    """
+    if not hasattr(signal, "SIGTERM"):
+        return False
+    try:
+        signal.signal(signal.SIGTERM, _raise_system_exit)
+    except ValueError:
+        # Not the main thread. Nothing to do, and nothing worth failing over.
+        return False
+    return True
+
+
+def _raise_system_exit(signum: int, _frame) -> None:
+    # SystemExit rather than a bespoke exception: `_run_finalized` already
+    # treats it as an interruption, and anything that does not know about the
+    # lifecycle still sees an ordinary exit.
+    raise SystemExit(128 + signum)
+
+
 def main(argv: list[str] | None = None) -> int:
+    install_termination_handler()
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)

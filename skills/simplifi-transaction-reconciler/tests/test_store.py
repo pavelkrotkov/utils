@@ -532,3 +532,41 @@ def test_migration_backfills_state_from_legacy_outcome(tmp_path: Path):
         assert reopened.latest_successful_run()[1] == "api"
     finally:
         reopened.close()
+
+
+def test_a_terminal_run_cannot_be_transitioned_again(tmp_path: Path):
+    """Terminal means terminal, whatever calls in afterwards.
+
+    An error raised after the ingest committed reaches the failure path with a
+    rollback that can no longer take back the committed rows. Rewriting the run
+    as failed would leave current transaction rows beside a run claiming it
+    failed, so the transition is refused and the caller told nothing changed.
+    """
+    store = Store(tmp_path / "review.sqlite")
+    run_id = store.start_run("api", "fixture")
+
+    assert store.finish_run(run_id, RUN_SUCCEEDED, 9, cursor_after="2026-08-06T12:00:00Z") is True
+    assert store.finish_run(run_id, RUN_FAILED, 0, error_class="BrokenPipeError") is False
+
+    row = store.conn.execute(
+        "SELECT state, row_count, cursor_after, error_class FROM runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    assert row["state"] == RUN_SUCCEEDED
+    assert row["row_count"] == 9
+    assert row["cursor_after"] == "2026-08-06T12:00:00Z"
+    assert row["error_class"] is None
+    store.close()
+
+
+def test_a_started_run_transitions_exactly_once(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+    run_id = store.start_run("api", "fixture")
+
+    assert store.finish_run(run_id, RUN_FAILED, 0, error_class="ApiError") is True
+    assert store.finish_run(run_id, RUN_ABORTED, 0) is False
+
+    assert (
+        store.conn.execute("SELECT state FROM runs WHERE id = ?", (run_id,)).fetchone()["state"]
+        == RUN_FAILED
+    )
+    store.close()

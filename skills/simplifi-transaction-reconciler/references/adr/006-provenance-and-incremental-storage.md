@@ -31,8 +31,20 @@ forever. Every exit path, including one nobody anticipated, must move the run
 to a terminal state; a failed run records an error class to aggregate by and a
 message someone can act on. Interruption is recorded distinctly from failure,
 because "someone stopped it" and "something is wrong" call for different
-responses. A run whose process was killed outright keeps `started`: we never
-learned what happened, and inventing a conclusion is worse than admitting that.
+responses. A terminated run counts as interrupted, which means SIGTERM must be
+made to raise — its default action ends the process without unwinding, and a
+scheduled run is far more often stopped by a service manager than by a
+keyboard. A run whose process was killed outright and could not be unwound
+keeps `started`: we never learned what happened, and inventing a conclusion is
+worse than admitting that.
+
+A terminal state is final. Anything raised after a run commits — reporting into
+a closed pipe is the everyday case — must not rewrite it, because the rollback
+that accompanies a failure cannot take back committed rows, and the result
+would be current transaction rows beside a run claiming it failed. Read-only
+commands must be able to migrate a database too: a schema change that only
+`ingest` can apply turns the first post-upgrade report into an error about our
+own schema.
 
 Only a succeeded run is analysis input. Analysis never falls back to selecting
 rows by source alone, which would report on whatever a failed or half-finished

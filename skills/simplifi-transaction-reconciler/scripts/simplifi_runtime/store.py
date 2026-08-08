@@ -133,8 +133,22 @@ class Store:
         complete_snapshot: bool = False,
         error_class: str | None = None,
         error_message: str | None = None,
-    ) -> None:
+    ) -> bool:
         """Move a run to a terminal state, recording why if it failed.
+
+        Returns whether the transition happened. Terminal means terminal: a run
+        that has already finished is left exactly as it is, and the caller is
+        told nothing changed.
+
+        That guard is load-bearing, not decorative. Anything raised *after* the
+        ingest committed — a `BrokenPipeError` from printing a summary into a
+        closed pipe is the everyday case — would otherwise reach the failure
+        path and rewrite a succeeded run as failed. The rollback that
+        accompanies it cannot take back the committed rows, so the result is a
+        database whose transaction rows are current and whose run says it
+        failed: analysis then rejects complete data, or attributes those rows
+        to some earlier run. Refusing the transition keeps the two consistent
+        however the code around it changes later.
 
         Rejects a non-terminal or unknown state rather than storing it. A typo
         like ``"success"`` would otherwise write a value no query matches, and
@@ -145,10 +159,10 @@ class Store:
             raise ValueError(
                 f"run state must be one of {sorted(TERMINAL_RUN_STATES)}, got {state!r}"
             )
-        self.conn.execute(
+        cur = self.conn.execute(
             "UPDATE runs SET finished_at = ?, state = ?, outcome = ?, row_count = ?, "
             "cursor_after = ?, complete_snapshot = ?, error_class = ?, error_message = ? "
-            "WHERE id = ?",
+            "WHERE id = ? AND state = ?",
             (
                 _now(),
                 state,
@@ -159,8 +173,10 @@ class Store:
                 error_class,
                 error_message,
                 run_id,
+                RUN_STARTED,
             ),
         )
+        return cur.rowcount > 0
 
     def record_run_scope(
         self,

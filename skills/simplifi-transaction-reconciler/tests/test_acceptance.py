@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import signal
 import sqlite3
 from pathlib import Path
 
@@ -1025,3 +1026,103 @@ def test_bookkeeping_failure_does_not_mask_the_original_error(tmp_path: Path, mo
     assert "/transactions returned 500" in err
     assert "could not record run" in err
     assert "readonly database" in err
+
+
+def test_read_commands_migrate_a_legacy_database(tmp_path: Path, monkeypatch, capsys):
+    """`analyze` must be able to be the first command run after an upgrade.
+
+    Querying `runs.state` through a raw connection ran before any migration
+    could add the column, so a read-only command failed with `no such column`
+    — an error about our own schema, shown to someone who did nothing wrong.
+    """
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    db = tmp_path / "legacy.sqlite"
+    _ingest_as(monkeypatch, FixtureApiClient(payload), db, "--full-rescan")
+    capsys.readouterr()
+
+    # Rewind the database to the pre-lifecycle schema, as an upgrade would find it.
+    with sqlite3.connect(db) as conn:
+        conn.execute("DELETE FROM schema_migrations WHERE name = '012_run_lifecycle.sql'")
+        conn.execute("DROP INDEX IF EXISTS idx_runs_state")
+        for column in ("state", "error_class", "error_message"):
+            conn.execute(f"ALTER TABLE runs DROP COLUMN {column}")
+
+    args = build_parser().parse_args(
+        ["analyze", "--db", str(db), "--out", str(tmp_path / "r.html"), "--today", "2026-06-15"]
+    )
+
+    assert args.func(args) == 0
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT state FROM runs ORDER BY id").fetchone()[0] == RUN_SUCCEEDED
+
+
+def test_an_error_after_commit_does_not_unmake_a_successful_run(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """A broken pipe while printing must not rewrite a committed run as failed.
+
+    The rollback cannot take back committed rows, so flipping the run would
+    leave current transaction rows beside a run that claims it failed —
+    analysis would then reject complete data.
+    """
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    db = tmp_path / "api.sqlite"
+    client = FixtureApiClient(payload)
+    monkeypatch.setattr(api_source, "client_from_env_or_age", lambda verbose=False: client)
+
+    real_print = print
+    calls = {"n": 0}
+
+    def flaky_print(*print_args, **print_kwargs):
+        calls["n"] += 1
+        # Fail once the ingest has committed and is reporting its summary.
+        if calls["n"] > 1 and print_kwargs.get("file") is None:
+            raise BrokenPipeError("broken pipe")
+        real_print(*print_args, **print_kwargs)
+
+    monkeypatch.setattr("builtins.print", flaky_print)
+    args = build_parser().parse_args(["ingest", "--source", "api", "--db", str(db)])
+    with pytest.raises(BrokenPipeError):
+        args.func(args)
+    monkeypatch.undo()
+    capsys.readouterr()
+
+    run = _run_state(db)
+    assert run["state"] == RUN_SUCCEEDED, "a committed run must stay succeeded"
+    assert run["error_class"] is None
+    assert _current_rows(db, "api"), "its rows are legitimately current"
+
+
+def test_sigterm_is_recorded_as_aborted(tmp_path: Path, monkeypatch, capsys):
+    """SIGTERM ends a scheduled run far more often than Ctrl-C does.
+
+    Its default action terminates the process outright, so without an
+    installed handler the run sits at 'started' forever, indistinguishable
+    from one still in flight.
+    """
+    from simplifi_runtime import cli
+
+    assert cli.install_termination_handler()
+    # The installed handler is ours, so invoking it below is the same code path
+    # the kernel would enter on delivery.
+    assert signal.getsignal(signal.SIGTERM) is cli._raise_system_exit
+
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    db = tmp_path / "api.sqlite"
+
+    class TerminatedClient(FixtureApiClient):
+        def transactions(self, date_on_after=None, modified_after=None):
+            cli._raise_system_exit(signal.SIGTERM, None)  # what delivery does, minus the timing
+            raise AssertionError("SIGTERM handler must raise")
+
+    monkeypatch.setattr(
+        api_source, "client_from_env_or_age", lambda verbose=False: TerminatedClient(payload)
+    )
+    args = build_parser().parse_args(["ingest", "--source", "api", "--db", str(db)])
+    with pytest.raises(SystemExit):
+        args.func(args)
+    capsys.readouterr()
+
+    run = _run_state(db)
+    assert run["state"] == RUN_ABORTED
+    assert run["error_class"] == "SystemExit"
