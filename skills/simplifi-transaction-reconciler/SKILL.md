@@ -308,6 +308,62 @@ reauthentication when the session is stale, revoked, or changed. Protect
 secrets/session state, log keys only, and classify the stored outcome as
 `success`, `degraded`, or `hard failure`.
 
+### Running on a schedule
+
+Pass `--unattended`. It refuses, at startup and before any work, three
+configurations that are fine interactively and wrong on a timer: an implicit
+data directory (nobody chose where the ledger lives, and two schedules can
+silently share one), `--allow-unsafe-paths` (a warning nobody reads is not a
+control), and `--send` (model egress rests on someone having reviewed the
+payload, which a timer cannot do). All problems are reported together, so
+fixing a schedule takes one iteration.
+
+Use `status` for monitoring rather than log scraping. It reports the latest run
+**per schedule** — identified by source *and* cursor scope, the same pair the
+cursor is keyed by, so one API profile's success cannot bury another's failure
+— with state, run ID, cursor scope, cursor movement, row count, and any
+recorded error. Exit codes: `0` every schedule's latest run succeeded, `1` some
+did not, `2` nothing to report. The last is deliberately not success, since a
+schedule that has never run looks healthy if you only check for errors.
+
+Pass `--max-age-hours` to catch a schedule that stopped firing altogether. Its
+last run stays `succeeded` forever, so without a stated cadence no state check
+can tell it from a live one; `status` says as much when the flag is absent
+rather than implying coverage it does not have.
+
+```bash
+uv run ./scripts/simplifi_transaction_reconciler.py ingest \
+  --source api --data-dir /path/to/data --unattended
+uv run ./scripts/simplifi_transaction_reconciler.py analyze \
+  --data-dir /path/to/data --unattended
+uv run ./scripts/simplifi_transaction_reconciler.py status --data-dir /path/to/data
+```
+
+**Reports never present a false clean.** Every report identifies its own
+inputs — run ID, source, dataset, the cursor window covered, and whether the
+run was a complete snapshot — and carries input/eligible/analyzed/discarded
+counts. Since transaction state is isolated by source alone, a database holding
+several cursor scopes is reported as a composite dataset with the scopes
+listed, rather than being labelled with whichever run happened to be latest.
+
+Note that *eligible for review* and *analyzed* are different populations, and
+the gap between them matters: a CSV export carries no settlement state, so all
+its rows are review-eligible while none is ever scored by prioritization,
+merchant memory, staleness, or recurring detection. The report counts what was
+scored. With no findings it says which of five things happened: nothing was
+read, everything was ineligible, everything fell outside the date bound, rows
+were visible but none could be scored, or rows were genuinely examined and
+nothing met a threshold. Only the last is a clean bill, and when some rows went
+unscored the statement is qualified with what it does not cover. Findings count
+every analyzer, so a recurring-charge anomaly can never sit under a sentence
+saying nothing was found. See ADR-010.
+
+Re-running a schedule is idempotent in data and honest in provenance: a repeat
+ingest of the same input adds no versions but still records the run, because
+the attempt is evidence the schedule fired. The cursor advances only past a
+succeeded run — never past a failed one, and never past one left `started` by a
+killed process.
+
 ## Future mutation design (non-executable)
 
 ADR-005 records a possible approval, validation, audit, and rollback boundary
