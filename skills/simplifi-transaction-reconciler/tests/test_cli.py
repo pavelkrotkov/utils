@@ -22,7 +22,7 @@ from simplifi_runtime.store import RUN_FAILED, RUN_SUCCEEDED, Store
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
 ENTRYPOINT = SKILL_DIR / "scripts" / "simplifi_transaction_reconciler.py"
-COMMANDS = {"ingest", "analyze", "classify", "decide", "subs", "probe", "schema"}
+COMMANDS = {"ingest", "analyze", "classify", "decide", "subs", "probe", "schema", "status"}
 
 
 def test_every_packaged_subcommand_has_a_handler():

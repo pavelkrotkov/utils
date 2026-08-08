@@ -294,6 +294,49 @@ class Store:
         ).fetchone()
         return dict(row) if row is not None else None
 
+    #: Everything `status` needs to say what a run was and how it ended.
+    RUN_STATUS_COLUMNS = (
+        "id, source, state, started_at, finished_at, row_count, "
+        "cursor_before, cursor_after, cursor_scope, complete_snapshot, "
+        "error_class, error_message"
+    )
+
+    def latest_run_per_source(self) -> list[dict]:
+        """The newest run for each source, whatever state it reached.
+
+        Per source rather than overall: an operator running both a CSV and an
+        API schedule needs to see that one of them stopped succeeding, and a
+        single global "latest run" would hide that behind whichever ran most
+        recently.
+        """
+        rows = self.conn.execute(
+            f"SELECT {self.RUN_STATUS_COLUMNS} FROM runs WHERE id IN ("
+            "  SELECT MAX(id) FROM runs GROUP BY source"
+            ") ORDER BY source"
+        )
+        return [dict(row) for row in rows]
+
+    def run_history(self, limit: int = 10, source: str | None = None) -> list[dict]:
+        """Recent runs, newest first — the trail behind the current state."""
+        if source:
+            rows = self.conn.execute(
+                f"SELECT {self.RUN_STATUS_COLUMNS} FROM runs WHERE source = ? "
+                "ORDER BY id DESC LIMIT ?",
+                (source, int(limit)),
+            )
+        else:
+            rows = self.conn.execute(
+                f"SELECT {self.RUN_STATUS_COLUMNS} FROM runs ORDER BY id DESC LIMIT ?",
+                (int(limit),),
+            )
+        return [dict(row) for row in rows]
+
+    def run_by_id(self, run_id: int) -> dict | None:
+        row = self.conn.execute(
+            f"SELECT {self.RUN_STATUS_COLUMNS} FROM runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        return dict(row) if row is not None else None
+
     def begin_immediate(self) -> None:
         """Take the write lock now, so a concurrent ingest cannot slip in later.
 

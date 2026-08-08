@@ -26,6 +26,7 @@ from . import (
     report,
     review_packet,
     subscriptions,
+    unattended,
 )
 from .memory import MerchantMemory, Proposal
 from .secrets import SecretsError
@@ -66,6 +67,18 @@ def _prepare_paths(args: argparse.Namespace) -> Path:
     difference is that by then it is an absolute, vetted path.
     """
     allow_unsafe = _allow_unsafe(args)
+    if getattr(args, "unattended", False):
+        # Checked here rather than in each command because this is the one
+        # place that already knows how the data directory was chosen, and a
+        # scheduled run has to fail at startup or not at all.
+        unattended.assert_unattended_safe(
+            data_dir_is_explicit=bool(
+                getattr(args, "data_dir", None)
+                or os.environ.get(artifacts.DATA_DIR_ENV, "").strip()
+            ),
+            allow_unsafe_paths=allow_unsafe,
+            sends_to_model=bool(getattr(args, "send", False)),
+        )
     data_dir = artifacts.prepare_data_dir(
         getattr(args, "data_dir", None), allow_unsafe=allow_unsafe
     )
@@ -394,7 +407,7 @@ def _ensure_model_key(model: str, verbose: bool) -> None:
 def cmd_ingest(args: argparse.Namespace) -> int:
     try:
         data_dir = _prepare_paths(args)
-    except artifacts.ArtifactError as exc:
+    except (artifacts.ArtifactError, unattended.UnattendedError) as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 2
     # Source-aware: an API ingest genuinely makes network calls, and a
@@ -734,10 +747,32 @@ def _curated_examples(
     return judgment_examples.select_relevant_examples(curated, context)
 
 
+def _run_identity(db: Path, run_id: int, source: str) -> unattended.RunIdentity:
+    """Read back what the analyzed run actually covered.
+
+    Taken from the stored run rather than from the command line: the report
+    should describe the ingest it is reporting on, which may have been a
+    different invocation entirely from the one rendering it.
+    """
+    store = Store(db)
+    try:
+        run = store.run_by_id(run_id) or {}
+    finally:
+        store.close()
+    return unattended.RunIdentity(
+        run_id=run_id,
+        source=source,
+        cursor_scope=run.get("cursor_scope"),
+        cursor_before=run.get("cursor_before"),
+        cursor_after=run.get("cursor_after"),
+        complete_snapshot=bool(run.get("complete_snapshot")),
+    )
+
+
 def cmd_analyze(args: argparse.Namespace) -> int:
     try:
         _prepare_paths(args)
-    except artifacts.ArtifactError as exc:
+    except (artifacts.ArtifactError, unattended.UnattendedError) as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 2
     print(f"INFO {egress.local_declaration('analyze').describe()}")
@@ -753,6 +788,14 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     staleness = prioritize.activity_staleness(analysis_rows, today)
     findings = subscriptions.analyse(analysis_rows, today)
     limitations = _analysis_limitations(source, analysis_rows)
+    # Measured from the rows themselves at the points where they are actually
+    # lost, so a zero result can say which stage consumed them rather than
+    # leaving an operator to guess between "clean week" and "broken ingest".
+    funnel = unattended.build_funnel(rows=rows, analyzed=analysis_rows, findings=len(prioritized))
+    identity = _run_identity(Path(args.db), run_id, source)
+    print(f"INFO funnel: {funnel.summary()}")
+    for line in funnel.diagnosis():
+        print(f"INFO {line}")
     try:
         examples = _curated_examples(prioritized, findings, proposals)
     except judgment_examples.JudgmentExampleError as exc:
@@ -793,6 +836,8 @@ def cmd_analyze(args: argparse.Namespace) -> int:
             memory_stats=memory.stats(),
             subscription_findings=findings,
             limitations=limitations,
+            identity=identity,
+            funnel=funnel,
         ),
     )
 
@@ -863,7 +908,7 @@ def cmd_decide(args: argparse.Namespace) -> int:
     """Validate agent proposals and append immutable decision records."""
     try:
         _prepare_paths(args)
-    except artifacts.ArtifactError as exc:
+    except (artifacts.ArtifactError, unattended.UnattendedError) as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 2
     print(f"INFO {egress.local_declaration('decide').describe()}")
@@ -888,7 +933,7 @@ def cmd_decide(args: argparse.Namespace) -> int:
     try:
         for path in (packet_path, proposals_path):
             artifacts.harden_existing(path)
-    except artifacts.ArtifactError as exc:
+    except (artifacts.ArtifactError, unattended.UnattendedError) as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 2
 
@@ -982,7 +1027,7 @@ def cmd_decide(args: argparse.Namespace) -> int:
 def cmd_subs(args: argparse.Namespace) -> int:
     try:
         _prepare_paths(args)
-    except artifacts.ArtifactError as exc:
+    except (artifacts.ArtifactError, unattended.UnattendedError) as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 2
     print(f"INFO {egress.local_declaration('subs').describe()}")
@@ -1004,7 +1049,7 @@ def cmd_subs(args: argparse.Namespace) -> int:
 def cmd_classify(args: argparse.Namespace) -> int:
     try:
         _prepare_paths(args)
-    except artifacts.ArtifactError as exc:
+    except (artifacts.ArtifactError, unattended.UnattendedError) as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 2
     if args.send and args.dry_run:
@@ -1240,6 +1285,56 @@ def cmd_probe(args: argparse.Namespace) -> int:
     return 0 if healthy else 1
 
 
+def cmd_status(args: argparse.Namespace) -> int:
+    """Report what the last run of each source did, and exit accordingly.
+
+    A scheduled job's failures have to be visible without reading logs, because
+    by the time anyone looks the logs have rotated and the only durable record
+    is the database. The exit code carries the same information for a monitor
+    that reads nothing: 0 when every source's latest run succeeded, 1 when any
+    did not, 2 when there is nothing to report at all — which is itself a
+    finding, since a schedule that has never run looks identical to a healthy
+    one if you only check for errors.
+    """
+    try:
+        _prepare_paths(args)
+    except (artifacts.ArtifactError, unattended.UnattendedError) as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
+    print(f"INFO {egress.local_declaration('status').describe()}")
+    db = Path(args.db)
+    if not db.exists():
+        print(f"ERROR no database at {db}; run `ingest` first", file=sys.stderr)
+        return 2
+    store = Store(db)
+    try:
+        latest = store.latest_run_per_source()
+        history = store.run_history(limit=args.limit) if args.verbose else []
+    finally:
+        store.close()
+
+    if not latest:
+        print(f"ERROR no runs recorded in {db}", file=sys.stderr)
+        return 2
+
+    for line in unattended.format_status(latest):
+        print(line)
+    if history:
+        print("\nRecent runs:")
+        for line in unattended.format_status(history):
+            print(f"  {line}")
+
+    unhealthy = [run for run in latest if run.get("state") != RUN_SUCCEEDED]
+    if unhealthy:
+        names = ", ".join(str(run.get("source")) for run in unhealthy)
+        print(
+            f"ERROR the latest run did not succeed for: {names}",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
 def cmd_schema(args: argparse.Namespace) -> int:
     print(f"INFO {egress.local_declaration('schema').describe()}")
     from .sources.api_source import ApiError, schema_report
@@ -1271,6 +1366,14 @@ def _add_storage_args(parser: argparse.ArgumentParser) -> None:
         "--allow-unsafe-paths",
         action="store_true",
         help="downgrade location refusals to warnings; permissions are still enforced",
+    )
+    parser.add_argument(
+        "--unattended",
+        action="store_true",
+        help=(
+            "refuse any configuration a scheduled run should not have: an "
+            "implicit data directory, relaxed path checks, or model egress"
+        ),
     )
 
 
@@ -1362,6 +1465,13 @@ def build_parser() -> argparse.ArgumentParser:
     probe.add_argument("--since", help="report the cursor scope for this dateOnAfter value")
     probe.add_argument("--verbose", action="store_true")
     probe.set_defaults(func=cmd_probe)
+
+    status = sub.add_parser("status", help="report the last run of each source")
+    status.add_argument("--db", default="simplifi.sqlite")
+    status.add_argument("--limit", type=_positive_int, default=10)
+    status.add_argument("--verbose", action="store_true", help="also list recent runs")
+    _add_storage_args(status)
+    status.set_defaults(func=cmd_status)
 
     schema = sub.add_parser("schema", help="inspect API response shapes and pagination")
     schema.add_argument("--verbose", action="store_true")

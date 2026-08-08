@@ -7,6 +7,7 @@ from datetime import date
 
 from .memory import Proposal
 from .semantics import is_statistics_quarantined
+from .unattended import Funnel, RunIdentity
 
 CSS = """
 :root { --bg:#fff; --fg:#1a1a1a; --muted:#666; --line:#e4e4e7; --accent:#4f39d9;
@@ -78,6 +79,8 @@ def render(
     memory_stats: dict,
     subscription_findings: list | None = None,
     limitations: list[str] | None = None,
+    identity: RunIdentity | None = None,
+    funnel: Funnel | None = None,
 ) -> str:
     total = len(rows)
     uncat = sum(1 for r in rows if r["is_uncategorized"])
@@ -97,17 +100,48 @@ def render(
     for limitation in limitations or []:
         p.append(f"<div class='chip warn'>LIMITATION: {_e(limitation)}</div>")
 
+    # 0. What this is a report of. A periodic report that does not name its own
+    # inputs cannot be compared with last week's, and cannot be distinguished
+    # from one produced against a different dataset or an older cursor window.
+    if identity is not None:
+        p.append("<h2>Run identification</h2>")
+        p.append("<table>")
+        for label, value in identity.items():
+            p.append(f"<tr><td>{_e(label)}</td><td><code>{_e(value)}</code></td></tr>")
+        p.append("</table>")
+
     # 1. Run health
     p.append("<h2>Run health</h2><div class=cards>")
-    for k, v in (
+    cards = [
         ("Transactions", f"{total:,}"),
         ("Needs a category", str(uncat)),
         ("Excluded from stats", str(excluded)),
         ("Flagged for review", str(len(prioritized))),
         ("Inactive accounts", str(len(stale))),
-    ):
+    ]
+    if funnel is not None:
+        cards = [
+            cards[0],
+            ("Eligible", f"{funnel.eligible_rows:,}"),
+            ("Analyzed", f"{funnel.analyzed_rows:,}"),
+            ("Discarded", f"{funnel.discarded_rows:,}"),
+            ("Findings", f"{funnel.findings:,}"),
+            *cards[1:],
+        ]
+    for k, v in cards:
         p.append(f"<div class=card><div class=k>{_e(k)}</div><div class=v>{_e(v)}</div></div>")
     p.append("</div>")
+
+    # A zero result and a broken pipeline look identical unless the report says
+    # which one it is. This is the difference between "nothing needs attention"
+    # and "nothing was examined".
+    diagnosis = funnel.diagnosis() if funnel is not None else []
+    if diagnosis:
+        p.append("<h2>Why this report has no findings</h2>")
+        p.append("<ul>")
+        for line in diagnosis:
+            p.append(f"<li>{_e(line)}</li>")
+        p.append("</ul>")
 
     p.append(
         "<table><tr><th>Account</th><th>Last transaction</th>"

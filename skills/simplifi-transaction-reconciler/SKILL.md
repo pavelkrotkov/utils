@@ -308,6 +308,46 @@ reauthentication when the session is stale, revoked, or changed. Protect
 secrets/session state, log keys only, and classify the stored outcome as
 `success`, `degraded`, or `hard failure`.
 
+### Running on a schedule
+
+Pass `--unattended`. It refuses, at startup and before any work, three
+configurations that are fine interactively and wrong on a timer: an implicit
+data directory (nobody chose where the ledger lives, and two schedules can
+silently share one), `--allow-unsafe-paths` (a warning nobody reads is not a
+control), and `--send` (model egress rests on someone having reviewed the
+payload, which a timer cannot do). All problems are reported together, so
+fixing a schedule takes one iteration.
+
+Use `status` for monitoring rather than log scraping. It reports the latest run
+**per source** — a dead API schedule stays visible behind a healthy CSV one —
+with state, run ID, cursor scope, cursor movement, row count, and any recorded
+error. Exit codes: `0` every source's latest run succeeded, `1` some did not,
+`2` nothing to report. The last is deliberately not success, since a schedule
+that has never run looks healthy if you only check for errors.
+
+```bash
+uv run ./scripts/simplifi_transaction_reconciler.py ingest \
+  --source api --data-dir /path/to/data --unattended
+uv run ./scripts/simplifi_transaction_reconciler.py analyze \
+  --data-dir /path/to/data --unattended
+uv run ./scripts/simplifi_transaction_reconciler.py status --data-dir /path/to/data
+```
+
+**Reports never present a false clean.** Every report identifies its own
+inputs — run ID, source, dataset scope, the cursor window covered, and whether
+the run was a complete snapshot — and carries input/eligible/analyzed/discarded
+counts. When there are no findings it says which of four things happened:
+nothing was read at all, everything was ineligible, everything fell outside the
+analysis date bound, or rows were genuinely examined and nothing met a
+threshold. Only the last is a clean bill and only it is phrased as one. See
+ADR-010.
+
+Re-running a schedule is idempotent in data and honest in provenance: a repeat
+ingest of the same input adds no versions but still records the run, because
+the attempt is evidence the schedule fired. The cursor advances only past a
+succeeded run — never past a failed one, and never past one left `started` by a
+killed process.
+
 ## Future mutation design (non-executable)
 
 ADR-005 records a possible approval, validation, audit, and rollback boundary
