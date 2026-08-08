@@ -92,3 +92,11 @@ Packet lists are sorted by stable identifiers or reason codes, and JSON is
 written with sorted keys and no generation timestamp. Identical run inputs
 therefore produce identical bytes. `write_packet` always validates before
 crossing the file boundary.
+
+## Answering the packet
+
+Agent judgment returns through `proposals.json`, validated by `decide` and
+recorded as append-only decision records. See the
+[decision-record contract](decision-records.md) for that half of the boundary.
+The packet's `run_id`, `analysis_date`, and `dataset_hash` are what a proposal
+document must echo back, so a review of a superseded run fails closed.

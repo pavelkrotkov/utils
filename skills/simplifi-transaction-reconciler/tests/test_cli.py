@@ -12,6 +12,7 @@ from simplifi_runtime.cli import (
     _csv_safe_text,
     _ensure_model_key,
     _is_complete_snapshot,
+    _known_categories,
     _latest_modified_at,
     _latest_run,
     _model_taxonomy,
@@ -21,7 +22,7 @@ from simplifi_runtime.store import Store
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
 ENTRYPOINT = SKILL_DIR / "scripts" / "simplifi_transaction_reconciler.py"
-COMMANDS = {"ingest", "analyze", "classify", "subs", "probe", "schema"}
+COMMANDS = {"ingest", "analyze", "classify", "decide", "subs", "probe", "schema"}
 
 
 def test_every_packaged_subcommand_has_a_handler():
@@ -279,6 +280,42 @@ def test_model_taxonomy_excludes_non_spending_and_unsettled_rows():
         },
     ]
 
+    assert _model_taxonomy(rows) == ["Groceries"]
+
+
+def test_known_categories_keep_unsettled_labels_but_drop_transfer_targets():
+    rows = [
+        {
+            "account_name": "Checking",
+            "category": "Groceries",
+            "is_uncategorized": 0,
+            "poisons_statistics": 0,
+            "txn_state": "CLEARED",
+        },
+        {
+            "account_name": "Checking",
+            "category": "Subscriptions",
+            "is_uncategorized": 0,
+            "poisons_statistics": 0,
+            "txn_state": "",
+        },
+        {
+            "account_name": "Checking",
+            "category": "Checking",
+            "is_uncategorized": 0,
+            "poisons_statistics": 1,
+            "txn_state": "CLEARED",
+        },
+        {
+            "account_name": "Checking",
+            "category": "",
+            "is_uncategorized": 1,
+            "poisons_statistics": 0,
+            "txn_state": "CLEARED",
+        },
+    ]
+
+    assert _known_categories(rows) == {"Groceries", "Subscriptions"}
     assert _model_taxonomy(rows) == ["Groceries"]
 
 

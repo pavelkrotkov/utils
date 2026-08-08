@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import sqlite3
 import sys
@@ -12,7 +13,15 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from . import judgment_examples, llm, prioritize, report, review_packet, subscriptions
+from . import (
+    decisions,
+    judgment_examples,
+    llm,
+    prioritize,
+    report,
+    review_packet,
+    subscriptions,
+)
 from .memory import MerchantMemory, Proposal
 from .secrets import SecretsError
 from .semantics import (
@@ -346,6 +355,22 @@ def _analysis_limitations(source: str, rows: list[dict]) -> list[str]:
     return limitations
 
 
+def _known_categories(rows: list[dict]) -> set[str]:
+    """Category labels this dataset already uses.
+
+    Deliberately broader than :func:`_model_taxonomy`: settlement state governs
+    what may train statistics, not whether a category label exists. Account
+    names are removed so a proposal cannot relabel a transfer as its
+    destination account.
+    """
+    accounts = {row["account_name"] for row in rows}
+    return {
+        (row["category"] or "").strip()
+        for row in rows
+        if (row["category"] or "").strip() and not row["is_uncategorized"]
+    } - accounts
+
+
 def _model_taxonomy(rows: list[dict]) -> list[str]:
     accounts = {row["account_name"] for row in rows}
     return sorted(
@@ -445,6 +470,144 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         )
     print(f"INFO wrote {out}")
     print(f"INFO wrote {packet_path}")
+    return 0
+
+
+def _load_json(path: Path, label: str) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValueError(f"no {label} at {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{label} at {path} is not valid JSON: {exc}") from exc
+
+
+def _packet_binding_error(
+    packet: dict, rows: list[dict], latest_run_id: int, latest_source: str
+) -> str | None:
+    """Confirm the packet was produced from this database, not another one.
+
+    A run ID alone is not identity: two databases both sitting on run 1 would
+    otherwise accept each other's packets, appending an immutable decision for
+    a transaction this database has never seen. The dataset hash is recomputed
+    from the selected database and must match the packet's.
+    """
+    run = packet["run"]
+    if str(run.get("source")) != latest_source:
+        return (
+            f"review packet was produced from source {run.get('source')!r}, but the latest "
+            f"successful run in this database used {latest_source!r}"
+        )
+    if run.get("run_id") != latest_run_id:
+        # A superseded run is reported as a stale reference during validation.
+        return None
+    try:
+        analysis_date = date.fromisoformat(str(run.get("analysis_date")))
+    except ValueError:
+        return f"review packet has an unusable analysis_date: {run.get('analysis_date')!r}"
+    expected = review_packet.dataset_hash(_as_of_rows(rows, analysis_date))
+    found = str(packet["source"].get("dataset_hash"))
+    if expected != found:
+        return (
+            "review packet does not describe this database: expected dataset_hash "
+            f"{expected[:12]}…, found {found[:12]}…. Re-run `analyze` against "
+            "this database and review the packet it writes"
+        )
+    return None
+
+
+def cmd_decide(args: argparse.Namespace) -> int:
+    """Validate agent proposals and append immutable decision records."""
+    db = Path(args.db)
+    packet_path = Path(args.packet)
+    proposals_path = Path(args.proposals)
+    out = Path(args.out)
+    for label, other in (("--db", db), ("--packet", packet_path), ("--proposals", proposals_path)):
+        if out.resolve() == other.resolve():
+            print(f"ERROR --out and {label} must name different files", file=sys.stderr)
+            return 2
+    if out.is_dir():
+        print(f"ERROR --out must name a file, not a directory: {out}", file=sys.stderr)
+        return 2
+
+    try:
+        packet = _load_json(packet_path, "review packet")
+        document = _load_json(proposals_path, "proposals file")
+    except ValueError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
+    try:
+        review_packet.validate_packet(packet)
+    except review_packet.PacketValidationError as exc:
+        print(f"ERROR review packet at {packet_path} is invalid: {exc}", file=sys.stderr)
+        return 1
+    if not db.exists():
+        print(f"ERROR no database at {db}; run `ingest` first", file=sys.stderr)
+        return 1
+
+    latest_run_id, latest_source = _latest_run(db)
+    rows = _rows(db, latest_source)
+    binding = _packet_binding_error(packet, rows, latest_run_id, latest_source)
+    if binding:
+        print(f"ERROR {binding}; no decision was recorded", file=sys.stderr)
+        return 1
+    try:
+        validated = decisions.validate_proposals(
+            document,
+            packet,
+            allowed_categories=_known_categories(rows),
+            latest_run_id=latest_run_id,
+        )
+    except decisions.ProposalValidationError as exc:
+        print(
+            f"ERROR rejected {len(exc.errors)} problem(s) in {proposals_path}; "
+            "no decision was recorded",
+            file=sys.stderr,
+        )
+        for error in exc.errors:
+            print(f"ERROR {error}", file=sys.stderr)
+        return 1
+
+    reviewer = document["reviewer"]
+    records = decisions.build_decision_records(validated, packet, reviewer)
+    store = Store(db)
+    staged: Path | None = None
+    try:
+        # One atomic step: take the write lock, re-confirm the run has not been
+        # superseded, append, and prove the artifact is writable before commit.
+        store.begin_immediate()
+        if store.latest_successful_run() != (latest_run_id, latest_source):
+            print(
+                f"ERROR run {latest_run_id} was superseded by a concurrent ingest; "
+                "no decision was recorded. Re-run `analyze` and review the new packet",
+                file=sys.stderr,
+            )
+            store.rollback()
+            return 1
+        appended = store.append_decision_records(records)
+        stored = store.stored_decisions([record["decision_id"] for record in records])
+        staged = decisions.stage_decisions(
+            decisions.build_decision_document(packet, reviewer, stored, appended_count=appended),
+            out,
+        )
+        store.commit()
+    except BaseException:
+        store.rollback()
+        if staged is not None:
+            staged.unlink(missing_ok=True)
+        raise
+    finally:
+        store.close()
+    decisions.publish_decisions(staged, out)
+
+    verdicts = Counter(record["decision"] for record in stored)
+    print(f"INFO validated {len(records)} proposal(s) against run {latest_run_id}")
+    print(f"INFO decisions: {dict(sorted(verdicts.items()))}")
+    print(
+        f"INFO appended {appended} decision record(s) to {db}; "
+        f"{len(records) - appended} already recorded"
+    )
+    print(f"INFO wrote {out}; no provider state was changed")
     return 0
 
 
@@ -676,6 +839,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="write prompts without calling an API"
     )
     classify.set_defaults(func=cmd_classify)
+
+    decide = sub.add_parser("decide", help="validate agent proposals and append decision records")
+    decide.add_argument("--db", default="simplifi.sqlite")
+    decide.add_argument(
+        "--packet",
+        default="review-packet.json",
+        help="review packet the proposals were made against",
+    )
+    decide.add_argument(
+        "--proposals",
+        default="proposals.json",
+        help="structured agent judgment to validate",
+    )
+    decide.add_argument(
+        "--out",
+        default="decisions.json",
+        help="validated decision records (never the input packet)",
+    )
+    decide.set_defaults(func=cmd_decide)
 
     subs = sub.add_parser("subs", help="review recurring charges")
     subs.add_argument("--db", default="simplifi.sqlite")
