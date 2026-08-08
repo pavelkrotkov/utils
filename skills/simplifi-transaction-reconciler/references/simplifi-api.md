@@ -153,6 +153,35 @@ safe: the request carried `modifiedAfter=<held cursor>`, so the server returned
 everything past that point whatever its marker claims. A full rescan takes the
 floor from the stored watermark, since it sends no `modifiedAfter` of its own;
 an explicit `--modified-after` is a deliberate rewind and becomes the floor.
+
+Cursors are keyed by the identity they were read against, not by source name.
+The scope covers the profile, the dataset, the token's subject, and the
+`--since` query bound; changing any of them selects a separate history. Keying
+by source alone lets a second dataset or a re-scoped `--since` inherit a
+high-water mark earned against different data, after which the run requests
+only what changed past that mark and never fetches the rest — silently, and
+reporting success. Identity components are stored as short digests, since they
+are only ever compared; `--since` is stored verbatim. The scope is written to
+`runs.cursor_scope` and reported by both `ingest` and `probe`. Cursors written
+before scoping existed keep a NULL scope, match no resolved scope, and are
+never adopted: the first run after upgrading re-reads its window once, says so,
+and earns a scoped cursor.
+
+Two cases refuse a stored cursor even when one exists for the scope:
+
+- **The snapshot belongs elsewhere.** Current rows are still isolated by source
+  alone, so a complete rescan under one scope retires every other scope's rows.
+  A cursor earned before that retirement remains a truthful statement about the
+  provider and a wrong one about what is stored; resuming from it would fetch
+  only deltas and never restore the retired history. Runs record whether they
+  replaced the snapshot (`runs.complete_snapshot`), and a scope whose rows were
+  last replaced by another scope reads its full window instead.
+- **The principal is unidentifiable.** An opaque, non-JWT token exposes no
+  `sub`, so two principals on one profile and dataset produce the same key and a
+  broader replacement token would inherit a narrower one's mark. Fingerprinting
+  the bearer token instead would be safe but useless — these tokens live one
+  hour, so every run would mint a new scope. The runtime instead declines to
+  attribute any cursor to an unidentifiable principal and reads the full window.
 The packaged CLI uses the last successful cursor by default; pass
 `ingest --source api --full-rescan` to omit `modifiedAfter` and rebuild the
 current API view after a missed window or derivation-rule change.

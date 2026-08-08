@@ -114,7 +114,11 @@ later ingest has superseded. Every rejection reports its JSON path and code.
 Use `--source api` for read-only API ingestion, or `probe`/`schema` for
 read-only diagnostics. Omit `--modified-after` for normal API ingestion to use
 the last successful cursor; use `--full-rescan` for recovery or after changing
-derivation rules. The packaged CLI emits reports, diagnostics, prompts, and
+derivation rules. That cursor is scoped to the profile, dataset, token subject,
+and `--since` bound it was earned under, so pointing the same database at
+another dataset or widening `--since` starts a separate history instead of
+inheriting a mark that does not describe it. Both `ingest` and `probe` report
+the scope in use. The packaged CLI emits reports, diagnostics, prompts, and
 proposal files only; it never writes provider state, refreshes an institution,
 sends notifications, or undoes a change. CSV runs report their limitation
 because CSV exports do not expose settlement or projection state.
