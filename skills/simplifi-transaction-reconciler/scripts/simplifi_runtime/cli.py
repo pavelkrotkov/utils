@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import signal
@@ -18,6 +19,7 @@ from typing import Any
 from . import (
     artifacts,
     decisions,
+    egress,
     judgment_examples,
     llm,
     prioritize,
@@ -43,6 +45,11 @@ from .sync_scope import SyncScope, api_scope, scope_from_profile
 #: they put it, and relocating their input would be a surprise rather than a
 #: protection.
 ARTIFACT_ARGS = ("db", "out", "packet_out", "packet", "proposals")
+
+
+def _digest(text: str) -> str:
+    """A short, stable name for a payload, so two runs can be compared aloud."""
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
 def _allow_unsafe(args: argparse.Namespace) -> bool:
@@ -390,6 +397,11 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     except artifacts.ArtifactError as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 2
+    # Source-aware: an API ingest genuinely makes network calls, and a
+    # declaration that denied it would be false to anyone auditing traffic.
+    print(
+        f"INFO {egress.local_declaration('ingest', reads_provider=args.source == 'api').describe()}"
+    )
     if args.verbose:
         print(f"INFO {artifacts.describe_policy(data_dir)}")
     store = Store(Path(args.db))
@@ -728,6 +740,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     except artifacts.ArtifactError as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 2
+    print(f"INFO {egress.local_declaration('analyze').describe()}")
     try:
         rows, run_id, source = _analysis_rows(args)
     except ValueError as exc:
@@ -853,6 +866,7 @@ def cmd_decide(args: argparse.Namespace) -> int:
     except artifacts.ArtifactError as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 2
+    print(f"INFO {egress.local_declaration('decide').describe()}")
     db = Path(args.db)
     packet_path = Path(args.packet)
     proposals_path = Path(args.proposals)
@@ -971,6 +985,7 @@ def cmd_subs(args: argparse.Namespace) -> int:
     except artifacts.ArtifactError as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 2
+    print(f"INFO {egress.local_declaration('subs').describe()}")
     try:
         rows, _, _ = _analysis_rows(args)
     except ValueError as exc:
@@ -992,6 +1007,35 @@ def cmd_classify(args: argparse.Namespace) -> int:
     except artifacts.ArtifactError as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 2
+    if args.send and args.dry_run:
+        print(
+            "ERROR --send and --dry-run contradict each other; --dry-run is the "
+            "default and is kept only for existing scripts",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        declaration = egress.classify_declaration(
+            send=args.send, model=args.model, redact=args.redact
+        )
+    except egress.EgressError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
+    print(f"INFO {declaration.describe()}")
+    # The prompt path is derived, not given, so nothing stopped it from landing
+    # on a file the run also reads. `--db proposals.prompt.txt` with the
+    # default `--out` was enough: the database opened, the analysis succeeded,
+    # and then the payload write truncated the database — a successful exit
+    # that destroyed its own input.
+    prompt_path = Path(args.out).with_suffix(".prompt.txt")
+    for label, other in (("--db", args.db), ("--out", args.out)):
+        if prompt_path == Path(other):
+            print(
+                f"ERROR the payload would be written to {prompt_path}, which is "
+                f"also {label}; choose a different --out",
+                file=sys.stderr,
+            )
+            return 2
     try:
         rows, _, source = _analysis_rows(args)
     except ValueError as exc:
@@ -1018,34 +1062,67 @@ def cmd_classify(args: argparse.Namespace) -> int:
     except judgment_examples.JudgmentExampleError as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
+    print(f"INFO {len(residue)} transactions need a proposal")
+    print(f"INFO taxonomy: {len(taxonomy)} categories, {len(examples)} examples")
+
+    # Build and check every request first, then write it out. The payload
+    # exists on disk before anything is transmitted, so the run that sends is
+    # also the run whose payload can be read — which was not true when the
+    # prompt file was written *instead of* sending.
     try:
-        if not args.dry_run:
-            _ensure_model_key(args.model, args.verbose)
+        payloads = llm.build_payloads(
+            residue,
+            taxonomy,
+            examples,
+            chunk_size=args.chunk_size,
+            redact=args.redact,
+        )
+    except (egress.EgressError, ValueError) as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
+
+    document = "\n\n===== NEXT REQUEST =====\n\n".join(payload.user for payload in payloads)
+
+    if not declaration.sends:
+        artifacts.secure_write_text(prompt_path, document)
+        print(f"INFO payload: {len(payloads)} request(s) written to {prompt_path}")
+        print(f"INFO payload digest: {_digest(document)}")
+        print(f"INFO nothing was sent; review {prompt_path}, then re-run with --send to submit it")
+        return 0
+
+    # `--send` transmits the payload that was reviewed, or none at all. Between
+    # the review and this run an ingest, an edited example, or a changed option
+    # can produce different requests, and overwriting the artifact and sending
+    # the new one would make the review a formality — the user would have
+    # approved bytes that never left. So the two are compared, and a mismatch
+    # rewrites the file and stops rather than transmitting.
+    reviewed = prompt_path.read_text(encoding="utf-8") if prompt_path.exists() else None
+    if reviewed != document:
+        artifacts.secure_write_text(prompt_path, document)
+        reason = "differs from" if reviewed is not None else "had not been written before"
+        print(
+            f"ERROR the payload {reason} the one at {prompt_path}, so nothing was sent. "
+            f"The current payload has been written there ({_digest(document)}); "
+            f"review it and re-run with --send.",
+            file=sys.stderr,
+        )
+        return 3
+    print(f"INFO payload: {len(payloads)} request(s) matching {prompt_path} ({_digest(document)})")
+
+    try:
+        _ensure_model_key(args.model, args.verbose)
         backend_cls = llm.BACKENDS[args.model]
         backend = backend_cls()
     except (SecretsError, ValueError) as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
-    print(f"INFO {len(residue)} transactions need a proposal")
-    print(f"INFO taxonomy: {len(taxonomy)} categories, {len(examples)} examples")
+    print(f"INFO sending to {declaration.destination}")
+    print(f"INFO {egress.retention_note(declaration.destination or 'the model provider')}")
     try:
-        proposals, usage, prompts = llm.classify(
-            backend,
-            residue,
-            taxonomy,
-            examples,
-            chunk_size=args.chunk_size,
-            dry_run=args.dry_run,
-        )
+        proposals, usage = llm.classify(backend, payloads, taxonomy)
     except (RuntimeError, ValueError) as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
-
-    if args.dry_run:
-        out = Path(args.out).with_suffix(".prompt.txt")
-        artifacts.secure_write_text(out, "\n\n===== NEXT REQUEST =====\n\n".join(prompts))
-        print(f"INFO dry run: {len(prompts)} request(s); wrote {out}")
-        return 0
 
     out = Path(args.out)
     rows_by_id = {row["transaction_id"]: row for row in residue}
@@ -1120,6 +1197,7 @@ def _api_client(args: argparse.Namespace):
 
 
 def cmd_probe(args: argparse.Namespace) -> int:
+    print(f"INFO {egress.local_declaration('probe').describe()}")
     from .sources.api_source import ApiError
 
     try:
@@ -1163,6 +1241,7 @@ def cmd_probe(args: argparse.Namespace) -> int:
 
 
 def cmd_schema(args: argparse.Namespace) -> int:
+    print(f"INFO {egress.local_declaration('schema').describe()}")
     from .sources.api_source import ApiError, schema_report
 
     try:
@@ -1233,7 +1312,22 @@ def build_parser() -> argparse.ArgumentParser:
     classify.add_argument("--chunk-size", type=_positive_int, default=llm.CHUNK_SIZE)
     classify.add_argument("--verbose", action="store_true")
     classify.add_argument(
-        "--dry-run", action="store_true", help="write prompts without calling an API"
+        "--send",
+        action="store_true",
+        help="transmit transactions to the model API (off by default; see --redact)",
+    )
+    classify.add_argument(
+        "--redact",
+        default="",
+        metavar="FIELDS",
+        help=(
+            f"comma-separated fields to withhold or coarsen: {', '.join(egress.REDACTABLE_FIELDS)}"
+        ),
+    )
+    classify.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="deprecated: not sending is now the default; kept for existing scripts",
     )
     _add_storage_args(classify)
     classify.set_defaults(func=cmd_classify)

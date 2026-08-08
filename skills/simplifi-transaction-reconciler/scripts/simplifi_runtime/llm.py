@@ -10,7 +10,10 @@ GUARDRAILS
   - the model never writes anything; it returns proposals
   - every returned category is validated against the supplied taxonomy and
     rejected outright if it is not a member — never coerced or fuzzy-matched
-  - transactions are sent with payee, amount, account and date only
+  - what may be sent is decided by `egress`, not here: this module renders the
+    records it is handed and cannot reach back into a database row for more
+  - nothing is transmitted without an explicit `--send`, and every payload is
+    assembled and written out before the first request leaves
 """
 
 from __future__ import annotations
@@ -21,8 +24,11 @@ import math
 import os
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Protocol
+
+from . import egress
 
 CHUNK_SIZE = 40
 REQUEST_TIMEOUT = 90
@@ -58,6 +64,16 @@ class Proposal:
     rejected_category: str | None = None  # set when the model invented one
     prompt_version: str = PROMPT_VERSION
     prompt_hash: str = ""
+
+
+@dataclass
+class Payload:
+    """One prepared request: the exact text, and how to read the answer back."""
+
+    user: str
+    batch: list[dict] = field(default_factory=list)
+    #: surrogate id -> real transaction id, kept locally and never transmitted.
+    surrogates: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -158,8 +174,14 @@ BACKENDS = {"luna": LunaBackend, "haiku": HaikuBackend}
 REQUIRED_API_KEYS = {"luna": "OPENAI_API_KEY", "haiku": "ANTHROPIC_API_KEY"}
 
 
-def build_prompt(taxonomy: list[str], examples: list[dict], batch: list[dict]) -> str:
-    """User message. Taxonomy and examples first so the prefix is cacheable."""
+def build_prompt(taxonomy: list[str], examples: list[dict], records: Sequence[dict]) -> str:
+    """User message. Taxonomy and examples first so the prefix is cacheable.
+
+    Takes records already minimized by `egress.minimize`, not database rows.
+    The distinction is the point: this function can only render the fields it
+    is handed, so a column added to `transaction_version` later cannot reach a
+    model by being picked up here.
+    """
     lines = ["ALLOWED CATEGORIES:"]
     lines += [f"  {c}" for c in taxonomy]
     if examples:
@@ -174,12 +196,9 @@ def build_prompt(taxonomy: list[str], examples: list[dict], batch: list[dict]) -
             lines.append(f"    reusable lesson: {e['reusable_lesson']}")
     lines.append("")
     lines.append("TRANSACTIONS TO CATEGORISE:")
-    for r in batch:
-        lines.append(
-            f"  id={r['transaction_id']} | payee={r['payee_display']} | "
-            f"amount={r['amount_minor_units'] / 100:.2f} | account={r['account_name']} | "
-            f"date={r['posted_on']}"
-        )
+    for record in records:
+        rendered = " | ".join(f"{key}={value}" for key, value in record.items())
+        lines.append(f"  {rendered}")
     return "\n".join(lines)
 
 
@@ -219,9 +238,15 @@ def _parse(text: str, taxonomy: set[str], model: str) -> list[Proposal]:
     return out
 
 
-def _validate_batch_ids(proposals: list[Proposal], batch: list[dict]) -> None:
-    """Reject partial, duplicate, or out-of-batch model responses."""
-    expected = [str(row["transaction_id"]) for row in batch]
+def _validate_batch_ids(proposals: list[Proposal], surrogates: Mapping[str, str]) -> None:
+    """Reject partial, duplicate, or out-of-batch model responses.
+
+    Compared against the surrogate IDs, which is what the model was shown and
+    therefore all it can legitimately answer with. A response naming a real
+    transaction ID would fail here — correctly, since it could not have learned
+    one from the request.
+    """
+    expected = list(surrogates)
     actual = [proposal.transaction_id for proposal in proposals]
     if len(actual) != len(set(actual)):
         raise ValueError("model returned duplicate transaction IDs")
@@ -238,36 +263,62 @@ def _validate_batch_ids(proposals: list[Proposal], batch: list[dict]) -> None:
         )
 
 
-def classify(
-    backend: Backend,
+def build_payloads(
     rows: list[dict],
     taxonomy: list[str],
     examples: list[dict],
     *,
     chunk_size: int = CHUNK_SIZE,
-    dry_run: bool = False,
-) -> tuple[list[Proposal], Usage, list[str]]:
-    """Classify rows. With dry_run=True, returns the prompts instead of calling out."""
+    redact: Iterable[str] = (),
+) -> list[Payload]:
+    """Assemble every request, without sending any of them.
+
+    Separated from `classify` so the exact bytes can be written to disk and
+    read by a person *before* the decision to transmit, rather than the review
+    artifact being a thing you get only when you choose not to send.
+    """
     if chunk_size <= 0:
         raise ValueError("chunk_size must be a positive integer")
+    payloads: list[Payload] = []
+    for start in range(0, len(rows), chunk_size):
+        batch = rows[start : start + chunk_size]
+        minimized = egress.minimize(batch, redact)
+        user = build_prompt(taxonomy, examples, minimized.records)
+        # The check runs on the finished text, against the rows it came from —
+        # after the taxonomy and the curated examples have been folded in, so
+        # it covers what they contribute too.
+        egress.assert_payload_is_permitted(user, batch, redact=redact)
+        payloads.append(Payload(user=user, batch=batch, surrogates=minimized.surrogates))
+    return payloads
+
+
+def classify(
+    backend: Backend,
+    payloads: Sequence[Payload],
+    taxonomy: list[str],
+) -> tuple[list[Proposal], Usage]:
+    """Send prepared payloads and return the proposals they produced.
+
+    Takes payloads rather than rows: by the time anything is transmitted the
+    caller has already assembled, checked, and written them out. There is no
+    path through this function that builds a request the caller has not seen.
+    """
     allowed = set(taxonomy)
     proposals: list[Proposal] = []
     total = Usage()
-    prompts: list[str] = []
 
-    for i in range(0, len(rows), chunk_size):
-        batch = rows[i : i + chunk_size]
-        user = build_prompt(taxonomy, examples, batch)
-        prompts.append(user)
-        if dry_run:
-            continue
-        text, usage = backend.complete(SYSTEM_PROMPT, user)
+    for payload in payloads:
+        text, usage = backend.complete(SYSTEM_PROMPT, payload.user)
         batch_proposals = _parse(text, allowed, backend.id)
-        _validate_batch_ids(batch_proposals, batch)
+        _validate_batch_ids(batch_proposals, payload.surrogates)
         prompt_hash = hashlib.sha256(
-            f"{PROMPT_VERSION}\n{SYSTEM_PROMPT}\n{user}".encode()
+            f"{PROMPT_VERSION}\n{SYSTEM_PROMPT}\n{payload.user}".encode()
         ).hexdigest()
         for proposal in batch_proposals:
+            # Answers come back keyed by surrogate; restore the real ID here,
+            # at the boundary, so nothing downstream has to know surrogates
+            # existed.
+            proposal.transaction_id = payload.surrogates[proposal.transaction_id]
             proposal.prompt_version = PROMPT_VERSION
             proposal.prompt_hash = prompt_hash
         proposals.extend(batch_proposals)
@@ -275,4 +326,4 @@ def classify(
         total.output_tokens += usage.output_tokens
         total.requests += usage.requests
 
-    return proposals, total, prompts
+    return proposals, total
