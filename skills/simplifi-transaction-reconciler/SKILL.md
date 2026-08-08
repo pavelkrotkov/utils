@@ -59,7 +59,8 @@ The packaged runtime supports only these operations:
 - ingest CSV exports and read transaction data from the private API;
 - normalize, store provenance, analyze, and render reports locally;
 - inspect API read schemas and connection health;
-- optionally ask a model to classify unresolved rows and write proposal files;
+- optionally, and only on an explicit `--send`, ask a model to classify
+  unresolved rows and write proposal files;
 - validate structured agent proposals and append local decision records.
 
 The following are explicitly unavailable: login or access-token refresh, bank or
@@ -86,7 +87,9 @@ uv run ./scripts/simplifi_transaction_reconciler.py analyze \
   --db /path/to/review.sqlite --out /path/to/review.html
 uv run ./scripts/simplifi_transaction_reconciler.py subs --db /path/to/review.sqlite
 uv run ./scripts/simplifi_transaction_reconciler.py classify \
-  --db /path/to/review.sqlite --dry-run
+  --db /path/to/review.sqlite
+uv run ./scripts/simplifi_transaction_reconciler.py classify \
+  --db /path/to/review.sqlite --send --redact account,amount
 uv run ./scripts/simplifi_transaction_reconciler.py decide \
   --db /path/to/review.sqlite --packet /path/to/review-packet.json \
   --proposals /path/to/proposals.json --out /path/to/decisions.json
@@ -110,6 +113,40 @@ whole — nothing is recorded — when they name an unknown transaction, carry a
 malformed decision, request an unsupported or mutating action, propose a
 category the dataset does not use, omit a rationale, or reference a run that a
 later ingest has superseded. Every rejection reports its JSON path and code.
+
+### Model data egress
+
+Every command declares its position on sending data off the machine, on every
+run. `ingest`, `analyze`, `decide`, `subs`, `probe`, and `schema` print
+`egress: none` and mean it. Only `classify` can transmit, and only when asked.
+
+**Nothing is sent without `--send`.** The default builds the requests, checks
+them, writes them to `<out>.prompt.txt`, and stops — so the payload can be read
+before the decision to transmit, and the same file is written on the runs that
+do send. `--dry-run` is retained for existing scripts but is now the default
+behaviour; passing it together with `--send` is an error.
+
+**What is sent:** the normalized payee display name, the amount, the account
+name, the posted date, and a per-request surrogate ID (`t1`, `t2`, …). The
+category taxonomy goes too, since the model must choose from it. The *raw* bank
+descriptor is never sent — it can carry card fragments, terminal IDs, and store
+locations that normalization removes. Neither are the provider's transaction or
+account IDs, the source hash, or the pre-conversion foreign amounts. Payloads
+are assembled from an allowlist and then re-checked against the rows they came
+from, so a field cannot arrive through an unanticipated route.
+
+**Where it goes:** `api.openai.com` for `--model luna`, `api.anthropic.com` for
+`--model haiku`. Nowhere else.
+
+**Retention:** once transmitted, data is retained under the receiving
+provider's policy, not ours, and this runtime cannot delete it. Check their
+terms before enabling `--send`. The local payload artifact is `0600` in the
+data directory and is never removed automatically.
+
+**Minimization:** `--redact account,amount,date` withholds or coarsens fields —
+the account is dropped, the amount becomes a direction and a band, the date
+becomes a month. The payee cannot be redacted; it is what classification
+reasons about, so withholding it would leave nothing to answer. See ADR-009.
 
 ### Where artifacts are stored
 
@@ -207,10 +244,12 @@ because CSV exports do not expose settlement or projection state.
    anomalies, high-value or processor-fronted charges, rule collisions, and
    uncategorized rows. Use merchant memory only with sufficient observations
    and purity; otherwise retain ambiguity. Keep every signal explainable.
-8. **Escalate the residue.** Optional model inference may see only eligible
-   unresolved rows and minimum necessary context. Reject unknown category IDs;
-   an outage yields a degraded report with unresolved residue. Models emit
-   proposal files for review only; they never write provider state.
+8. **Escalate the residue.** Optional model inference is off unless `--send` is
+   given, and may see only eligible unresolved rows, reduced to the allowlisted
+   fields under surrogate IDs. Read the written payload before sending it.
+   Reject unknown category IDs; an outage yields a degraded report with
+   unresolved residue. Models emit proposal files for review only; they never
+   write provider state.
 9. **Report and preserve the decision trail.** Include matched scope, excluded
    semantics, limitations, proposals, unresolved items, confidence/evidence,
    and provenance (`run_id`, source hash, ruleset/algorithm version, and model
