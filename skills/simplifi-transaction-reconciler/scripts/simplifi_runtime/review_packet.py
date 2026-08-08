@@ -186,7 +186,7 @@ def _transaction(row: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _dataset_hash(rows: Sequence[Mapping[str, Any]]) -> str:
+def dataset_hash(rows: Sequence[Mapping[str, Any]]) -> str:
     identity = [
         {
             "transaction_id": _string(row.get("transaction_id")),
@@ -368,7 +368,7 @@ def build_packet(
         },
         "source": {
             "kind": source,
-            "dataset_hash": _dataset_hash(rows),
+            "dataset_hash": dataset_hash(rows),
             "capabilities": {
                 "stable_transaction_ids": capabilities.stable_transaction_id,
                 "settlement_state": capabilities.settlement_state,

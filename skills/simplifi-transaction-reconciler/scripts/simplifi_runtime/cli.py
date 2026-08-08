@@ -482,6 +482,40 @@ def _load_json(path: Path, label: str) -> Any:
         raise ValueError(f"{label} at {path} is not valid JSON: {exc}") from exc
 
 
+def _packet_binding_error(
+    packet: dict, rows: list[dict], latest_run_id: int, latest_source: str
+) -> str | None:
+    """Confirm the packet was produced from this database, not another one.
+
+    A run ID alone is not identity: two databases both sitting on run 1 would
+    otherwise accept each other's packets, appending an immutable decision for
+    a transaction this database has never seen. The dataset hash is recomputed
+    from the selected database and must match the packet's.
+    """
+    run = packet["run"]
+    if str(run.get("source")) != latest_source:
+        return (
+            f"review packet was produced from source {run.get('source')!r}, but the latest "
+            f"successful run in this database used {latest_source!r}"
+        )
+    if run.get("run_id") != latest_run_id:
+        # A superseded run is reported as a stale reference during validation.
+        return None
+    try:
+        analysis_date = date.fromisoformat(str(run.get("analysis_date")))
+    except ValueError:
+        return f"review packet has an unusable analysis_date: {run.get('analysis_date')!r}"
+    expected = review_packet.dataset_hash(_as_of_rows(rows, analysis_date))
+    found = str(packet["source"].get("dataset_hash"))
+    if expected != found:
+        return (
+            "review packet does not describe this database: expected dataset_hash "
+            f"{expected[:12]}…, found {found[:12]}…. Re-run `analyze` against "
+            "this database and review the packet it writes"
+        )
+    return None
+
+
 def cmd_decide(args: argparse.Namespace) -> int:
     """Validate agent proposals and append immutable decision records."""
     db = Path(args.db)
@@ -492,6 +526,9 @@ def cmd_decide(args: argparse.Namespace) -> int:
         if out.resolve() == other.resolve():
             print(f"ERROR --out and {label} must name different files", file=sys.stderr)
             return 2
+    if out.is_dir():
+        print(f"ERROR --out must name a file, not a directory: {out}", file=sys.stderr)
+        return 2
 
     try:
         packet = _load_json(packet_path, "review packet")
@@ -509,11 +546,16 @@ def cmd_decide(args: argparse.Namespace) -> int:
         return 1
 
     latest_run_id, latest_source = _latest_run(db)
+    rows = _rows(db, latest_source)
+    binding = _packet_binding_error(packet, rows, latest_run_id, latest_source)
+    if binding:
+        print(f"ERROR {binding}; no decision was recorded", file=sys.stderr)
+        return 1
     try:
         validated = decisions.validate_proposals(
             document,
             packet,
-            allowed_categories=_known_categories(_rows(db, latest_source)),
+            allowed_categories=_known_categories(rows),
             latest_run_id=latest_run_id,
         )
     except decisions.ProposalValidationError as exc:
@@ -529,17 +571,36 @@ def cmd_decide(args: argparse.Namespace) -> int:
     reviewer = document["reviewer"]
     records = decisions.build_decision_records(validated, packet, reviewer)
     store = Store(db)
+    staged: Path | None = None
     try:
+        # One atomic step: take the write lock, re-confirm the run has not been
+        # superseded, append, and prove the artifact is writable before commit.
+        store.begin_immediate()
+        if store.latest_successful_run() != (latest_run_id, latest_source):
+            print(
+                f"ERROR run {latest_run_id} was superseded by a concurrent ingest; "
+                "no decision was recorded. Re-run `analyze` and review the new packet",
+                file=sys.stderr,
+            )
+            store.rollback()
+            return 1
         appended = store.append_decision_records(records)
+        stored = store.stored_decisions([record["decision_id"] for record in records])
+        staged = decisions.stage_decisions(
+            decisions.build_decision_document(packet, reviewer, stored, appended_count=appended),
+            out,
+        )
         store.commit()
+    except BaseException:
+        store.rollback()
+        if staged is not None:
+            staged.unlink(missing_ok=True)
+        raise
     finally:
         store.close()
-    decisions.write_decisions(
-        decisions.build_decision_document(packet, reviewer, records, appended_count=appended),
-        out,
-    )
+    decisions.publish_decisions(staged, out)
 
-    verdicts = Counter(record["decision"] for record in records)
+    verdicts = Counter(record["decision"] for record in stored)
     print(f"INFO validated {len(records)} proposal(s) against run {latest_run_id}")
     print(f"INFO decisions: {dict(sorted(verdicts.items()))}")
     print(

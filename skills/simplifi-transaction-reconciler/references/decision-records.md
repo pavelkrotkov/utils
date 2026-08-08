@@ -110,9 +110,20 @@ is deliberately broader than the classifier taxonomy: settlement state governs
 what may train statistics, not whether a label exists. The runtime cannot
 create a category.
 
+## Binding a packet to a database
+
+A run ID is not an identity. Two databases can both sit on run 1, so `decide`
+recomputes the packet's `dataset_hash` from the selected database — using the
+packet's own `analysis_date` to reproduce the same as-of scope — and refuses a
+packet that does not describe this data. Without that check, a packet from one
+database could append an immutable decision to another for a transaction it has
+never seen.
+
 A packet whose run is no longer the latest successful run is stale. Re-run
 `analyze` and review the new packet rather than deciding against a snapshot the
-store has moved past.
+store has moved past. The staleness check is repeated under the database write
+lock, so an ingest that commits while a review is being validated cannot slip a
+superseded judgment through.
 
 ## Decision records
 
@@ -128,11 +139,25 @@ packet, which `decide` refuses to overwrite. Each record carries:
 - `recorded_at` and `validator_version`.
 
 `proposal_hash` is a SHA-256 digest over the normalized proposal, so a record
-can be checked against the proposal it came from. Because `decision_id` is
-derived from content, re-running `decide` with an unchanged file appends
-nothing. A revised judgment has a different hash and is appended beside the
-original: `decision_record` is append-only, enforced by database triggers that
-reject any update or delete. History is corrected by adding to it.
+can be checked against the proposal it came from.
+
+`decision_id` is derived from everything that distinguishes one judgment:
+run, dataset hash, analysis date, transaction, proposal ID, proposal hash, and
+reviewer. `recorded_at` is excluded, so re-running `decide` with an unchanged
+file appends nothing. A revised rationale, a second reviewer reaching the same
+conclusion, or the same proposal weighed against a differently scoped packet
+each produce a distinct record rather than one silently discarded. Two
+reviewers agreeing is evidence worth keeping.
+
+`decision_record` is append-only, enforced by database triggers that reject any
+update or delete. History is corrected by adding to it.
+
+The exported document is a view of the store, never a parallel claim: `decide`
+reads the stored records back before writing, so an already-recorded decision
+reports its original timestamp rather than the current clock. The artifact is
+staged beside its destination and published by rename only after the database
+commit succeeds, so a failure to write it leaves no records behind that the
+append-only interface could not retract.
 
 `validator_version` records the rules in force when the decision was accepted,
 so a stored record stays interpretable after those rules change.

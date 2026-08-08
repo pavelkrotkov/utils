@@ -6,8 +6,11 @@ import json
 import sqlite3
 from pathlib import Path
 
-from simplifi_runtime.cli import build_parser
+import pytest
+from simplifi_runtime import decisions
+from simplifi_runtime.cli import _latest_run, build_parser
 from simplifi_runtime.sources import api_source
+from simplifi_runtime.store import Store
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
@@ -189,6 +192,139 @@ def test_decide_rejects_stale_unknown_and_mutating_proposals(tmp_path: Path, cap
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM decision_record").fetchone()[0] == 0
     assert not out.exists()
+
+
+def _decide_workspace(tmp_path: Path, name: str, csv_name: str = "acceptance.csv"):
+    """Ingest and analyze a fixture, returning the database and its packet."""
+    db = tmp_path / f"{name}.sqlite"
+    report = tmp_path / f"{name}.html"
+    source = tmp_path / f"{name}.csv"
+    source.write_text((FIXTURE_DIR / csv_name).read_text(encoding="utf-8"), encoding="utf-8")
+    _run_ingest(["ingest", "--source", "csv", str(source), "--db", str(db)])
+    _run_analyze(db, report)
+    packet_path = tmp_path / f"{name}-packet.json"
+    (report.parent / "review-packet.json").rename(packet_path)
+    return db, packet_path, json.loads(packet_path.read_text(encoding="utf-8"))
+
+
+def test_a_packet_from_another_database_cannot_record_decisions(tmp_path: Path, capsys):
+    """A shared run ID is not identity: the dataset must match the database."""
+    _, packet_path, packet = _decide_workspace(tmp_path, "first")
+    other_csv = tmp_path / "other.csv"
+    rows = (FIXTURE_DIR / "acceptance.csv").read_text(encoding="utf-8").replace("-10.00", "-13.00")
+    other_csv.write_text(rows, encoding="utf-8")
+    other_db = tmp_path / "other.sqlite"
+    _run_ingest(["ingest", "--source", "csv", str(other_csv), "--db", str(other_db)])
+    _run_analyze(other_db, tmp_path / "other.html")
+
+    subscription = next(
+        item for item in packet["transactions"] if item["category"] == "Subscriptions"
+    )
+    proposals = tmp_path / "proposals.json"
+    proposals.write_text(
+        json.dumps(_proposals_document(packet, subscription["transaction_id"])), encoding="utf-8"
+    )
+    out = tmp_path / "decisions.json"
+
+    # Both databases sit on run 1, so only the dataset hash separates them.
+    assert _latest_run(other_db)[0] == packet["run"]["run_id"]
+    assert _run_decide(other_db, packet_path, proposals, out) == 1
+    assert "does not describe this database" in capsys.readouterr().err
+    assert not out.exists()
+    with sqlite3.connect(other_db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM decision_record").fetchone()[0] == 0
+
+
+def test_reruns_export_the_stored_record_not_a_fresh_timestamp(tmp_path: Path, monkeypatch):
+    db, packet_path, packet = _decide_workspace(tmp_path, "rerun")
+    proposals = tmp_path / "proposals.json"
+    proposals.write_text(
+        json.dumps(_proposals_document(packet, packet["transaction_ids"][0])), encoding="utf-8"
+    )
+    out = tmp_path / "decisions.json"
+
+    monkeypatch.setattr(decisions, "_now", lambda: "2026-08-16T09:00:00+00:00")
+    assert _run_decide(db, packet_path, proposals, out) == 0
+    first = json.loads(out.read_text(encoding="utf-8"))["records"][0]
+
+    # The clock has moved on, but the stored judgment has not.
+    monkeypatch.setattr(decisions, "_now", lambda: "2026-09-01T17:45:00+00:00")
+    assert _run_decide(db, packet_path, proposals, out) == 0
+    second = json.loads(out.read_text(encoding="utf-8"))
+
+    assert first["recorded_at"] == "2026-08-16T09:00:00+00:00"
+
+    assert second["summary"]["appended_count"] == 0
+    assert second["records"][0] == first, "an exported record must match the stored one"
+    with sqlite3.connect(db) as conn:
+        stored = conn.execute("SELECT recorded_at FROM decision_record").fetchall()
+    assert [row[0] for row in stored] == [first["recorded_at"]]
+
+
+def test_an_unwritable_output_records_nothing(tmp_path: Path):
+    db, packet_path, packet = _decide_workspace(tmp_path, "unwritable")
+    proposals = tmp_path / "proposals.json"
+    proposals.write_text(
+        json.dumps(_proposals_document(packet, packet["transaction_ids"][0])), encoding="utf-8"
+    )
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+
+    # A directory cannot be replaced by the artifact, so it fails before commit.
+    assert _run_decide(db, packet_path, proposals, blocked) == 2
+
+    unwritable_parent = tmp_path / "readonly"
+    unwritable_parent.mkdir(mode=0o500)
+    try:
+        args = build_parser().parse_args(
+            [
+                "decide",
+                "--db",
+                str(db),
+                "--packet",
+                str(packet_path),
+                "--proposals",
+                str(proposals),
+                "--out",
+                str(unwritable_parent / "nested" / "decisions.json"),
+            ]
+        )
+        with pytest.raises(OSError):
+            args.func(args)
+    finally:
+        unwritable_parent.chmod(0o700)
+
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM decision_record").fetchone()[0] == 0
+
+
+def test_an_ingest_racing_the_write_lock_fails_closed(tmp_path: Path, monkeypatch, capsys):
+    db, packet_path, packet = _decide_workspace(tmp_path, "race")
+    proposals = tmp_path / "proposals.json"
+    proposals.write_text(
+        json.dumps(_proposals_document(packet, packet["transaction_ids"][0])), encoding="utf-8"
+    )
+    out = tmp_path / "decisions.json"
+    original = Store.begin_immediate
+
+    def racing_begin(self):
+        """Land a successful ingest between the staleness read and the lock."""
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "INSERT INTO runs (started_at, source, source_detail, algorithm_version,"
+                " ruleset_version, outcome, row_count) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ("2026-06-16T00:00:00+00:00", "csv", "racing", "0.1.0", "0.2.0", "success", 1),
+            )
+        monkeypatch.setattr(Store, "begin_immediate", original)
+        original(self)
+
+    monkeypatch.setattr(Store, "begin_immediate", racing_begin)
+
+    assert _run_decide(db, packet_path, proposals, out) == 1
+    assert "superseded by a concurrent ingest" in capsys.readouterr().err
+    assert not out.exists()
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM decision_record").fetchone()[0] == 0
 
 
 def test_decide_refuses_to_overwrite_its_inputs(tmp_path: Path):

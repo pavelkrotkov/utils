@@ -215,6 +215,54 @@ def test_recording_the_same_decision_twice_appends_once(tmp_path: Path):
     store.close()
 
 
+def test_stored_decisions_return_the_database_copy_not_the_candidate(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+    run_id = store.start_run("csv", "fixture")
+    store.append_decision_records([_decision(run_id, "decision-1")])
+    store.commit()
+
+    candidate = _decision(run_id, "decision-1", recorded_at="2026-09-01T12:00:00+00:00")
+    assert store.append_decision_records([candidate]) == 0
+    stored = store.stored_decisions(["decision-1", "decision-missing"])
+
+    assert [record["decision_id"] for record in stored] == ["decision-1"]
+    assert stored[0]["recorded_at"] == "2026-08-16T09:00:00+00:00"
+    assert "id" not in stored[0], "the internal rowid must not reach exported records"
+    store.close()
+
+
+def test_latest_successful_run_ignores_unfinished_and_failed_runs(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+    assert store.latest_successful_run() == (0, "unknown")
+
+    good = store.start_run("csv", "good")
+    store.finish_run(good, "success", 1)
+    failed = store.start_run("api", "bad")
+    store.finish_run(failed, "failure", 0)
+    store.start_run("api", "still running")
+    store.commit()
+
+    assert store.latest_successful_run() == (good, "csv")
+    store.close()
+
+
+def test_begin_immediate_takes_the_write_lock(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+    store.begin_immediate()
+    store.start_run("csv", "holding the lock")
+
+    other = sqlite3.connect(tmp_path / "review.sqlite", timeout=0.1)
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        other.execute(
+            "INSERT INTO runs (started_at, source, algorithm_version, ruleset_version)"
+            " VALUES ('now', 'csv', '0.1.0', '0.2.0')"
+        )
+    other.close()
+
+    store.rollback()
+    store.close()
+
+
 def test_decision_records_require_a_known_run(tmp_path: Path):
     store = Store(tmp_path / "review.sqlite")
     store.start_run("csv", "fixture")

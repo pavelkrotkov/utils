@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -153,11 +155,30 @@ def _canonical(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def decision_identifier(
-    *, run_id: int, transaction_id: str, proposal_id: str, proposal_hash: str
-) -> str:
-    """Derive a stable ID from content, so re-recording is a no-op, not a fork."""
-    seed = _canonical([int(run_id), str(transaction_id), str(proposal_id), str(proposal_hash)])
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+#: Everything that makes one judgment distinct from another. `recorded_at` is
+#: deliberately absent, so re-recording an unchanged review is a no-op; the
+#: reviewer and the reviewed packet are present, so two people reaching the
+#: same conclusion, or one person reviewing a differently scoped packet, are
+#: two records rather than one silently dropped.
+_IDENTITY_FIELDS = (
+    "analysis_date",
+    "dataset_hash",
+    "proposal_hash",
+    "proposal_id",
+    "reviewer_id",
+    "reviewer_kind",
+    "run_id",
+    "transaction_id",
+)
+
+
+def decision_identifier(record: Mapping[str, Any]) -> str:
+    """Derive a stable ID from everything that distinguishes one judgment."""
+    seed = _canonical({field: record[field] for field in _IDENTITY_FIELDS})
     return "decision-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:32]
 
 
@@ -618,15 +639,10 @@ def build_decision_records(
     """Build the append-only records for a validated proposal document."""
     run = packet["run"]
     reference = packet_reference(packet)
-    stamp = recorded_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
-    records = [
-        {
-            "decision_id": decision_identifier(
-                run_id=int(reference["run_id"]),
-                transaction_id=proposal.transaction_id,
-                proposal_id=proposal.proposal_id,
-                proposal_hash=proposal.proposal_hash,
-            ),
+    stamp = recorded_at or _now()
+    records = []
+    for proposal in proposals:
+        record = {
             "run_id": int(reference["run_id"]),
             "source": str(run.get("source", "")),
             "analysis_date": str(reference["analysis_date"]),
@@ -643,8 +659,7 @@ def build_decision_records(
             "recorded_at": stamp,
             "validator_version": VALIDATOR_VERSION,
         }
-        for proposal in proposals
-    ]
+        records.append({"decision_id": decision_identifier(record), **record})
     records.sort(key=lambda record: (record["transaction_id"], record["proposal_id"]))
     return records
 
@@ -672,11 +687,32 @@ def build_decision_document(
     }
 
 
-def write_decisions(document: Mapping[str, Any], path: Path) -> None:
-    """Write a canonical, newline-terminated decision document."""
+def stage_decisions(document: Mapping[str, Any], path: Path) -> Path:
+    """Write the document to a sibling temporary file and return its path.
+
+    Publishing is a separate rename, so an unwritable destination fails before
+    the database commit instead of after it. A caller that cannot produce the
+    artifact must not leave immutable records behind that it cannot retract.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    payload = json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    staged = Path(name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
+    return staged
+
+
+def publish_decisions(staged: Path, path: Path) -> None:
+    """Move a staged document into place, replacing any previous version."""
+    os.replace(staged, path)
+
+
+def write_decisions(document: Mapping[str, Any], path: Path) -> None:
+    """Write a canonical, newline-terminated decision document."""
+    publish_decisions(stage_decisions(document, path), Path(path))

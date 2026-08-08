@@ -123,6 +123,22 @@ class Store:
         ).fetchone()
         return str(row["cursor_after"]) if row else None
 
+    def latest_successful_run(self) -> tuple[int, str]:
+        """Return the newest successful run, or ``(0, "unknown")`` when there is none."""
+        row = self.conn.execute(
+            "SELECT id, source FROM runs WHERE outcome = 'success' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        return (int(row["id"]), str(row["source"])) if row else (0, "unknown")
+
+    def begin_immediate(self) -> None:
+        """Take the write lock now, so a concurrent ingest cannot slip in later.
+
+        Reading the latest run and appending decisions must be one atomic step;
+        otherwise an ingest committing between them makes the runtime record
+        exactly the stale judgment the contract says must fail closed.
+        """
+        self.conn.execute("BEGIN IMMEDIATE")
+
     def retire_absent_snapshot(self, run_id: int, observed_ids: set[str]) -> int:
         """Retire current rows absent from a complete replacement snapshot."""
         source = self._run_sources.get(run_id)
@@ -298,6 +314,24 @@ class Store:
             )
             appended += max(cursor.rowcount, 0)
         return appended
+
+    def stored_decisions(self, decision_ids: list[str]) -> list[dict]:
+        """Return the stored form of the given decisions, in the order requested.
+
+        Callers export what the database actually holds rather than the
+        candidate they just built, so an already-recorded decision reports its
+        original timestamp instead of the current clock.
+        """
+        columns = ",".join(DECISION_RECORD_COLUMNS)
+        found = {}
+        for decision_id in decision_ids:
+            row = self.conn.execute(
+                f"SELECT {columns} FROM decision_record WHERE decision_id = ?",
+                (decision_id,),
+            ).fetchone()
+            if row is not None:
+                found[decision_id] = dict(row)
+        return [found[decision_id] for decision_id in decision_ids if decision_id in found]
 
     def decision_records(self, run_id: int | None = None) -> list[dict]:
         """Return stored decisions in append order, newest last."""

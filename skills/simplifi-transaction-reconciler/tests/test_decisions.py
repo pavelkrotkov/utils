@@ -239,6 +239,55 @@ def test_decision_ids_are_stable_and_follow_the_proposal_content():
     assert revised[0]["decision_id"] != first[0]["decision_id"]
 
 
+def test_identical_judgments_from_different_reviewers_are_distinct_records():
+    """Concurrence is evidence; collapsing it would lose the second reviewer."""
+    packet = _packet()
+    first = _document()
+    second = _document()
+    second["reviewer"] = {"kind": "human", "id": "reviewer-two"}
+
+    records = [
+        build_decision_records(
+            validate_proposals(document, packet, allowed_categories=ALLOWED_CATEGORIES),
+            packet,
+            document["reviewer"],
+            recorded_at="2026-08-16T09:00:00+00:00",
+        )[0]
+        for document in (first, second)
+    ]
+
+    assert records[0]["proposal_hash"] == records[1]["proposal_hash"]
+    assert records[0]["decision_id"] != records[1]["decision_id"]
+    assert [record["reviewer_id"] for record in records] == ["review-agent", "reviewer-two"]
+
+
+def test_the_reviewed_packet_is_part_of_the_decision_identity():
+    packet = _packet()
+    document = _document()
+    rescoped = _packet()
+    rescoped["run"]["analysis_date"] = "2026-08-16"
+    rescoped["source"]["dataset_hash"] = "c" * 64
+    rescoped_document = _document()
+    rescoped_document["packet"]["analysis_date"] = "2026-08-16"
+    rescoped_document["packet"]["dataset_hash"] = "c" * 64
+
+    original = build_decision_records(
+        validate_proposals(document, packet, allowed_categories=ALLOWED_CATEGORIES),
+        packet,
+        document["reviewer"],
+        recorded_at="2026-08-16T09:00:00+00:00",
+    )
+    reviewed_again = build_decision_records(
+        validate_proposals(rescoped_document, rescoped, allowed_categories=ALLOWED_CATEGORIES),
+        rescoped,
+        rescoped_document["reviewer"],
+        recorded_at="2026-08-16T09:00:00+00:00",
+    )
+
+    assert original[0]["run_id"] == reviewed_again[0]["run_id"]
+    assert original[0]["decision_id"] != reviewed_again[0]["decision_id"]
+
+
 def test_decision_document_is_written_separately_from_the_packet(tmp_path: Path):
     packet = _packet()
     document = _document()
