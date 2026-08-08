@@ -158,6 +158,72 @@ def test_csv_replacement_snapshot_retires_absent_and_edited_rows(tmp_path: Path)
     store.close()
 
 
+def _decision(run_id: int, decision_id: str, **overrides) -> dict:
+    record = {
+        "decision_id": decision_id,
+        "run_id": run_id,
+        "source": "csv",
+        "analysis_date": "2026-08-15",
+        "transaction_id": "txn-1",
+        "proposal_id": "proposal-1",
+        "proposal_hash": "a" * 64,
+        "dataset_hash": "b" * 64,
+        "decision": "accept",
+        "action": "record_category_proposal",
+        "category": "Shopping",
+        "rationale": "Cleared charge matches the merchant's established history.",
+        "reviewer_kind": "agent",
+        "reviewer_id": "review-agent",
+        "recorded_at": "2026-08-16T09:00:00+00:00",
+        "validator_version": "1.0.0",
+    }
+    record.update(overrides)
+    return record
+
+
+def test_decision_records_are_append_only(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+    run_id = store.start_run("csv", "fixture")
+    store.append_decision_records([_decision(run_id, "decision-1")])
+    store.commit()
+
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        store.conn.execute("UPDATE decision_record SET decision = 'reject'")
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        store.conn.execute("DELETE FROM decision_record")
+
+    stored = store.decision_records(run_id)
+    assert [record["decision"] for record in stored] == ["accept"]
+    store.close()
+
+
+def test_recording_the_same_decision_twice_appends_once(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+    run_id = store.start_run("csv", "fixture")
+    record = _decision(run_id, "decision-1")
+
+    assert store.append_decision_records([record]) == 1
+    assert store.append_decision_records([record]) == 0
+
+    revised = _decision(run_id, "decision-2", decision="reject", category=None)
+    assert store.append_decision_records([revised]) == 1
+    store.commit()
+
+    stored = store.decision_records()
+    assert [item["decision_id"] for item in stored] == ["decision-1", "decision-2"]
+    assert [item["decision"] for item in stored] == ["accept", "reject"]
+    store.close()
+
+
+def test_decision_records_require_a_known_run(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+    store.start_run("csv", "fixture")
+
+    with pytest.raises(sqlite3.IntegrityError):
+        store.append_decision_records([_decision(999, "decision-1")])
+    store.close()
+
+
 def test_schema_migration_rolls_back_all_statements(tmp_path: Path):
     migrations = tmp_path / "migrations"
     migrations.mkdir()

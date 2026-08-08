@@ -15,6 +15,27 @@ from pathlib import Path
 ALGORITHM_VERSION = "0.1.0"
 RULESET_VERSION = "0.2.0"
 
+#: Column order for `decision_record` inserts. Kept here rather than imported
+#: from `decisions` so the store stays free of validation dependencies.
+DECISION_RECORD_COLUMNS = (
+    "decision_id",
+    "run_id",
+    "source",
+    "analysis_date",
+    "transaction_id",
+    "proposal_id",
+    "proposal_hash",
+    "dataset_hash",
+    "decision",
+    "action",
+    "category",
+    "rationale",
+    "reviewer_kind",
+    "reviewer_id",
+    "recorded_at",
+    "validator_version",
+)
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -256,6 +277,37 @@ class Store:
             [values.get(c) for c in cols],
         )
         return "changed" if row else "new"
+
+    # --- decisions ----------------------------------------------------------
+
+    def append_decision_records(self, records: list[dict]) -> int:
+        """Append validated decisions and return how many were new.
+
+        Decision IDs are content-derived, so re-recording an identical decision
+        is a no-op rather than a duplicate. A changed judgment arrives with a
+        different hash and is appended beside the original; the table's triggers
+        reject any attempt to edit or remove what is already there.
+        """
+        appended = 0
+        for record in records:
+            cursor = self.conn.execute(
+                f"INSERT INTO decision_record ({','.join(DECISION_RECORD_COLUMNS)})"
+                f" VALUES ({','.join('?' * len(DECISION_RECORD_COLUMNS))})"
+                " ON CONFLICT(decision_id) DO NOTHING",
+                [record.get(column) for column in DECISION_RECORD_COLUMNS],
+            )
+            appended += max(cursor.rowcount, 0)
+        return appended
+
+    def decision_records(self, run_id: int | None = None) -> list[dict]:
+        """Return stored decisions in append order, newest last."""
+        if run_id is None:
+            rows = self.conn.execute("SELECT * FROM decision_record ORDER BY id")
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM decision_record WHERE run_id = ? ORDER BY id", (run_id,)
+            )
+        return [dict(row) for row in rows]
 
     def record_accounts(self, names: set[str]) -> None:
         for name in sorted(names):

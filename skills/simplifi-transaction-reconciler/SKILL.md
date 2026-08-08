@@ -38,6 +38,9 @@ material needed for the current decision:
   [ADR-006](references/adr/006-provenance-and-incremental-storage.md).
 - For the deterministic agent boundary and its safe field allowlist, read the
   [review-packet contract](references/review-packet.md).
+- For returning judgment as validated proposals and append-only decision
+  records, read the
+  [decision-record contract](references/decision-records.md).
 - For tokens, unattended execution, or deployment, read
   [ADR-007](references/adr/007-authentication-and-deployment.md).
 - For the future Hermes browser-session authentication architecture, load the
@@ -56,13 +59,16 @@ The packaged runtime supports only these operations:
 - ingest CSV exports and read transaction data from the private API;
 - normalize, store provenance, analyze, and render reports locally;
 - inspect API read schemas and connection health;
-- optionally ask a model to classify unresolved rows and write proposal files.
+- optionally ask a model to classify unresolved rows and write proposal files;
+- validate structured agent proposals and append local decision records.
 
 The following are explicitly unavailable: login or access-token refresh, bank or
 institution refresh, notifications, account writes, transaction/category/rule
 writes, proposal approval or application, and undo/rollback. If any of these is
 requested, report that it is unavailable and stop. Do not invent an endpoint or
 call an observed endpoint from the reference material merely because it exists.
+Recording a decision is not approving one: a decision record documents a
+judgment for human review and never authorizes a provider write.
 
 ## Packaged read/analyze runtime
 
@@ -81,6 +87,9 @@ uv run ./scripts/simplifi_transaction_reconciler.py analyze \
 uv run ./scripts/simplifi_transaction_reconciler.py subs --db /path/to/review.sqlite
 uv run ./scripts/simplifi_transaction_reconciler.py classify \
   --db /path/to/review.sqlite --dry-run
+uv run ./scripts/simplifi_transaction_reconciler.py decide \
+  --db /path/to/review.sqlite --packet /path/to/review-packet.json \
+  --proposals /path/to/proposals.json --out /path/to/decisions.json
 ```
 
 `analyze` also emits `review-packet.json` beside the HTML report by default.
@@ -93,6 +102,14 @@ runtime loads only the explicitly promoted, sanitized cases from
 deterministically, and includes them in the packet. The classifier prompt uses
 the same curated context; categorized transaction history is never promoted
 automatically into reusable examples.
+
+`decide` closes the boundary. It validates a structured `proposals.json`
+against one review packet and appends immutable decision records to the store,
+writing the validated result to a separate `--out` file. Proposals are rejected
+whole — nothing is recorded — when they name an unknown transaction, carry a
+malformed decision, request an unsupported or mutating action, propose a
+category the dataset does not use, omit a rationale, or reference a run that a
+later ingest has superseded. Every rejection reports its JSON path and code.
 
 Use `--source api` for read-only API ingestion, or `probe`/`schema` for
 read-only diagnostics. Omit `--modified-after` for normal API ingestion to use
@@ -144,6 +161,11 @@ because CSV exports do not expose settlement or projection state.
    semantics, limitations, proposals, unresolved items, confidence/evidence,
    and provenance (`run_id`, source hash, ruleset/algorithm version, and model
    or prompt version when applicable).
+10. **Record judgment through the validated boundary.** Return agent decisions
+    as `proposals.json` against the packet that was reviewed, and record them
+    with `decide`. Correct a recorded decision by appending a new one, never by
+    editing history. A rejected proposal is a signal to fix the proposal or
+    re-run the analysis, not to bypass validation.
 
 ## Human escalation format
 

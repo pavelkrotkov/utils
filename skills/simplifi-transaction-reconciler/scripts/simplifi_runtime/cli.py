@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import sqlite3
 import sys
@@ -12,7 +13,15 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from . import judgment_examples, llm, prioritize, report, review_packet, subscriptions
+from . import (
+    decisions,
+    judgment_examples,
+    llm,
+    prioritize,
+    report,
+    review_packet,
+    subscriptions,
+)
 from .memory import MerchantMemory, Proposal
 from .secrets import SecretsError
 from .semantics import (
@@ -346,6 +355,22 @@ def _analysis_limitations(source: str, rows: list[dict]) -> list[str]:
     return limitations
 
 
+def _known_categories(rows: list[dict]) -> set[str]:
+    """Category labels this dataset already uses.
+
+    Deliberately broader than :func:`_model_taxonomy`: settlement state governs
+    what may train statistics, not whether a category label exists. Account
+    names are removed so a proposal cannot relabel a transfer as its
+    destination account.
+    """
+    accounts = {row["account_name"] for row in rows}
+    return {
+        (row["category"] or "").strip()
+        for row in rows
+        if (row["category"] or "").strip() and not row["is_uncategorized"]
+    } - accounts
+
+
 def _model_taxonomy(rows: list[dict]) -> list[str]:
     accounts = {row["account_name"] for row in rows}
     return sorted(
@@ -445,6 +470,83 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         )
     print(f"INFO wrote {out}")
     print(f"INFO wrote {packet_path}")
+    return 0
+
+
+def _load_json(path: Path, label: str) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValueError(f"no {label} at {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{label} at {path} is not valid JSON: {exc}") from exc
+
+
+def cmd_decide(args: argparse.Namespace) -> int:
+    """Validate agent proposals and append immutable decision records."""
+    db = Path(args.db)
+    packet_path = Path(args.packet)
+    proposals_path = Path(args.proposals)
+    out = Path(args.out)
+    for label, other in (("--db", db), ("--packet", packet_path), ("--proposals", proposals_path)):
+        if out.resolve() == other.resolve():
+            print(f"ERROR --out and {label} must name different files", file=sys.stderr)
+            return 2
+
+    try:
+        packet = _load_json(packet_path, "review packet")
+        document = _load_json(proposals_path, "proposals file")
+    except ValueError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
+    try:
+        review_packet.validate_packet(packet)
+    except review_packet.PacketValidationError as exc:
+        print(f"ERROR review packet at {packet_path} is invalid: {exc}", file=sys.stderr)
+        return 1
+    if not db.exists():
+        print(f"ERROR no database at {db}; run `ingest` first", file=sys.stderr)
+        return 1
+
+    latest_run_id, latest_source = _latest_run(db)
+    try:
+        validated = decisions.validate_proposals(
+            document,
+            packet,
+            allowed_categories=_known_categories(_rows(db, latest_source)),
+            latest_run_id=latest_run_id,
+        )
+    except decisions.ProposalValidationError as exc:
+        print(
+            f"ERROR rejected {len(exc.errors)} problem(s) in {proposals_path}; "
+            "no decision was recorded",
+            file=sys.stderr,
+        )
+        for error in exc.errors:
+            print(f"ERROR {error}", file=sys.stderr)
+        return 1
+
+    reviewer = document["reviewer"]
+    records = decisions.build_decision_records(validated, packet, reviewer)
+    store = Store(db)
+    try:
+        appended = store.append_decision_records(records)
+        store.commit()
+    finally:
+        store.close()
+    decisions.write_decisions(
+        decisions.build_decision_document(packet, reviewer, records, appended_count=appended),
+        out,
+    )
+
+    verdicts = Counter(record["decision"] for record in records)
+    print(f"INFO validated {len(records)} proposal(s) against run {latest_run_id}")
+    print(f"INFO decisions: {dict(sorted(verdicts.items()))}")
+    print(
+        f"INFO appended {appended} decision record(s) to {db}; "
+        f"{len(records) - appended} already recorded"
+    )
+    print(f"INFO wrote {out}; no provider state was changed")
     return 0
 
 
@@ -676,6 +778,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="write prompts without calling an API"
     )
     classify.set_defaults(func=cmd_classify)
+
+    decide = sub.add_parser("decide", help="validate agent proposals and append decision records")
+    decide.add_argument("--db", default="simplifi.sqlite")
+    decide.add_argument(
+        "--packet",
+        default="review-packet.json",
+        help="review packet the proposals were made against",
+    )
+    decide.add_argument(
+        "--proposals",
+        default="proposals.json",
+        help="structured agent judgment to validate",
+    )
+    decide.add_argument(
+        "--out",
+        default="decisions.json",
+        help="validated decision records (never the input packet)",
+    )
+    decide.set_defaults(func=cmd_decide)
 
     subs = sub.add_parser("subs", help="review recurring charges")
     subs.add_argument("--db", default="simplifi.sqlite")
