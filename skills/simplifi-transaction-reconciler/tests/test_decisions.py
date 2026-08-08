@@ -312,3 +312,59 @@ def test_decision_document_is_written_separately_from_the_packet(tmp_path: Path)
     }
     assert written["records"] == records
     assert "transactions" not in written
+
+
+def test_a_retired_transaction_is_rejected_even_though_the_packet_offers_it():
+    """A packet describes the database as it was, so it still lists the row.
+
+    Accepting the proposal would append an immutable decision about a
+    transaction that is no longer there, and record nothing about its absence.
+    """
+    assert _codes(_document(), retired_transaction_ids={"txn-fixture"}) == [
+        "retired_transaction_id"
+    ]
+
+
+def test_retirement_rejection_names_the_recovery():
+    with pytest.raises(ProposalValidationError) as excinfo:
+        validate_proposals(
+            _document(),
+            _packet(),
+            allowed_categories=ALLOWED_CATEGORIES,
+            retired_transaction_ids={"txn-fixture"},
+        )
+
+    message = excinfo.value.errors[0].message
+    assert "retired since the review packet was built" in message
+    assert "re-run `analyze`" in message
+
+
+def test_an_unrelated_retirement_does_not_reject_a_valid_proposal():
+    validated = validate_proposals(
+        _document(),
+        _packet(),
+        allowed_categories=ALLOWED_CATEGORIES,
+        retired_transaction_ids={"txn-somebody-else"},
+    )
+
+    assert [item.transaction_id for item in validated] == ["txn-fixture"]
+
+
+def test_no_retirements_supplied_behaves_as_before():
+    """The parameter defaults to empty, so existing callers are unaffected."""
+    validated = validate_proposals(_document(), _packet(), allowed_categories=ALLOWED_CATEGORIES)
+
+    assert len(validated) == 1
+
+
+def test_an_unknown_transaction_is_still_unknown_not_retired():
+    """The two rejections mean different things and must not be conflated.
+
+    'Never in the packet' is a malformed review; 'retired since' is a stale
+    one, and only the second is fixed by re-running `analyze`.
+    """
+    codes = _codes(
+        _document(transaction_id="txn-never-existed"), retired_transaction_ids={"txn-fixture"}
+    )
+
+    assert codes == ["unknown_transaction_id"]

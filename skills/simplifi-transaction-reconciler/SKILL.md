@@ -144,7 +144,13 @@ because CSV exports do not expose settlement or projection state.
    an incremental cursor only after a complete successful fetch, and only to
    the value the response itself declares it is current as of — never to a
    maximum derived from the returned rows, which can jump past records the
-   provider had not yet published.
+   provider had not yet published. When a transaction stops being current,
+   append a retirement record naming the prior version, the retiring run, the
+   timestamp, and the reason — keeping a provider tombstone (the provider said
+   it was deleted) distinct from a full-scan absence (we inferred it from a
+   scan we believed complete). Current-state queries exclude retired rows;
+   their history stays queryable, and a judgment proposed against a
+   since-retired transaction is refused rather than recorded.
 4. **Normalize identity.** Preserve `raw`, deterministic `normalized`, stable
    lowercase `canonical`, and human-facing `display` values. Record rules that
    fired. Group merchants, history, recurring series, and collisions by

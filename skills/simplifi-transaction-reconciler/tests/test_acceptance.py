@@ -11,7 +11,14 @@ import pytest
 from simplifi_runtime import decisions, sync_scope
 from simplifi_runtime.cli import _latest_run, build_parser
 from simplifi_runtime.sources import api_source
-from simplifi_runtime.store import RUN_ABORTED, RUN_FAILED, RUN_SUCCEEDED, Store
+from simplifi_runtime.store import (
+    RETIRED_BY_ABSENCE,
+    RETIRED_BY_TOMBSTONE,
+    RUN_ABORTED,
+    RUN_FAILED,
+    RUN_SUCCEEDED,
+    Store,
+)
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
@@ -1126,3 +1133,112 @@ def test_sigterm_is_recorded_as_aborted(tmp_path: Path, monkeypatch, capsys):
     run = _run_state(db)
     assert run["state"] == RUN_ABORTED
     assert run["error_class"] == "SystemExit"
+
+
+def test_tombstoned_and_absent_transactions_are_recorded_distinctly(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """End to end: the two reasons survive an ingest and stay separable."""
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    db = tmp_path / "api.sqlite"
+    client = FixtureApiClient(payload)
+    _ingest_as(monkeypatch, client, db, "--full-rescan")
+    seeded = {row["transaction_id"] for row in _current_rows(db, "api")}
+    capsys.readouterr()
+
+    # One transaction the provider explicitly deletes, one that simply stops
+    # appearing in an otherwise complete scan.
+    tombstoned, absent, *_ = sorted(seeded)
+    surviving = [t for t in payload["transactions"] if t["id"] not in {tombstoned, absent}]
+    payload["transactions"] = [
+        *surviving,
+        {"id": tombstoned, "isDeleted": True, "modifiedAt": "2026-06-02T00:00:00Z"},
+    ]
+    _ingest_as(monkeypatch, client, db, "--full-rescan")
+    out = capsys.readouterr().out
+
+    assert "INFO retired 1 by provider tombstone, 1 absent from a complete scan" in out
+
+    store = Store(db)
+    try:
+        by_id = {item["transaction_id"]: item for item in store.retirements(source="api")}
+        assert by_id[tombstoned]["reason"] == RETIRED_BY_TOMBSTONE
+        assert by_id[absent]["reason"] == RETIRED_BY_ABSENCE
+        assert store.retired_transaction_ids("api") == {tombstoned, absent}
+    finally:
+        store.close()
+
+    remaining = {row["transaction_id"] for row in _current_rows(db, "api")}
+    assert tombstoned not in remaining and absent not in remaining
+    assert remaining == seeded - {tombstoned, absent}
+
+
+def test_a_proposal_about_a_retired_transaction_is_rejected(tmp_path: Path, capsys):
+    """The packet still offers it, because a packet describes the past.
+
+    Without this check the runtime would append an immutable decision about a
+    transaction that is no longer there, and say nothing about it having gone.
+    """
+    db = tmp_path / "retire.sqlite"
+    report = tmp_path / "review.html"
+    source = tmp_path / "acceptance.csv"
+    source.write_text(
+        (FIXTURE_DIR / "acceptance.csv").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    _run_ingest(["ingest", "--source", "csv", str(source), "--db", str(db)])
+    _run_analyze(db, report)
+    packet_path = report.parent / "review-packet.json"
+    packet = json.loads(packet_path.read_text(encoding="utf-8"))
+    subscription = next(
+        item for item in packet["transactions"] if item["category"] == "Subscriptions"
+    )
+    target = subscription["transaction_id"]
+
+    # A later complete snapshot no longer contains that row.
+    store = Store(db)
+    retiring = store.start_run("csv", "complete scan without it")
+    remaining = {
+        row["transaction_id"] for row in _current_rows(db, "csv") if row["transaction_id"] != target
+    }
+    assert store.retire_absent_snapshot(retiring, remaining) == 1
+    store.finish_run(retiring, RUN_SUCCEEDED, len(remaining), complete_snapshot=True)
+    store.commit()
+    store.close()
+
+    proposals = tmp_path / "proposals.json"
+    proposals.write_text(json.dumps(_proposals_document(packet, target)), encoding="utf-8")
+    out = tmp_path / "decisions.json"
+
+    assert _run_decide(db, packet_path, proposals, out) == 1
+    err = capsys.readouterr().err
+    assert "retired_transaction_id" in err
+    assert "re-run `analyze`" in err
+    assert not out.exists()
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM decision_record").fetchone()[0] == 0
+
+
+def test_a_proposal_about_a_surviving_transaction_still_succeeds(tmp_path: Path):
+    """The retirement check must not reject transactions that are simply fine."""
+    db = tmp_path / "survive.sqlite"
+    report = tmp_path / "review.html"
+    source = tmp_path / "acceptance.csv"
+    source.write_text(
+        (FIXTURE_DIR / "acceptance.csv").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    _run_ingest(["ingest", "--source", "csv", str(source), "--db", str(db)])
+    _run_analyze(db, report)
+    packet_path = report.parent / "review-packet.json"
+    packet = json.loads(packet_path.read_text(encoding="utf-8"))
+    subscription = next(
+        item for item in packet["transactions"] if item["category"] == "Subscriptions"
+    )
+
+    proposals = tmp_path / "proposals.json"
+    proposals.write_text(
+        json.dumps(_proposals_document(packet, subscription["transaction_id"])), encoding="utf-8"
+    )
+    out = tmp_path / "decisions.json"
+
+    assert _run_decide(db, packet_path, proposals, out) == 0
+    assert json.loads(out.read_text(encoding="utf-8"))["summary"]["appended_count"] == 1

@@ -37,6 +37,15 @@ _LEGACY_OUTCOME = {
     RUN_ABORTED: "failure",
 }
 
+#: Why a transaction stopped being current. The distinction is epistemic, not
+#: cosmetic: a tombstone is the provider stating the transaction was deleted,
+#: while an absence is our own inference from a scan we believed complete. A
+#: truncated response mistaken for a complete one produces a wave of the second
+#: kind that looks exactly like the first, so the reason has to be recorded at
+#: the moment it is known rather than reconstructed later.
+RETIRED_BY_TOMBSTONE = "provider_tombstone"
+RETIRED_BY_ABSENCE = "absent_from_snapshot"
+
 #: Column order for `decision_record` inserts. Kept here rather than imported
 #: from `decisions` so the store stays free of validation dependencies.
 DECISION_RECORD_COLUMNS = (
@@ -289,8 +298,32 @@ class Store:
         """
         self.conn.execute("BEGIN IMMEDIATE")
 
+    def _retire_version(
+        self, run_id: int, source: str, version_id: int, transaction_id: str, reason: str
+    ) -> None:
+        """Clear `is_current` and append the evidence that it was cleared.
+
+        The two halves belong together. Clearing the flag on its own leaves a
+        row that is no longer current with nothing to say why, which run did
+        it, or on what grounds — the row survives and the event does not.
+        """
+        self.conn.execute(
+            "UPDATE transaction_version SET is_current = 0 WHERE id = ?", (version_id,)
+        )
+        self.conn.execute(
+            "INSERT INTO retirement_record (transaction_id, source, prior_version_id, run_id,"
+            " reason, retired_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (transaction_id, source, version_id, run_id, reason, _now()),
+        )
+
     def retire_absent_snapshot(self, run_id: int, observed_ids: set[str]) -> int:
-        """Retire current rows absent from a complete replacement snapshot."""
+        """Retire current rows absent from a complete replacement snapshot.
+
+        Recorded as an inference (`absent_from_snapshot`), never as a deletion.
+        The provider said nothing about these transactions; we concluded they
+        were gone because a scan we believed complete did not mention them. If
+        that belief was wrong the records here are what makes it recoverable.
+        """
         source = self._run_sources.get(run_id)
         if source is None:
             row = self.conn.execute("SELECT source FROM runs WHERE id = ?", (run_id,)).fetchone()
@@ -305,12 +338,55 @@ class Store:
         retired = 0
         for row in current:
             if row["transaction_id"] not in observed_ids:
-                self.conn.execute(
-                    "UPDATE transaction_version SET is_current = 0 WHERE id = ?",
-                    (row["id"],),
+                self._retire_version(
+                    run_id, source, int(row["id"]), str(row["transaction_id"]), RETIRED_BY_ABSENCE
                 )
                 retired += 1
         return retired
+
+    def retirements(
+        self, source: str | None = None, transaction_id: str | None = None
+    ) -> list[dict]:
+        """Retirement history, oldest first. Never filtered by current state.
+
+        A retired transaction is exactly the one whose story is hardest to read
+        off the current view, so this deliberately does not join against it.
+        """
+        clauses, params = [], []
+        if source is not None:
+            clauses.append("source = ?")
+            params.append(source)
+        if transaction_id is not None:
+            clauses.append("transaction_id = ?")
+            params.append(transaction_id)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        return [
+            dict(row)
+            for row in self.conn.execute(
+                "SELECT id, transaction_id, source, prior_version_id, run_id, reason, retired_at "
+                f"FROM retirement_record{where} ORDER BY id",
+                params,
+            )
+        ]
+
+    def retired_transaction_ids(self, source: str) -> set[str]:
+        """Transactions currently retired: ever retired, and not since restored.
+
+        A retirement is not permanent — a provider can resurrect a transaction,
+        and a later run makes it current again. Reading the retirement table
+        alone would treat those as still gone, so membership is confirmed
+        against the absence of a current version.
+        """
+        return {
+            str(row["transaction_id"])
+            for row in self.conn.execute(
+                "SELECT DISTINCT r.transaction_id FROM retirement_record r "
+                "WHERE r.source = ? AND NOT EXISTS ("
+                "  SELECT 1 FROM transaction_version v WHERE v.transaction_id = r.transaction_id"
+                "  AND v.source = r.source AND v.is_current = 1)",
+                (source,),
+            )
+        }
 
     def rollback(self) -> None:
         self.conn.rollback()
@@ -353,12 +429,19 @@ class Store:
 
         txid = record["transaction_id"]
         if record.get("is_deleted"):
-            result = self.conn.execute(
-                "UPDATE transaction_version SET is_current = 0 "
+            # Select before updating: the retirement record names the exact
+            # version it retired, and a blind UPDATE discards the identity that
+            # makes a repeated retire/reappear/retire cycle readable afterwards.
+            current = self.conn.execute(
+                "SELECT id FROM transaction_version "
                 "WHERE transaction_id = ? AND source = ? AND is_current = 1",
                 (txid, source),
-            )
-            return "deleted" if result.rowcount else "deleted_missing"
+            ).fetchall()
+            for row in current:
+                self._retire_version(
+                    run_id, source, int(row["id"]), str(txid), RETIRED_BY_TOMBSTONE
+                )
+            return "deleted" if current else "deleted_missing"
 
         shash = self.source_hash(record)
         row = self.conn.execute(

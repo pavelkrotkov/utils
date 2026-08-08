@@ -3,6 +3,8 @@ from pathlib import Path
 
 import pytest
 from simplifi_runtime.store import (
+    RETIRED_BY_ABSENCE,
+    RETIRED_BY_TOMBSTONE,
     RUN_ABORTED,
     RUN_FAILED,
     RUN_STARTED,
@@ -569,4 +571,156 @@ def test_a_started_run_transitions_exactly_once(tmp_path: Path):
         store.conn.execute("SELECT state FROM runs WHERE id = ?", (run_id,)).fetchone()["state"]
         == RUN_FAILED
     )
+    store.close()
+
+
+def test_tombstone_and_absence_are_recorded_as_different_reasons(tmp_path: Path):
+    """The distinction is the point: testimony versus inference.
+
+    A tombstone is the provider stating the transaction was deleted. An absence
+    is our own conclusion from a scan we believed complete — and a truncated
+    response mistaken for a complete one produces a wave of the second kind
+    that looks exactly like the first.
+    """
+    store = Store(tmp_path / "review.sqlite")
+    first = store.start_run("api", "seed")
+    store.upsert_version(first, _record("txn-tombstoned"))
+    store.upsert_version(first, _record("txn-absent"))
+    store.upsert_version(first, _record("txn-kept"))
+
+    second = store.start_run("api", "tombstone")
+    assert store.upsert_version(second, {"transaction_id": "txn-tombstoned", "is_deleted": True})
+
+    third = store.start_run("api", "complete scan")
+    assert store.retire_absent_snapshot(third, {"txn-kept"}) == 1
+    store.commit()
+
+    by_id = {item["transaction_id"]: item for item in store.retirements(source="api")}
+    assert by_id["txn-tombstoned"]["reason"] == RETIRED_BY_TOMBSTONE
+    assert by_id["txn-tombstoned"]["run_id"] == second
+    assert by_id["txn-absent"]["reason"] == RETIRED_BY_ABSENCE
+    assert by_id["txn-absent"]["run_id"] == third
+    assert "txn-kept" not in by_id
+    store.close()
+
+
+def test_a_retirement_record_carries_everything_needed_to_reconstruct_it(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+    seed = store.start_run("api", "seed")
+    store.upsert_version(seed, _record("txn-1"))
+    version_id = store.conn.execute(
+        "SELECT id FROM transaction_version WHERE transaction_id = 'txn-1'"
+    ).fetchone()["id"]
+
+    retiring = store.start_run("api", "tombstone")
+    store.upsert_version(retiring, {"transaction_id": "txn-1", "is_deleted": True})
+    store.commit()
+
+    record = store.retirements(transaction_id="txn-1")[0]
+    assert record["transaction_id"] == "txn-1"
+    assert record["source"] == "api"
+    assert record["prior_version_id"] == version_id
+    assert record["run_id"] == retiring
+    assert record["reason"] == RETIRED_BY_TOMBSTONE
+    assert record["retired_at"]
+    store.close()
+
+
+def test_history_survives_and_current_state_excludes_retired_rows(tmp_path: Path):
+    """Retirement hides a transaction from the current view, not from history."""
+    store = Store(tmp_path / "review.sqlite")
+    seed = store.start_run("api", "seed")
+    store.upsert_version(seed, _record("txn-1"))
+    retiring = store.start_run("api", "tombstone")
+    store.upsert_version(retiring, {"transaction_id": "txn-1", "is_deleted": True})
+    store.commit()
+
+    current = store.conn.execute(
+        "SELECT COUNT(*) FROM transaction_version WHERE source = 'api' AND is_current = 1"
+    ).fetchone()[0]
+    assert current == 0
+    # The version row itself is untouched, and its retirement is on the record.
+    assert (
+        store.conn.execute(
+            "SELECT COUNT(*) FROM transaction_version WHERE transaction_id = 'txn-1'"
+        ).fetchone()[0]
+        == 1
+    )
+    assert len(store.retirements(transaction_id="txn-1")) == 1
+    store.close()
+
+
+def test_repeated_retirements_stay_distinguishable(tmp_path: Path):
+    """A transaction can be retired, reappear, and be retired again.
+
+    Each event names the version it retired, so the cycle reads as three
+    separate facts rather than one ambiguous flag flipped twice.
+    """
+    store = Store(tmp_path / "review.sqlite")
+    first = store.start_run("api", "seed")
+    store.upsert_version(first, _record("txn-1"))
+    second = store.start_run("api", "tombstone")
+    store.upsert_version(second, {"transaction_id": "txn-1", "is_deleted": True})
+    third = store.start_run("api", "reappears")
+    store.upsert_version(third, _record("txn-1"))
+    fourth = store.start_run("api", "complete scan without it")
+    store.retire_absent_snapshot(fourth, set())
+    store.commit()
+
+    history = store.retirements(transaction_id="txn-1")
+    assert [item["reason"] for item in history] == [RETIRED_BY_TOMBSTONE, RETIRED_BY_ABSENCE]
+    assert [item["run_id"] for item in history] == [second, fourth]
+    # Different versions, so the two events cannot be confused for one another.
+    assert history[0]["prior_version_id"] != history[1]["prior_version_id"]
+    store.close()
+
+
+def test_a_restored_transaction_is_no_longer_reported_as_retired(tmp_path: Path):
+    """Retirement is not permanent, so the retired set is not just history."""
+    store = Store(tmp_path / "review.sqlite")
+    first = store.start_run("api", "seed")
+    store.upsert_version(first, _record("txn-1"))
+    second = store.start_run("api", "tombstone")
+    store.upsert_version(second, {"transaction_id": "txn-1", "is_deleted": True})
+    store.commit()
+
+    assert store.retired_transaction_ids("api") == {"txn-1"}
+
+    third = store.start_run("api", "provider resurrects it")
+    store.upsert_version(third, _record("txn-1"))
+    store.commit()
+
+    assert store.retired_transaction_ids("api") == set()
+    # The history of it having been retired is still there.
+    assert len(store.retirements(transaction_id="txn-1")) == 1
+    store.close()
+
+
+def test_retirement_is_scoped_to_its_own_source(tmp_path: Path):
+    store = Store(tmp_path / "review.sqlite")
+    csv_run = store.start_run("csv", "seed")
+    api_run = store.start_run("api", "seed")
+    store.upsert_version(csv_run, _record("txn-1"))
+    store.upsert_version(api_run, _record("txn-1"))
+    tombstone = store.start_run("api", "tombstone")
+    store.upsert_version(tombstone, {"transaction_id": "txn-1", "is_deleted": True})
+    store.commit()
+
+    assert store.retired_transaction_ids("api") == {"txn-1"}
+    assert store.retired_transaction_ids("csv") == set()
+    assert [item["source"] for item in store.retirements()] == ["api"]
+    store.close()
+
+
+def test_tombstoning_an_unknown_transaction_records_nothing(tmp_path: Path):
+    """There is no prior version to point at, so there is no event to record."""
+    store = Store(tmp_path / "review.sqlite")
+    run_id = store.start_run("api", "tombstone")
+
+    assert store.upsert_version(run_id, {"transaction_id": "ghost", "is_deleted": True}) == (
+        "deleted_missing"
+    )
+    store.commit()
+
+    assert store.retirements() == []
     store.close()

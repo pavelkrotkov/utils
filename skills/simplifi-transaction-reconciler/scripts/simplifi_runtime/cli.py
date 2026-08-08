@@ -477,8 +477,11 @@ def _ingest_within_run(args: argparse.Namespace, store: Store, run_id: int, mode
     # this block, propagate to the caller's `_run_finalized`, which rolls the
     # work back and records the run as failed with its cause.
     outcomes = Counter(store.upsert_version(run_id, record) for record in records)
+    retired_absent = 0
     if complete_snapshot:
-        store.retire_absent_snapshot(run_id, {r["transaction_id"] for r in records})
+        retired_absent = store.retire_absent_snapshot(
+            run_id, {r["transaction_id"] for r in records}
+        )
     store.record_accounts(
         {r["account_name"] for r in records if not r.get("is_deleted") and r["account_name"]}
     )
@@ -492,6 +495,16 @@ def _ingest_within_run(args: argparse.Namespace, store: Store, run_id: int, mode
     store.commit()
 
     print(f"INFO run {run_id}: versions {dict(outcomes)}")
+    # Reported separately because they are different claims. A tombstone is the
+    # provider saying a transaction was deleted; an absence is our inference
+    # from a scan we believed complete. A surprising number of the second is
+    # the signal that a truncated response was mistaken for a full one.
+    tombstoned = outcomes.get("deleted", 0)
+    if tombstoned or retired_absent:
+        print(
+            f"INFO retired {tombstoned} by provider tombstone, "
+            f"{retired_absent} absent from a complete scan"
+        )
     if args.source == "api":
         # Both halves of the exchange plus the identity they belong to, so a
         # surprising incremental window can be diagnosed from the log alone
@@ -816,12 +829,18 @@ def cmd_decide(args: argparse.Namespace) -> int:
     if binding:
         print(f"ERROR {binding}; no decision was recorded", file=sys.stderr)
         return 1
+    retirement_store = Store(db)
+    try:
+        retired_ids = retirement_store.retired_transaction_ids(latest_source)
+    finally:
+        retirement_store.close()
     try:
         validated = decisions.validate_proposals(
             document,
             packet,
             allowed_categories=_known_categories(rows),
             latest_run_id=latest_run_id,
+            retired_transaction_ids=retired_ids,
         )
     except decisions.ProposalValidationError as exc:
         print(
