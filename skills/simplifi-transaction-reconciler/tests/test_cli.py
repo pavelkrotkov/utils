@@ -18,7 +18,7 @@ from simplifi_runtime.cli import (
     _next_cursor,
     build_parser,
 )
-from simplifi_runtime.store import Store
+from simplifi_runtime.store import RUN_FAILED, RUN_SUCCEEDED, Store
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
 ENTRYPOINT = SKILL_DIR / "scripts" / "simplifi_transaction_reconciler.py"
@@ -175,7 +175,7 @@ def test_ingest_records_failed_run_for_missing_csv(tmp_path):
 
     assert args.func(args) == 1
     with sqlite3.connect(db) as conn:
-        assert conn.execute("SELECT outcome FROM runs").fetchone()[0] == "failure"
+        assert conn.execute("SELECT state FROM runs").fetchone()[0] == RUN_FAILED
 
 
 def test_model_key_is_loaded_from_the_age_vault_when_missing(monkeypatch):
@@ -239,9 +239,9 @@ def test_probe_health_without_expected_cadence_keeps_age_informational():
 def test_latest_run_ignores_failed_runs(tmp_path):
     store = Store(tmp_path / "review.sqlite")
     successful = store.start_run("csv", "good")
-    store.finish_run(successful, "success", 1)
+    store.finish_run(successful, RUN_SUCCEEDED, 1)
     failed = store.start_run("api", "bad")
-    store.finish_run(failed, "failure", 0)
+    store.finish_run(failed, RUN_FAILED, 0)
     store.commit()
     store.close()
 

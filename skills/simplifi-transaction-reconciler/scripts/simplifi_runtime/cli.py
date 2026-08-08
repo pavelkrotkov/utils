@@ -9,6 +9,7 @@ import os
 import sqlite3
 import sys
 from collections import Counter
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -32,7 +33,7 @@ from .semantics import (
     is_statistics_quarantined,
 )
 from .sources.csv_source import SchemaError, SimplifiCsvSource
-from .store import Store
+from .store import RUN_ABORTED, RUN_FAILED, RUN_STARTED, RUN_SUCCEEDED, Store
 from .sync_scope import SyncScope, api_scope, scope_from_profile
 
 
@@ -183,7 +184,7 @@ def _rows(db: Path, source: str) -> list[dict]:
 def _latest_run(db: Path) -> tuple[int, str]:
     with sqlite3.connect(db) as conn:
         row = conn.execute(
-            "SELECT id, source FROM runs WHERE outcome = 'success' ORDER BY id DESC LIMIT 1"
+            "SELECT id, source FROM runs WHERE state = 'succeeded' ORDER BY id DESC LIMIT 1"
         ).fetchone()
     return (int(row[0]), str(row[1])) if row else (0, "unknown")
 
@@ -232,11 +233,86 @@ def _print_summary(records: list[dict], source: str) -> None:
         )
 
 
-def _finish_failed_run(store: Store, run_id: int) -> None:
-    """Persist failure status after discarding any transaction work."""
-    store.rollback()
-    store.finish_run(run_id, "failure", 0)
-    store.commit()
+#: Failures the runtime raises deliberately, whose messages are already written
+#: to tell an operator what to do. Anything outside this set is a surprise, and
+#: its message gets the context a bare `KeyError: 'amount'` does not carry.
+def _expected_failures() -> tuple[type[BaseException], ...]:
+    from .sources.api_source import ApiError
+
+    return (ApiError, SecretsError, SchemaError, OSError, sqlite3.Error, ValueError)
+
+
+def _failure_message(exc: BaseException) -> str:
+    """An actionable description of why a run stopped.
+
+    Stored alongside the class rather than instead of it: the class aggregates
+    ("how often is this an AuthError?"), the message tells one person what to
+    do next. A record with only `KeyError` in it answers neither question.
+    """
+    if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+        return (
+            "the run was interrupted before it finished; no partial data was kept, "
+            "and the synchronization cursor was not advanced. Re-run to continue."
+        )
+    detail = str(exc).strip() or repr(exc)
+    if isinstance(exc, _expected_failures()):
+        return detail
+    return (
+        f"{detail} — an unexpected {type(exc).__name__} escaped the ingest path, so the "
+        "run recorded no data and the cursor was not advanced. This usually means a "
+        "provider response no longer matches the shape the adapter expects; re-run with "
+        "--verbose, and compare against `schema` output if it repeats."
+    )
+
+
+def _finalize_failed_run(store: Store, run_id: int, state: str, exc: BaseException | None) -> None:
+    """Record why a run stopped, without letting the bookkeeping mask it.
+
+    This runs while something has already gone wrong, and the database is one
+    of the things that may be wrong. If recording the failure itself fails, say
+    so and let the original exception continue — replacing a clear provider
+    error with a confusing SQLite one, three frames from its cause, is exactly
+    how a five-minute diagnosis becomes an afternoon.
+    """
+    try:
+        store.rollback()
+        store.finish_run(
+            run_id,
+            state,
+            0,
+            error_class=type(exc).__name__ if exc is not None else None,
+            error_message=_failure_message(exc) if exc is not None else None,
+        )
+        store.commit()
+    except sqlite3.Error as bookkeeping:
+        print(
+            f"WARNING could not record run {run_id} as {state}: {bookkeeping}. "
+            "The run remains 'started' and will not be used for analysis.",
+            file=sys.stderr,
+        )
+
+
+@contextmanager
+def _run_finalized(store: Store, run_id: int):
+    """Guarantee every exit path leaves the run in a terminal state.
+
+    Without this an unexpected exception left the run at NULL outcome forever:
+    not running, not failed, not anything a query could act on. The catch is
+    deliberately `BaseException` — the surprises worth protecting against are
+    precisely the ones no `except Exception` was written for.
+
+    Interruption is separated from failure because they call for different
+    responses. `aborted` means someone stopped it and can start it again;
+    `failed` means something is wrong and re-running alone may not help.
+    """
+    try:
+        yield
+    except (KeyboardInterrupt, SystemExit) as exc:
+        _finalize_failed_run(store, run_id, RUN_ABORTED, exc)
+        raise
+    except BaseException as exc:
+        _finalize_failed_run(store, run_id, RUN_FAILED, exc)
+        raise
 
 
 def _is_complete_snapshot(args: argparse.Namespace) -> bool:
@@ -254,11 +330,6 @@ def _ensure_model_key(model: str, verbose: bool) -> None:
 
 def cmd_ingest(args: argparse.Namespace) -> int:
     store = Store(Path(args.db))
-    cursor_before: str | None = None
-    cursor_floor: str | None = None
-    cursor_scope: str | None = None
-    scope: SyncScope | None = None
-    as_of: str | None = None
     mode = "full-rescan" if args.full_rescan else "incremental"
     if args.source == "csv":
         detail = f"csv path={args.path or 'missing'}"
@@ -268,27 +339,46 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         # Cursor selection therefore happens after the client is up, and the
         # resolved scope is written back onto the run.
         detail = f"api since={args.since or 'all'} mode={mode} scope=unresolved"
-    run_id = store.start_run(args.source, detail, cursor_before=cursor_before)
+    run_id = store.start_run(args.source, detail)
     store.commit()
+    try:
+        with _run_finalized(store, run_id):
+            return _ingest_within_run(args, store, run_id, mode)
+    finally:
+        store.close()
+
+
+def _ingest_within_run(args: argparse.Namespace, store: Store, run_id: int, mode: str) -> int:
+    """The body of an ingest, with the run guaranteed to reach a terminal state.
+
+    Split out so every path — including one that raises something nobody
+    anticipated — passes back through the caller's guard. Inlining this again
+    would restore the original bug the first time a new `return` forgot to
+    finalize.
+    """
+    cursor_before: str | None = None
+    cursor_floor: str | None = None
+    cursor_scope: str | None = None
+    scope: SyncScope | None = None
+    as_of: str | None = None
 
     if args.source == "csv":
         if not args.path:
-            print("ERROR a CSV path is required with --source csv", file=sys.stderr)
-            _finish_failed_run(store, run_id)
-            store.close()
+            exc: BaseException = ValueError("a CSV path is required with --source csv")
+            print(f"ERROR {exc}", file=sys.stderr)
+            _finalize_failed_run(store, run_id, RUN_FAILED, exc)
             return 2
         path = Path(args.path)
         if not path.exists():
-            print(f"ERROR no such file: {path}", file=sys.stderr)
-            _finish_failed_run(store, run_id)
-            store.close()
+            exc = FileNotFoundError(f"no such file: {path}")
+            print(f"ERROR {exc}", file=sys.stderr)
+            _finalize_failed_run(store, run_id, RUN_FAILED, exc)
             return 1
         try:
             records = SimplifiCsvSource(path).fetch()
         except (OSError, SchemaError, ValueError) as exc:
             print(f"ERROR {exc}", file=sys.stderr)
-            _finish_failed_run(store, run_id)
-            store.close()
+            _finalize_failed_run(store, run_id, RUN_FAILED, exc)
             return 1
     else:
         from .sources.api_source import ApiError, SimplifiApiSource, client_from_env_or_age
@@ -331,8 +421,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             as_of = api_source.as_of
         except (SecretsError, ApiError) as exc:
             print(f"ERROR {exc}", file=sys.stderr)
-            _finish_failed_run(store, run_id)
-            store.close()
+            _finalize_failed_run(store, run_id, RUN_FAILED, exc)
             return 1
 
         # Every one of these claims a full window was read, so all of them are
@@ -366,26 +455,23 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         cursor_after, cursor_warning = _next_cursor(as_of, cursor_floor)
 
     complete_snapshot = _is_complete_snapshot(args)
-    try:
-        outcomes = Counter(store.upsert_version(run_id, record) for record in records)
-        if complete_snapshot:
-            store.retire_absent_snapshot(run_id, {r["transaction_id"] for r in records})
-        store.record_accounts(
-            {r["account_name"] for r in records if not r.get("is_deleted") and r["account_name"]}
-        )
-        store.finish_run(
-            run_id,
-            "success",
-            len(records),
-            cursor_after=cursor_after,
-            complete_snapshot=complete_snapshot,
-        )
-        store.commit()
-    except BaseException:
-        _finish_failed_run(store, run_id)
-        raise
-    finally:
-        store.close()
+    # No local guard here: persistence failures, and anything else raised in
+    # this block, propagate to the caller's `_run_finalized`, which rolls the
+    # work back and records the run as failed with its cause.
+    outcomes = Counter(store.upsert_version(run_id, record) for record in records)
+    if complete_snapshot:
+        store.retire_absent_snapshot(run_id, {r["transaction_id"] for r in records})
+    store.record_accounts(
+        {r["account_name"] for r in records if not r.get("is_deleted") and r["account_name"]}
+    )
+    store.finish_run(
+        run_id,
+        RUN_SUCCEEDED,
+        len(records),
+        cursor_after=cursor_after,
+        complete_snapshot=complete_snapshot,
+    )
+    store.commit()
 
     print(f"INFO run {run_id}: versions {dict(outcomes)}")
     if args.source == "api":
@@ -405,11 +491,54 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _no_successful_run_error(db: Path) -> str:
+    """Explain the absence of a usable run in terms of what to do about it.
+
+    "No successful run" is the same sentence whether nothing has been ingested,
+    the last attempt failed with a recorded cause, or a run is still in flight —
+    and those call for three different next steps. The lifecycle knows which it
+    is, so it should say.
+    """
+    store = Store(db)
+    try:
+        latest = store.latest_run_summary()
+    finally:
+        store.close()
+    if latest is None:
+        return f"no runs recorded in {db}; run `ingest` first"
+    state = str(latest["state"])
+    if state == RUN_FAILED:
+        reason = latest["error_message"] or "no cause was recorded"
+        return (
+            f"the most recent run ({latest['id']}, source {latest['source']!r}) failed and "
+            f"no earlier successful run is available: {reason}. Analysis refuses an "
+            "unsuccessful run rather than reporting on partial data"
+        )
+    if state == RUN_ABORTED:
+        return (
+            f"the most recent run ({latest['id']}, source {latest['source']!r}) was "
+            "interrupted before it finished, and no earlier successful run is available. "
+            "Re-run `ingest`"
+        )
+    if state == RUN_STARTED:
+        return (
+            f"the most recent run ({latest['id']}, source {latest['source']!r}) has not "
+            "finished. If no ingest is in progress, that run's process died before it "
+            "could record an outcome; re-run `ingest`"
+        )
+    return f"no successful run in {db}; run `ingest` first"
+
+
 def _analysis_rows(args: argparse.Namespace) -> tuple[list[dict], int, str]:
     db = Path(args.db)
     if not db.exists():
         raise ValueError(f"no database at {db}; run `ingest` first")
     run_id, source = _latest_run(db)
+    if not run_id:
+        # Only a succeeded run may become analysis input. Falling through would
+        # select rows by source alone and report on whatever a failed or
+        # half-finished run happened to leave behind.
+        raise ValueError(_no_successful_run_error(db))
     rows = _rows(db, source)
     if not rows:
         raise ValueError(

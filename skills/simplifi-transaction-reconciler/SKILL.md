@@ -136,7 +136,11 @@ because CSV exports do not expose settlement or projection state.
 3. **Ingest with provenance.** Store observations append-only, keyed by the
    provider transaction ID when available; use a content hash only as the
    fallback for ID-less exports. Record run/fetch state, counts, source hashes,
-   current versions, and enough raw evidence to reproduce decisions. Advance
+   current versions, and enough raw evidence to reproduce decisions. Every run
+   reaches an explicit terminal state — `succeeded`, `failed`, or `aborted` —
+   even when the failure is one nobody anticipated, and a failure records its
+   error class and an actionable message. Only a succeeded run is analysis
+   input; an unfinished or failed run is never reported on. Advance
    an incremental cursor only after a complete successful fetch, and only to
    the value the response itself declares it is current as of — never to a
    maximum derived from the returned rows, which can jump past records the

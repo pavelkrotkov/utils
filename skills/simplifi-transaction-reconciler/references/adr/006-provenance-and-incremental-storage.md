@@ -23,6 +23,25 @@ reproduce it: run ID, source hash, algorithm/ruleset version, and when relevant
 model ID and prompt version, plus creation time. Preserve raw source evidence
 needed to audit normalization and write decisions.
 
+A run's state is explicit — `started`, `succeeded`, `failed`, `aborted` — not
+inferred from the presence or absence of an outcome. A single nullable field
+cannot distinguish "running now" from "died and is never coming back", so
+nothing can act on either, and an unexpected exception leaves a run unfinished
+forever. Every exit path, including one nobody anticipated, must move the run
+to a terminal state; a failed run records an error class to aggregate by and a
+message someone can act on. Interruption is recorded distinctly from failure,
+because "someone stopped it" and "something is wrong" call for different
+responses. A run whose process was killed outright keeps `started`: we never
+learned what happened, and inventing a conclusion is worse than admitting that.
+
+Only a succeeded run is analysis input. Analysis never falls back to selecting
+rows by source alone, which would report on whatever a failed or half-finished
+run happened to leave behind, and when there is no usable run it says which of
+those situations applies rather than reporting an empty result. Recording a
+failure must never mask it: the database is one of the things that may be
+broken on that path, so a bookkeeping error is reported alongside the original
+cause, never in place of it.
+
 For API sources, prefer the provider's incremental modification cursor/as-of
 value over repeatedly refetching a full window. Persist the cursor with the
 source state, advance it only after a successful fetch, and retain a bounded
