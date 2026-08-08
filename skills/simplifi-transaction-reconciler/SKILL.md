@@ -111,6 +111,38 @@ malformed decision, request an unsupported or mutating action, propose a
 category the dataset does not use, omit a rationale, or reference a run that a
 later ingest has superseded. Every rejection reports its JSON path and code.
 
+### Where artifacts are stored
+
+Generated artifacts are derived financial data and are kept in a data directory
+outside the installed skill: `$SIMPLIFI_DATA_DIR`, else
+`$XDG_DATA_HOME/simplifi-transaction-reconciler`, else
+`~/.local/share/simplifi-transaction-reconciler`. `--data-dir` overrides it.
+
+A bare filename resolves inside that directory, so the shipped defaults
+(`simplifi.sqlite`, `report.html`, `proposals.csv`, `review-packet.json`,
+`decisions.json`) work unchanged without depending on the working directory.
+Absolute paths are honoured. Three locations are refused: a relative path with
+separators, because it names a different file depending on where the command
+ran; anything inside the installed skill directory, because a reinstall or a
+`git clean` destroys it and a commit publishes it; and any directory other
+users can write to, because they could substitute the file between runs.
+`--allow-unsafe-paths` (or `SIMPLIFI_ALLOW_UNSAFE_PATHS=1`) turns those
+refusals into warnings.
+
+The data directory is created `0700` and every artifact — database, report,
+review packet, prompt, proposal CSV, decision ledger — is created `0600`, with
+the mode set at creation rather than applied afterwards. Existing artifacts are
+permission-checked before use: an over-permissive file we own is tightened and
+the change reported, and one we do not own fails the run. An over-permissive
+*input* CSV is reported but never modified. The override relaxes locations
+only; permissions are enforced unconditionally.
+
+Back up the whole data directory, preserving permissions. The database and the
+append-only decision ledger are the only artifacts that cannot be regenerated;
+reports, packets, prompts, and proposals are derived and can be rebuilt by
+re-running `analyze`. The runtime never deletes an artifact, so retention of
+superseded reports is the operator's to manage. See ADR-008.
+
 Use `--source api` for read-only API ingestion, or `probe`/`schema` for
 read-only diagnostics. Omit `--modified-after` for normal API ingestion to use
 the last successful cursor; use `--full-rescan` for recovery or after changing

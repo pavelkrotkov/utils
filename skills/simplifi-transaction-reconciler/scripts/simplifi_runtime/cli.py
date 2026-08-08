@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from . import (
+    artifacts,
     decisions,
     judgment_examples,
     llm,
@@ -36,6 +37,43 @@ from .semantics import (
 from .sources.csv_source import SchemaError, SimplifiCsvSource
 from .store import RUN_ABORTED, RUN_FAILED, RUN_STARTED, RUN_SUCCEEDED, Store
 from .sync_scope import SyncScope, api_scope, scope_from_profile
+
+#: Arguments that name an artifact this runtime owns, and therefore places.
+#: The ingest CSV is deliberately absent: it is the user's export, read where
+#: they put it, and relocating their input would be a surprise rather than a
+#: protection.
+ARTIFACT_ARGS = ("db", "out", "packet_out", "packet", "proposals")
+
+
+def _allow_unsafe(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "allow_unsafe_paths", False)) or artifacts.allow_unsafe_from_env()
+
+
+def _prepare_paths(args: argparse.Namespace) -> Path:
+    """Resolve every artifact argument against the data directory, in place.
+
+    Done once at the top of each command rather than at each write, so a run
+    that is going to refuse a location refuses it before opening a database,
+    contacting an API, or appending anything immutable. Rewriting the values on
+    `args` keeps the rest of each command reading `args.db` as before; the
+    difference is that by then it is an absolute, vetted path.
+    """
+    allow_unsafe = _allow_unsafe(args)
+    data_dir = artifacts.prepare_data_dir(
+        getattr(args, "data_dir", None), allow_unsafe=allow_unsafe
+    )
+    for attr in ARTIFACT_ARGS:
+        value = getattr(args, attr, None)
+        if value is None:
+            continue
+        resolved = artifacts.resolve_artifact(
+            value,
+            data_dir,
+            allow_unsafe=allow_unsafe,
+            label=f"--{attr.replace('_', '-')}",
+        )
+        setattr(args, attr, str(resolved))
+    return data_dir
 
 
 def _positive_int(raw: str) -> int:
@@ -347,6 +385,13 @@ def _ensure_model_key(model: str, verbose: bool) -> None:
 
 
 def cmd_ingest(args: argparse.Namespace) -> int:
+    try:
+        data_dir = _prepare_paths(args)
+    except artifacts.ArtifactError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
+    if args.verbose:
+        print(f"INFO {artifacts.describe_policy(data_dir)}")
     store = Store(Path(args.db))
     mode = "full-rescan" if args.full_rescan else "incremental"
     if args.source == "csv":
@@ -392,6 +437,7 @@ def _ingest_within_run(args: argparse.Namespace, store: Store, run_id: int, mode
             print(f"ERROR {exc}", file=sys.stderr)
             _finalize_failed_run(store, run_id, RUN_FAILED, exc)
             return 1
+        artifacts.warn_if_exposed(path)
         try:
             records = SimplifiCsvSource(path).fetch()
         except (OSError, SchemaError, ValueError) as exc:
@@ -564,6 +610,7 @@ def _analysis_rows(args: argparse.Namespace) -> tuple[list[dict], int, str]:
     db = Path(args.db)
     if not db.exists():
         raise ValueError(f"no database at {db}; run `ingest` first")
+    artifacts.harden_existing(db)
     run_id, source = _latest_run(db)
     if not run_id:
         # Only a succeeded run may become analysis input. Falling through would
@@ -677,6 +724,11 @@ def _curated_examples(
 
 def cmd_analyze(args: argparse.Namespace) -> int:
     try:
+        _prepare_paths(args)
+    except artifacts.ArtifactError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
+    try:
         rows, run_id, source = _analysis_rows(args)
     except ValueError as exc:
         print(f"ERROR {exc}", file=sys.stderr)
@@ -701,7 +753,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     if Path(args.db).resolve() == packet_path.resolve():
         print("ERROR --packet-out and --db must name different files", file=sys.stderr)
         return 2
-    out.parent.mkdir(parents=True, exist_ok=True)
+    artifacts.ensure_parent(out)
     packet = review_packet.build_packet(
         run_id=run_id,
         source=source,
@@ -715,7 +767,8 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         examples=examples,
     )
     review_packet.write_packet(packet, packet_path)
-    out.write_text(
+    artifacts.secure_write_text(
+        out,
         report.render(
             run_id=run_id,
             source=source,
@@ -728,7 +781,6 @@ def cmd_analyze(args: argparse.Namespace) -> int:
             subscription_findings=findings,
             limitations=limitations,
         ),
-        encoding="utf-8",
     )
 
     signals = Counter(signal.name for item in prioritized for signal in item.signals)
@@ -796,6 +848,11 @@ def _packet_binding_error(
 
 def cmd_decide(args: argparse.Namespace) -> int:
     """Validate agent proposals and append immutable decision records."""
+    try:
+        _prepare_paths(args)
+    except artifacts.ArtifactError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
     db = Path(args.db)
     packet_path = Path(args.packet)
     proposals_path = Path(args.proposals)
@@ -897,6 +954,11 @@ def cmd_decide(args: argparse.Namespace) -> int:
 
 def cmd_subs(args: argparse.Namespace) -> int:
     try:
+        _prepare_paths(args)
+    except artifacts.ArtifactError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
+    try:
         rows, _, _ = _analysis_rows(args)
     except ValueError as exc:
         print(f"ERROR {exc}", file=sys.stderr)
@@ -912,6 +974,11 @@ def cmd_subs(args: argparse.Namespace) -> int:
 
 
 def cmd_classify(args: argparse.Namespace) -> int:
+    try:
+        _prepare_paths(args)
+    except artifacts.ArtifactError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
     try:
         rows, _, source = _analysis_rows(args)
     except ValueError as exc:
@@ -963,15 +1030,13 @@ def cmd_classify(args: argparse.Namespace) -> int:
 
     if args.dry_run:
         out = Path(args.out).with_suffix(".prompt.txt")
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text("\n\n===== NEXT REQUEST =====\n\n".join(prompts), encoding="utf-8")
+        artifacts.secure_write_text(out, "\n\n===== NEXT REQUEST =====\n\n".join(prompts))
         print(f"INFO dry run: {len(prompts)} request(s); wrote {out}")
         return 0
 
     out = Path(args.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
     rows_by_id = {row["transaction_id"]: row for row in residue}
-    with out.open("w", newline="", encoding="utf-8") as fh:
+    with artifacts.secure_open(out, "w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
         writer.writerow(
             [
@@ -1095,6 +1160,28 @@ def cmd_schema(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_storage_args(parser: argparse.ArgumentParser) -> None:
+    """Options every artifact-producing subcommand shares.
+
+    Repeated per subcommand rather than declared on the top-level parser
+    because argparse would then require them *before* the subcommand name,
+    which is the opposite of where anyone types them.
+    """
+    parser.add_argument(
+        "--data-dir",
+        help=(
+            f"directory holding the database, reports, and ledgers "
+            f"(default: ${artifacts.DATA_DIR_ENV}, else "
+            f"$XDG_DATA_HOME/{artifacts.DEFAULT_DIR_NAME})"
+        ),
+    )
+    parser.add_argument(
+        "--allow-unsafe-paths",
+        action="store_true",
+        help="downgrade location refusals to warnings; permissions are still enforced",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1112,6 +1199,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ingest.add_argument("--db", default="simplifi.sqlite")
     ingest.add_argument("--verbose", action="store_true")
+    _add_storage_args(ingest)
     ingest.set_defaults(func=cmd_ingest)
 
     analyze = sub.add_parser("analyze", help="build an HTML read-only review")
@@ -1122,6 +1210,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="review-packet.json path (default: beside --out)",
     )
     analyze.add_argument("--today", help="analysis date, YYYY-MM-DD")
+    _add_storage_args(analyze)
     analyze.set_defaults(func=cmd_analyze)
 
     classify = sub.add_parser("classify", help="propose categories for unresolved rows")
@@ -1133,6 +1222,7 @@ def build_parser() -> argparse.ArgumentParser:
     classify.add_argument(
         "--dry-run", action="store_true", help="write prompts without calling an API"
     )
+    _add_storage_args(classify)
     classify.set_defaults(func=cmd_classify)
 
     decide = sub.add_parser("decide", help="validate agent proposals and append decision records")
@@ -1152,11 +1242,13 @@ def build_parser() -> argparse.ArgumentParser:
         default="decisions.json",
         help="validated decision records (never the input packet)",
     )
+    _add_storage_args(decide)
     decide.set_defaults(func=cmd_decide)
 
     subs = sub.add_parser("subs", help="review recurring charges")
     subs.add_argument("--db", default="simplifi.sqlite")
     subs.add_argument("--today", help="analysis date, YYYY-MM-DD")
+    _add_storage_args(subs)
     subs.set_defaults(func=cmd_subs)
 
     probe = sub.add_parser("probe", help="verify API authentication and connection reads")
@@ -1208,7 +1300,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (OSError, sqlite3.Error, ValueError) as exc:
+    except (OSError, sqlite3.Error, ValueError, artifacts.ArtifactError) as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
 

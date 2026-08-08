@@ -12,6 +12,8 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import artifacts
+
 ALGORITHM_VERSION = "0.1.0"
 RULESET_VERSION = "0.2.0"
 
@@ -75,7 +77,10 @@ def _now() -> str:
 class Store:
     def __init__(self, path: Path, migrations_dir: Path | None = None):
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        # Create the file ourselves, at 0600, before SQLite gets the chance to
+        # make it under the ambient umask. Every later sidecar (-wal, -shm)
+        # inherits the main database's mode, so this one call covers them too.
+        artifacts.create_private(self.path)
         self.migrations_dir = Path(migrations_dir or Path(__file__).with_name("migrations"))
         self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
