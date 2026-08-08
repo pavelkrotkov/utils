@@ -32,10 +32,14 @@ by accident:
 
 ## Decision
 
-**Every command declares its position, every run.** A local command prints
-`egress: none — analyze runs entirely locally`. Saying it out loud is what
+**Every command declares its position, every run.** Saying it out loud is what
 makes its absence on `classify` mean something; silence teaches a reader
-nothing.
+nothing. The wording keeps two claims apart that are easy to conflate: "no
+third-party disclosure", which is what this policy is about, and "no network
+traffic at all", which only some commands have. `probe`, `schema`, and
+`ingest --source api` read the provider — the user's own data from the system
+it already lives in — so they declare that rather than claiming to be offline,
+which would be false to anyone auditing outbound traffic.
 
 **Nothing is sent without `--send`.** Not sending is the default, and
 `--dry-run` is kept only so existing scripts do not break — the two together
@@ -66,15 +70,40 @@ every merchant whose raw descriptor equals its display name.
 
 **Fields can be withheld or coarsened.** `--redact` accepts `account`,
 `amount`, `date`. The account is dropped entirely; the amount becomes a
-direction and a band; the date becomes a month. The payee is not redactable —
+direction and a band, with zero labelled as such rather than assigned a
+direction it does not have; the date becomes a month. A coarsened field is
+still listed in the declaration as transmitted, annotated — reporting nothing
+about the amount when a band went would be false. The payee is not redactable —
 it is what classification reasons about, and withholding it leaves nothing to
 answer. Saying so is better than accepting the flag and returning nothing
 useful.
 
-**The payload is written before it is sent, not instead.** Every run assembles
-the requests, checks them, writes them to `<out>.prompt.txt` at `0600`, and
-prints the path. Only then does `--send` transmit. A run can therefore be
-inspected and repeated: read the file, then re-run with `--send`.
+**Fields are sanitized before the allowlist, not trusted from the row.**
+`payee_display` cannot be taken at face value: the API adapter sets it to the
+provider's `payee`, which its own comment records as the raw bank descriptor
+for 58% of rows — "COSTCO WHSE #1166 NORTH PLAINFINJ" where the CSV says
+"Costco". So `sendable_payee` prefers a display value that differs from the raw
+string, then the normalizer's stripped output, and reaches the raw text only
+when normalization found nothing to strip — at which point the descriptor and
+the merchant name are the same string and there is nothing left to protect.
+Likewise `sendable_account` withholds the account entirely when its name is the
+provider's `accountId` fallback: sending an identifier under a different label
+would defeat the forbidden list by relabelling.
+
+**A redacted field is scanned for, not merely left out.** Withholding a value
+from the record is not the same as its being absent from the payload — it can
+return through the taxonomy, a curated example, or a later prompt change. So
+redaction extends the scan set to the field's source column.
+
+**The payload is written before it is sent, and `--send` transmits only what
+was reviewed.** Every run assembles the requests, checks them, and writes them
+to `<out>.prompt.txt` at `0600` with a digest. A `--send` run rebuilds the
+payload and compares it to that file; if it differs — because of an ingest, an
+edited example, or a changed option in between — the new payload is written and
+the run stops rather than transmitting. Otherwise the review would be a
+formality: the user would have approved bytes that never left. The cost is that
+`--send` on its own always fails once, which is the correct shape for a
+two-step confirmation.
 
 ## What is sent, to whom, and for how long
 

@@ -117,23 +117,35 @@ later ingest has superseded. Every rejection reports its JSON path and code.
 ### Model data egress
 
 Every command declares its position on sending data off the machine, on every
-run. `ingest`, `analyze`, `decide`, `subs`, `probe`, and `schema` print
-`egress: none` and mean it. Only `classify` can transmit, and only when asked.
+run. Only `classify` can disclose anything to a third party, and only when
+asked. The declaration distinguishes two claims: `analyze`, `decide`, `subs`,
+and `ingest --source csv` make no network calls at all, while `probe`,
+`schema`, and `ingest --source api` read the provider — your own data from the
+system it already lives in — and say so rather than claiming to be offline.
 
-**Nothing is sent without `--send`.** The default builds the requests, checks
-them, writes them to `<out>.prompt.txt`, and stops — so the payload can be read
-before the decision to transmit, and the same file is written on the runs that
-do send. `--dry-run` is retained for existing scripts but is now the default
-behaviour; passing it together with `--send` is an error.
+**Nothing is sent without `--send`,** and `--send` transmits only the payload
+you reviewed. The default builds the requests, checks them, writes them to
+`<out>.prompt.txt` with a digest, and stops. A `--send` run rebuilds the
+payload and compares it to that file; if an ingest, an edited example, or a
+changed option altered it in between, the new payload is written and the run
+stops rather than sending something you did not read. `--send` on its own
+therefore always fails once — that is the two-step confirmation working.
+`--dry-run` is retained for existing scripts but is now the default behaviour;
+passing it together with `--send` is an error.
 
-**What is sent:** the normalized payee display name, the amount, the account
-name, the posted date, and a per-request surrogate ID (`t1`, `t2`, …). The
-category taxonomy goes too, since the model must choose from it. The *raw* bank
+**What is sent:** the normalized payee name, the amount, the account name, the
+posted date, and a per-request surrogate ID (`t1`, `t2`, …). The category
+taxonomy goes too, since the model must choose from it. The *raw* bank
 descriptor is never sent — it can carry card fragments, terminal IDs, and store
-locations that normalization removes. Neither are the provider's transaction or
-account IDs, the source hash, or the pre-conversion foreign amounts. Payloads
-are assembled from an allowlist and then re-checked against the rows they came
-from, so a field cannot arrive through an unanticipated route.
+locations that normalization removes. Note that the API adapter stores that raw
+descriptor in `payee_display` for most rows, so the payee is re-derived at the
+egress boundary rather than trusted from the row; an account name that is only
+the provider's `accountId` fallback is withheld entirely rather than sent under
+a friendlier label. Neither the provider's transaction or account IDs, the
+source hash, nor the pre-conversion foreign amounts are sent. Payloads are
+assembled from an allowlist and then re-checked against the rows they came
+from — including the fields this run redacted — so a value cannot arrive
+through an unanticipated route.
 
 **Where it goes:** `api.openai.com` for `--model luna`, `api.anthropic.com` for
 `--model haiku`. Nowhere else.
@@ -144,9 +156,12 @@ terms before enabling `--send`. The local payload artifact is `0600` in the
 data directory and is never removed automatically.
 
 **Minimization:** `--redact account,amount,date` withholds or coarsens fields —
-the account is dropped, the amount becomes a direction and a band, the date
-becomes a month. The payee cannot be redacted; it is what classification
-reasons about, so withholding it would leave nothing to answer. See ADR-009.
+the account is dropped, the amount becomes a direction and a band (zero is
+labelled `zero`, not given a direction it lacks), the date becomes a month. A
+coarsened field is still declared as transmitted, annotated with its form, so
+the declaration says what actually leaves. The payee cannot be redacted; it is
+what classification reasons about, so withholding it would leave nothing to
+answer. See ADR-009.
 
 ### Where artifacts are stored
 

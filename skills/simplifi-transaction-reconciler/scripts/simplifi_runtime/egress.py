@@ -51,6 +51,12 @@ SENDABLE_FIELDS = (PAYEE, AMOUNT, ACCOUNT, DATE)
 #: reason about. The rest are genuinely optional signals.
 REDACTABLE_FIELDS = (ACCOUNT, AMOUNT, DATE)
 
+#: Redacting these coarsens rather than drops: something still goes, in a form
+#: that is no longer a fingerprint. Anything not listed here is withheld
+#: outright. The distinction matters to a reader of the declaration, who is
+#: entitled to know that `--redact amount` still sends a magnitude.
+COARSENED_AS = {AMOUNT: "band", DATE: "month"}
+
 #: Columns that must never appear in a payload, whatever the flags. The raw
 #: descriptor is the sharpest of these: it is the unnormalized bank string and
 #: can carry card fragments, terminal IDs, and locations that the display name
@@ -74,6 +80,12 @@ FORBIDDEN_COLUMNS = (
 #: mortgage payment — which is most of what the amount contributes.
 AMOUNT_BANDS = ((0, 2_000), (2_000, 10_000), (10_000, 50_000), (50_000, None))
 
+#: Which source column a redacted field must be scanned for. A withheld value
+#: is not covered by `FORBIDDEN_COLUMNS` — those are never sendable at all —
+#: so redaction has to extend the scan or "withheld" would mean only "left out
+#: of the record", not "absent from the payload".
+REDACTED_SOURCE_COLUMNS = {ACCOUNT: "account_name", DATE: "posted_on"}
+
 
 class EgressError(Exception):
     """A payload or a request that policy does not permit."""
@@ -87,6 +99,11 @@ class EgressDeclaration:
     destination: str | None = None
     fields: tuple[str, ...] = ()
     redacted: tuple[str, ...] = ()
+    #: True when the command reads the provider API. That is the user's own
+    #: data coming back from the system it already lives in, not a disclosure —
+    #: but it is still a network call, and a declaration that denied it would
+    #: be false to anyone auditing outbound traffic.
+    reads_provider: bool = False
 
     @property
     def sends(self) -> bool:
@@ -95,28 +112,45 @@ class EgressDeclaration:
     def describe(self) -> str:
         """One line for the run log. Printed by every command, every run.
 
-        A local-only command says so out loud rather than staying silent about
-        it: "no egress" is information, and a reader who sees it on `analyze`
-        learns that its absence on `classify` means something.
+        A command that discloses nothing says so out loud rather than staying
+        silent: it is information, and a reader who sees it on `analyze` learns
+        that its absence on `classify` means something.
+
+        The wording separates two claims that are easy to conflate. "No
+        third-party disclosure" is what this policy is about. "No network
+        traffic at all" is a different property, and only some commands have
+        it — saying otherwise would be materially false to someone running in a
+        restricted environment or reading an audit log.
         """
-        if not self.sends:
-            return f"egress: none — {self.command} runs entirely locally"
-        fields = ", ".join(self.fields) if self.fields else "none"
-        line = f"egress: ENABLED — {self.command} sends to {self.destination}; fields: {fields}"
-        if self.redacted:
-            line += f"; redacted: {', '.join(self.redacted)}"
-        return line
+        if self.sends:
+            fields = ", ".join(self.fields) if self.fields else "none"
+            line = f"egress: ENABLED — {self.command} sends to {self.destination}; fields: {fields}"
+            if self.redacted:
+                line += f"; withheld: {', '.join(self.redacted)}"
+            return line
+        if self.reads_provider:
+            return (
+                f"egress: no third-party disclosure — {self.command} reads your own "
+                f"data from the Simplifi API; nothing is sent to a model"
+            )
+        return f"egress: none — {self.command} makes no network calls"
 
 
-#: Commands with no network egress at all. `probe` and `schema` do talk to the
-#: provider API, but that is a read of the user's own data from the system it
-#: already lives in, not a disclosure to a third party — the distinction this
-#: policy is about.
+#: Commands that never disclose data to a third party. `probe`, `schema`, and
+#: `ingest --source api` do make network calls, which `provider_reading`
+#: records; the rest touch nothing outside the machine.
 LOCAL_ONLY_COMMANDS = ("ingest", "analyze", "decide", "subs", "probe", "schema")
 
+#: Commands whose every invocation reads the provider API. `ingest` is absent
+#: because it depends on `--source`, which the caller resolves.
+PROVIDER_READING_COMMANDS = ("probe", "schema")
 
-def local_declaration(command: str) -> EgressDeclaration:
-    return EgressDeclaration(command=command)
+
+def local_declaration(command: str, *, reads_provider: bool = False) -> EgressDeclaration:
+    return EgressDeclaration(
+        command=command,
+        reads_provider=reads_provider or command in PROVIDER_READING_COMMANDS,
+    )
 
 
 def classify_declaration(
@@ -131,12 +165,20 @@ def classify_declaration(
     redacted = tuple(sorted(parse_redactions(redact)))
     if not send:
         return EgressDeclaration(command="classify")
-    fields = tuple(field for field in SENDABLE_FIELDS if field not in redacted)
+    # A coarsened field is still transmitted, so it belongs in the list of what
+    # leaves — annotated, not omitted. Dropping it from `fields` would report
+    # that nothing about the amount was sent when a band was.
+    fields = tuple(
+        field if field not in redacted else f"{field} ({COARSENED_AS[field]})"
+        for field in SENDABLE_FIELDS
+        if field not in redacted or field in COARSENED_AS
+    )
+    dropped = tuple(field for field in redacted if field not in COARSENED_AS)
     return EgressDeclaration(
         command="classify",
         destination=DESTINATIONS.get(model, model),
         fields=fields,
-        redacted=redacted,
+        redacted=dropped,
     )
 
 
@@ -184,11 +226,13 @@ def minimize(rows: Sequence[Mapping[str, Any]], redact: Iterable[str] = ()) -> M
     for index, row in enumerate(rows, start=1):
         surrogate = f"t{index}"
         surrogates[surrogate] = str(row["transaction_id"])
-        record: dict[str, str] = {"id": surrogate, PAYEE: str(row["payee_display"])}
+        record: dict[str, str] = {"id": surrogate, PAYEE: sendable_payee(row)}
         if ACCOUNT not in redacted:
-            record[ACCOUNT] = str(row["account_name"])
+            account = sendable_account(row)
+            if account is not None:
+                record[ACCOUNT] = account
         if AMOUNT not in redacted:
-            record[AMOUNT] = f"{int(row['amount_minor_units']) / 100:.2f}"
+            record[AMOUNT] = format_amount(int(row["amount_minor_units"]))
         else:
             record[AMOUNT] = amount_band(int(row["amount_minor_units"]))
         if DATE not in redacted:
@@ -199,8 +243,65 @@ def minimize(rows: Sequence[Mapping[str, Any]], redact: Iterable[str] = ()) -> M
     return Minimized(records=tuple(records), surrogates=surrogates)
 
 
+def format_amount(minor_units: int) -> str:
+    return f"{minor_units / 100:.2f}"
+
+
+def sendable_payee(row: Mapping[str, Any]) -> str:
+    """The merchant name with the descriptor's noise removed.
+
+    `payee_display` cannot be trusted to be normalized. The API adapter sets it
+    to the provider's `payee` field, which for most API rows *is* the raw bank
+    descriptor — "COSTCO WHSE #1166 NORTH PLAINFINJ" where the CSV would say
+    "Costco". Sending that would transmit the store number, the location, and
+    whatever card fragment the descriptor carries, while the policy says the
+    raw descriptor never leaves.
+
+    So the choice is made here rather than trusted from the row: prefer a
+    display value that differs from the raw string (someone renamed it), then
+    the normalizer's stripped output, and only then the raw text — which is
+    reached exactly when normalization found nothing to strip, meaning the
+    descriptor and the merchant name are the same string and there is nothing
+    left to protect.
+    """
+    raw = str(row.get("payee_raw") or "").strip()
+    display = str(row.get("payee_display") or "").strip()
+    if display and display != raw:
+        return display
+    normalized = str(row.get("payee_normalized") or "").strip()
+    if normalized and normalized != raw:
+        return normalized
+    return display or normalized or raw
+
+
+def sendable_account(row: Mapping[str, Any]) -> str | None:
+    """The account's name, or nothing if all we have is its identifier.
+
+    The API adapter falls back to `accountId` when an account has no name. That
+    fallback is a provider identifier wearing a name's clothes, and sending it
+    would put in the payload exactly what `account_id` is on the forbidden list
+    to keep out. Better to send no account than to send its ID under another
+    label; the field is optional evidence, and its absence is honest.
+    """
+    name = str(row.get("account_name") or "").strip()
+    if not name:
+        return None
+    account_id = str(row.get("account_id") or "").strip()
+    if account_id and name == account_id:
+        return None
+    return name
+
+
 def amount_band(minor_units: int) -> str:
-    """A redacted amount still says roughly how big, and in which direction."""
+    """A redacted amount still says roughly how big, and in which direction.
+
+    Zero gets its own label rather than falling into `debit`. A zero-value
+    authorization or adjustment has no direction, and calling it a debit would
+    invent evidence pointing at a purchase category — a redaction that makes
+    the model *more* wrong is worse than one that says less.
+    """
+    if minor_units == 0:
+        return "zero"
     sign = "credit" if minor_units > 0 else "debit"
     magnitude = abs(minor_units)
     for low, high in AMOUNT_BANDS:
@@ -232,25 +333,70 @@ def assert_payload_is_permitted(
     """
     redacted = parse_redactions(redact)
     for row in rows:
-        permitted = {str(row["payee_display"])}
-        if ACCOUNT not in redacted:
-            permitted.add(str(row["account_name"]))
-        if DATE not in redacted:
-            permitted.add(str(row["posted_on"]))
-        for column in FORBIDDEN_COLUMNS:
-            value = row.get(column)
-            if value is None:
-                continue
+        permitted = _permitted_values(row, redacted)
+        for column, value in _values_to_refuse(row, redacted):
             text = str(value).strip()
             # Short values are not identifying and collide with ordinary
             # prose; a two-character currency code proves nothing.
-            if len(text) < 4 or text in permitted:
+            if len(text) < 4 or _is_covered(text, permitted):
                 continue
             if text in payload:
                 raise EgressError(
-                    f"payload contains {column}, which policy never sends "
+                    f"payload contains {column}, which this run does not send "
                     f"(transaction {row.get('transaction_id', 'unknown')})"
                 )
+
+
+def _permitted_values(row: Mapping[str, Any], redacted: frozenset[str]) -> set[str]:
+    """Exactly what this run is entitled to put in the payload for one row."""
+    permitted = {sendable_payee(row)}
+    if ACCOUNT not in redacted:
+        account = sendable_account(row)
+        if account is not None:
+            permitted.add(account)
+    if AMOUNT not in redacted:
+        permitted.add(format_amount(int(row["amount_minor_units"])))
+    if DATE not in redacted:
+        permitted.add(str(row["posted_on"]))
+    return {value for value in permitted if value}
+
+
+def _values_to_refuse(row: Mapping[str, Any], redacted: frozenset[str]):
+    """Every value that must not appear, given what this run chose to withhold.
+
+    `FORBIDDEN_COLUMNS` alone is not the answer once redaction exists: a
+    withheld account name is not on that list, because it is ordinarily
+    sendable. Redacting it has to extend the scan, or "withheld" would mean
+    only "left out of the record" while the value stayed free to arrive
+    through the taxonomy, a curated example, or a later prompt change.
+    """
+    for column in FORBIDDEN_COLUMNS:
+        value = row.get(column)
+        if value is not None:
+            yield column, value
+    for field, column in REDACTED_SOURCE_COLUMNS.items():
+        if field in redacted:
+            value = row.get(column)
+            if value is not None:
+                yield f"redacted {field}", value
+    if AMOUNT in redacted:
+        yield f"redacted {AMOUNT}", format_amount(int(row["amount_minor_units"]))
+
+
+def _is_covered(text: str, permitted: set[str]) -> bool:
+    """Whether a value is accounted for by something we are allowed to send.
+
+    Substring rather than equality, because a permitted value can legitimately
+    contain a forbidden one. A foreign charge's `original_amount` of `2.90`
+    sits inside the issuer-converted `-2.90` we are sending; refusing that
+    would fail every foreign transaction over a value that is present only
+    because the amount is.
+
+    It does not weaken the check in the direction that matters: a raw
+    descriptor is longer than the merchant name it was stripped down to, so it
+    can never be a substring of it.
+    """
+    return any(text == value or text in value for value in permitted)
 
 
 def retention_note(destination: str) -> str:

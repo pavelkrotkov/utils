@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import signal
@@ -44,6 +45,11 @@ from .sync_scope import SyncScope, api_scope, scope_from_profile
 #: they put it, and relocating their input would be a surprise rather than a
 #: protection.
 ARTIFACT_ARGS = ("db", "out", "packet_out", "packet", "proposals")
+
+
+def _digest(text: str) -> str:
+    """A short, stable name for a payload, so two runs can be compared aloud."""
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
 def _allow_unsafe(args: argparse.Namespace) -> bool:
@@ -391,7 +397,11 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     except artifacts.ArtifactError as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 2
-    print(f"INFO {egress.local_declaration('ingest').describe()}")
+    # Source-aware: an API ingest genuinely makes network calls, and a
+    # declaration that denied it would be false to anyone auditing traffic.
+    print(
+        f"INFO {egress.local_declaration('ingest', reads_provider=args.source == 'api').describe()}"
+    )
     if args.verbose:
         print(f"INFO {artifacts.describe_policy(data_dir)}")
     store = Store(Path(args.db))
@@ -1012,6 +1022,20 @@ def cmd_classify(args: argparse.Namespace) -> int:
         print(f"ERROR {exc}", file=sys.stderr)
         return 2
     print(f"INFO {declaration.describe()}")
+    # The prompt path is derived, not given, so nothing stopped it from landing
+    # on a file the run also reads. `--db proposals.prompt.txt` with the
+    # default `--out` was enough: the database opened, the analysis succeeded,
+    # and then the payload write truncated the database — a successful exit
+    # that destroyed its own input.
+    prompt_path = Path(args.out).with_suffix(".prompt.txt")
+    for label, other in (("--db", args.db), ("--out", args.out)):
+        if prompt_path == Path(other):
+            print(
+                f"ERROR the payload would be written to {prompt_path}, which is "
+                f"also {label}; choose a different --out",
+                file=sys.stderr,
+            )
+            return 2
     try:
         rows, _, source = _analysis_rows(args)
     except ValueError as exc:
@@ -1057,16 +1081,33 @@ def cmd_classify(args: argparse.Namespace) -> int:
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
 
-    prompt_path = Path(args.out).with_suffix(".prompt.txt")
-    artifacts.secure_write_text(
-        prompt_path,
-        "\n\n===== NEXT REQUEST =====\n\n".join(payload.user for payload in payloads),
-    )
-    print(f"INFO payload: {len(payloads)} request(s) written to {prompt_path}")
+    document = "\n\n===== NEXT REQUEST =====\n\n".join(payload.user for payload in payloads)
 
     if not declaration.sends:
+        artifacts.secure_write_text(prompt_path, document)
+        print(f"INFO payload: {len(payloads)} request(s) written to {prompt_path}")
+        print(f"INFO payload digest: {_digest(document)}")
         print(f"INFO nothing was sent; review {prompt_path}, then re-run with --send to submit it")
         return 0
+
+    # `--send` transmits the payload that was reviewed, or none at all. Between
+    # the review and this run an ingest, an edited example, or a changed option
+    # can produce different requests, and overwriting the artifact and sending
+    # the new one would make the review a formality — the user would have
+    # approved bytes that never left. So the two are compared, and a mismatch
+    # rewrites the file and stops rather than transmitting.
+    reviewed = prompt_path.read_text(encoding="utf-8") if prompt_path.exists() else None
+    if reviewed != document:
+        artifacts.secure_write_text(prompt_path, document)
+        reason = "differs from" if reviewed is not None else "had not been written before"
+        print(
+            f"ERROR the payload {reason} the one at {prompt_path}, so nothing was sent. "
+            f"The current payload has been written there ({_digest(document)}); "
+            f"review it and re-run with --send.",
+            file=sys.stderr,
+        )
+        return 3
+    print(f"INFO payload: {len(payloads)} request(s) matching {prompt_path} ({_digest(document)})")
 
     try:
         _ensure_model_key(args.model, args.verbose)

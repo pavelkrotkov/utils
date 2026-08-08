@@ -37,11 +37,29 @@ def row(**overrides):
 # --- declarations -----------------------------------------------------------
 
 
-def test_local_commands_declare_no_egress():
+def test_no_command_but_classify_discloses_anything():
     for command in egress.LOCAL_ONLY_COMMANDS:
         declaration = egress.local_declaration(command)
         assert declaration.sends is False
-        assert "egress: none" in declaration.describe()
+
+
+def test_a_purely_local_command_says_it_makes_no_network_calls():
+    assert "makes no network calls" in egress.local_declaration("analyze").describe()
+
+
+@pytest.mark.parametrize("command", egress.PROVIDER_READING_COMMANDS)
+def test_an_api_backed_command_does_not_claim_to_be_offline(command):
+    """`probe` and `schema` do call the provider; denying it would be false."""
+    described = egress.local_declaration(command).describe()
+
+    assert "makes no network calls" not in described
+    assert "no third-party disclosure" in described
+    assert "Simplifi API" in described
+
+
+def test_ingest_is_declared_by_source():
+    assert "makes no network calls" in egress.local_declaration("ingest").describe()
+    assert "Simplifi API" in egress.local_declaration("ingest", reads_provider=True).describe()
 
 
 def test_classify_declares_no_egress_by_default():
@@ -65,9 +83,19 @@ def test_classify_declares_its_destination_and_fields_when_sending():
 def test_a_declaration_names_what_it_withholds():
     declaration = egress.classify_declaration(send=True, model="haiku", redact="account,date")
 
-    assert declaration.fields == (egress.PAYEE, egress.AMOUNT)
-    assert "redacted: account, date" in declaration.describe()
+    assert declaration.fields == (egress.PAYEE, egress.AMOUNT, "date (month)")
+    assert "withheld: account" in declaration.describe()
     assert "api.anthropic.com" in (declaration.destination or "")
+
+
+def test_a_coarsened_field_is_still_declared_as_transmitted():
+    """`--redact amount` sends a band; reporting nothing would be false."""
+    declaration = egress.classify_declaration(send=True, model="luna", redact="amount,date")
+
+    described = declaration.describe()
+    assert "amount (band)" in described
+    assert "date (month)" in described
+    assert "withheld" not in described
 
 
 # --- redaction --------------------------------------------------------------
@@ -246,6 +274,7 @@ def test_the_payload_exists_on_disk_before_it_is_sent(prepared, monkeypatch):
         seen.append((prepared / "proposals.prompt.txt").read_text())
         raise RuntimeError("stop before the network")
 
+    assert run(["classify"]) == 0  # the review step
     monkeypatch.setattr(llm, "classify", record_then_fail)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
@@ -286,7 +315,7 @@ def test_redaction_reaches_the_written_payload(prepared):
 def test_every_command_states_its_egress_position(prepared, capsys):
     assert run(["analyze", "--today", "2026-06-15"]) == 0
 
-    assert "egress: none — analyze runs entirely locally" in capsys.readouterr().out
+    assert "egress: none — analyze makes no network calls" in capsys.readouterr().out
 
 
 def test_the_retention_note_does_not_promise_deletion():
@@ -300,3 +329,156 @@ def test_the_prompt_artifact_is_owner_only(prepared):
 
     path = Path(prepared / "proposals.prompt.txt")
     assert path.stat().st_mode & 0o777 == artifacts.FILE_MODE
+
+
+# --- review findings, each named for the leak it would have allowed ---------
+
+
+def api_row(**overrides):
+    """An API-sourced row: `payee_display` *is* the raw descriptor.
+
+    `api_source._to_record` sets it to the provider's `payee` field, which its
+    own comment records as the raw bank descriptor for 58% of rows.
+    """
+    descriptor = "COSTCO WHSE #1166 NORTH PLAINFINJ 4111"
+    base = row(
+        payee_raw=descriptor,
+        payee_display=descriptor,
+        payee_normalized="Costco Whse",
+        payee_canonical="costco_whse",
+    )
+    base.update(overrides)
+    return base
+
+
+def test_an_api_raw_descriptor_is_not_laundered_by_the_display_field():
+    record = egress.minimize([api_row()]).records[0]
+
+    assert record[egress.PAYEE] == "Costco Whse"
+    assert "4111" not in str(record)
+    assert "NORTH PLAINFINJ" not in str(record)
+
+
+def test_an_api_raw_descriptor_is_refused_if_it_reaches_the_payload():
+    """With the payee sanitized, the descriptor is no longer exempt."""
+    payload = "id=t1 | payee=COSTCO WHSE #1166 NORTH PLAINFINJ 4111"
+
+    with pytest.raises(egress.EgressError, match="payee_raw"):
+        egress.assert_payload_is_permitted(payload, [api_row()])
+
+
+def test_an_account_name_that_is_really_an_identifier_is_withheld():
+    """The API adapter falls back to `accountId` when an account has no name."""
+    record = egress.minimize([row(account_name="acct-99887766")]).records[0]
+
+    assert egress.ACCOUNT not in record
+    assert "acct-99887766" not in str(record)
+
+
+def test_a_blank_account_name_sends_no_account_at_all():
+    assert egress.ACCOUNT not in egress.minimize([row(account_name="")]).records[0]
+
+
+def test_a_foreign_charge_does_not_fail_its_own_amount():
+    """`original_amount` 2.90 sits inside the converted -2.90 we do send."""
+    foreign = row(amount_minor_units=-290, original_amount="2.90", original_currency="EUR")
+    payload = llm.build_prompt(["Transit"], [], egress.minimize([foreign]).records)
+
+    egress.assert_payload_is_permitted(payload, [foreign])
+
+
+def test_a_redacted_account_is_refused_if_it_reappears():
+    payload = "id=t1 | payee=Aurora Bakery | note=Chase Sapphire 4021"
+
+    with pytest.raises(egress.EgressError, match="redacted account"):
+        egress.assert_payload_is_permitted(payload, [row()], redact="account")
+
+
+def test_a_redacted_date_is_refused_if_it_reappears():
+    payload = "id=t1 | payee=Aurora Bakery | seen=2026-06-01"
+
+    with pytest.raises(egress.EgressError, match="redacted date"):
+        egress.assert_payload_is_permitted(payload, [row()], redact="date")
+
+
+def test_a_redacted_amount_is_refused_if_it_reappears():
+    payload = "id=t1 | payee=Aurora Bakery | amount=debit 0-20 | example=-12.40"
+
+    with pytest.raises(egress.EgressError, match="redacted amount"):
+        egress.assert_payload_is_permitted(payload, [row()], redact="amount")
+
+
+def test_a_zero_amount_is_not_called_a_debit():
+    """Inventing a direction would steer the model toward a purchase."""
+    assert egress.amount_band(0) == "zero"
+    assert egress.minimize([row(amount_minor_units=0)], redact="amount").records[0]["amount"] == (
+        "zero"
+    )
+
+
+def test_send_refuses_a_payload_that_was_never_reviewed(prepared, capsys):
+    assert run(["classify", "--send"]) == 3
+
+    assert "had not been written before" in capsys.readouterr().err
+
+
+def test_send_refuses_when_the_payload_changed_since_review(prepared, monkeypatch, capsys):
+    """An ingest between review and send must not silently alter what goes."""
+    assert run(["classify"]) == 0
+    (prepared / "proposals.prompt.txt").write_text("a payload the user actually read\n")
+
+    def explode(*args, **kwargs):
+        raise AssertionError("sent a payload the user did not review")
+
+    monkeypatch.setattr(llm, "classify", explode)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    assert run(["classify", "--send"]) == 3
+    assert "differs from" in capsys.readouterr().err
+
+
+def test_the_rewritten_payload_is_what_the_next_send_accepts(prepared, monkeypatch):
+    """A refusal leaves the current payload in place, so one re-run suffices."""
+    assert run(["classify", "--send"]) == 3
+
+    sent: list[int] = []
+
+    def capture(backend, payloads, taxonomy):
+        sent.append(len(payloads))
+        raise RuntimeError("stop before the network")
+
+    monkeypatch.setattr(llm, "classify", capture)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    assert run(["classify", "--send"]) == 1
+    assert sent == [1]
+
+
+def test_a_prompt_path_colliding_with_the_database_is_refused(prepared, capsys):
+    """`--db proposals.prompt.txt` truncated the database it had just read."""
+    db = prepared / "simplifi.sqlite"
+    collision = prepared / "collide.prompt.txt"
+    collision.write_bytes(db.read_bytes())
+
+    code = run(["classify", "--db", str(collision), "--out", str(prepared / "collide.csv")])
+
+    assert code == 2
+    assert "also --db" in capsys.readouterr().err
+    assert collision.read_bytes() == db.read_bytes()
+
+
+def test_an_api_ingest_declares_that_it_reads_the_provider(prepared, capsys):
+    """The declaration prints before the client is built, so it survives auth failure."""
+    args = build_parser().parse_args(["ingest", "--source", "api"])
+    args.func(args)
+
+    assert "Simplifi API" in capsys.readouterr().out
+
+
+def test_a_csv_ingest_still_declares_no_network_calls(prepared, tmp_path, capsys):
+    export = tmp_path / "again.csv"
+    artifacts.secure_write_text(export, UNRESOLVED_CSV)
+
+    assert run(["ingest", "--source", "csv", str(export)]) == 0
+
+    assert "makes no network calls" in capsys.readouterr().out
