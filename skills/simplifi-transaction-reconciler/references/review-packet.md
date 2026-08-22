@@ -100,3 +100,32 @@ recorded as append-only decision records. See the
 [decision-record contract](decision-records.md) for that half of the boundary.
 The packet's `run_id`, `analysis_date`, and `dataset_hash` are what a proposal
 document must echo back, so a review of a superseded run fails closed.
+
+## Contract enforcement
+
+The contract is an allowlist at every level, not a presence check. Transactions,
+findings, category proposals, excluded rows, and examples each declare exactly
+which fields they may carry, which are required, and what type each holds. A
+field is in the contract or it is not in the packet.
+
+- **Money is validated as money**: three fields, an integer minor-unit count, a
+  non-empty currency, and a plausible ISO 4217 exponent. A bare number is
+  rejected rather than coerced — 1500 is ¥1,500 and $15.00 at once, and a
+  reader holding only the number cannot tell which.
+- **Every flag must be present and boolean**, not only `projected`. An omitted
+  flag reads as `False` to a consumer using `.get`, so a forecast that lost its
+  marker would be published as a real charge.
+- **Values are checked against their source rows.** `assert_no_sensitive_values`
+  refuses a raw descriptor, provider ID, or pre-conversion amount that appears
+  anywhere in the finished document, including under a permitted key — a
+  descriptor arriving as `merchant.display` passes every structural check. A
+  value that is also one the row may publish is not a finding, because a
+  descriptor with nothing to strip *is* its own merchant name.
+- **The HTML report renders through `transaction_view`**, the same projection
+  the packet uses, so the two artifacts cannot describe one transaction
+  differently.
+
+Validation runs before the file boundary, and `write_packet` writes atomically
+— a reader sees the previous packet or the new one, never a partial.
+
+See [ADR-012](adr/012-read-only-output-seam.md).

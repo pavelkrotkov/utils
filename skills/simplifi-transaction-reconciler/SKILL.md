@@ -30,6 +30,9 @@ material needed for the current decision:
 - For what an adapter produces, what a consumer may read, and which facts are
   allowed to differ between the CSV and the API, read
   [ADR-011](references/adr/011-normalized-transaction-evidence.md).
+- For what the packet, the report, and the model payload may say, how the
+  contract is enforced, and how artifacts are written, read
+  [ADR-012](references/adr/012-read-only-output-seam.md).
 - For spending, transfers, refunds, credits, or projections, read
   [ADR-003](references/adr/003-accounting-semantics-and-projections.md).
 - For deterministic review, memory, or model residue, read

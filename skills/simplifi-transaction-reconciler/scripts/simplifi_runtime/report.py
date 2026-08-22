@@ -8,7 +8,7 @@ from datetime import date
 from .evidence import evidence_from_row
 from .memory import Proposal
 from .money import Money
-from .review_packet import series_annual_impact
+from .review_packet import series_annual_impact, transaction_view
 from .semantics import is_statistics_quarantined
 from .unattended import Funnel, RunIdentity
 
@@ -46,6 +46,12 @@ summary { cursor:pointer; color:var(--accent); font-size:14px; }
 
 def _e(v) -> str:
     return html.escape(str(v))
+
+
+def _amount(view: dict) -> str:
+    """The amount as the packet states it, rendered at its own precision."""
+    amount = view["amount"]
+    return _money(Money(int(amount["minor_units"]), str(amount["currency"])))
 
 
 def _money(money: Money) -> str:
@@ -187,12 +193,18 @@ def render(
                 for s in item.signals
             )
             ev = "<br>".join(_evidence(s.evidence) for s in item.signals)
-            e = evidence_from_row(r)
+            view = transaction_view(r)
+            if view["flags"]["projected"]:
+                # A forecast is not a charge. The packet has always said so;
+                # the report rendered it identically to real activity, so the
+                # one artifact a person actually reads was the one that could
+                # not tell them apart.
+                chips = '<span class="chip warn">projected</span>' + chips
             p.append(
-                f"<tr><td>{_e(e.posted_on)}</td>"
-                f"<td>{_e(e.merchant.safe_display())}</td>"
-                f"<td>{_e(e.account.display)}</td>"
-                f"<td class=num>{_money(e.money)}</td>"
+                f"<tr><td>{_e(view['posted_on'])}</td>"
+                f"<td>{_e(view['merchant']['display'])}</td>"
+                f"<td>{_e(view['account_name'])}</td>"
+                f"<td class=num>{_amount(view)}</td>"
                 f"<td>{chips}<br>{ev}</td>"
                 f"<td class=num>{item.total_score}</td><td class=ev>{_provenance(r)}</td></tr>"
             )
@@ -236,11 +248,11 @@ def render(
                 else '<span class="ev">no history — needs a model or manual review</span>'
             )
             cat = _e(prop.category) if prop else "—"
-            e = evidence_from_row(r)
+            view = transaction_view(r)
             p.append(
-                f"<tr><td>{_e(e.posted_on)}</td>"
-                f"<td>{_e(e.merchant.safe_display())}</td>"
-                f"<td class=num>{_money(e.money)}</td>"
+                f"<tr><td>{_e(view['posted_on'])}</td>"
+                f"<td>{_e(view['merchant']['display'])}</td>"
+                f"<td class=num>{_amount(view)}</td>"
                 f"<td>{cat}</td><td>{basis}</td><td class=ev>{_provenance(r)}</td></tr>"
             )
         p.append("</table>")
