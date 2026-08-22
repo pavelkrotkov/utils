@@ -13,7 +13,7 @@ from __future__ import annotations
 import statistics
 from collections import defaultdict
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from itertools import pairwise
 from typing import Any
@@ -194,6 +194,12 @@ class _Draft:
     annual_impact: Money
     amounts: dict[str, Money] = field(default_factory=dict)
     facts: dict[str, Any] = field(default_factory=dict)
+    #: Overrides the published series cost where the series median would
+    #: misdescribe it. A hike is the case: the median spans both price regimes,
+    #: so a finding whose `amounts.current` says 20.00 would publish a monthly
+    #: cost of about 9.82 beside it, and a consumer reading the structure
+    #: rather than the sentence would understate a live subscription.
+    series_monthly: Money | None = None
 
 
 @dataclass
@@ -421,6 +427,7 @@ def _hike(key: str, s: Series, interval: float) -> _Draft | None:
         s.money((new - old) * (30.44 / interval) * 12),
         amounts={"previous": previous, "current": current},
         facts={"ratio": round(new / old, 3), "interval_days": round(interval, 1)},
+        series_monthly=s.money(new * (30.44 / interval)),
     )
 
 
@@ -444,9 +451,12 @@ def _publish(draft: _Draft, everything: Mapping[str, Series]) -> RecurringFindin
 
     This is where the series keys are dropped and replaced by safe references.
     """
+    refs = [everything[key].ref for key in draft.keys]
+    if draft.series_monthly is not None and refs:
+        refs[0] = replace(refs[0], monthly=draft.series_monthly)
     return RecurringFinding(
         kind=draft.kind,
-        series=tuple(everything[key].ref for key in draft.keys),
+        series=tuple(refs),
         detail=draft.detail,
         annual_impact=draft.annual_impact,
         amounts=dict(draft.amounts),
@@ -709,16 +719,22 @@ def analyse(rows: list[dict], today: date | None = None) -> list[RecurringFindin
 def summary(rows: list[dict], today: date | None = None) -> str:
     today = today or date.today()
     live = {k: s for k, s in _series(rows).items() if _is_live(s, today)}
-    monthly_minor = sum(s.monthly_minor for s in live.values())
-    # One currency for the total, because a total is a single number: the
-    # majority currency among live series, with the count so a mixed database
-    # is visible rather than quietly summed into whichever came first.
-    currencies = sorted({s.currency for s in live.values()})
-    currency = currencies[0] if currencies else "USD"
-    total = Money(round(monthly_minor), currency)
-    header = f"{len(live)} live subscriptions, {_text(total)}/mo ({_text(Money(round(monthly_minor * 12), currency))}/yr)"
-    if len(currencies) > 1:
-        header += f" — totalled in {currency}; {len(currencies)} currencies present"
+    # One total per currency. Minor units are only comparable within a
+    # currency — ¥1,000 and $10.00 are both 1000 of them — so adding across
+    # currencies produces a number that is correct in none of them. The first
+    # version did exactly that and then labelled the result with whichever code
+    # sorted first, while calling it the "majority" currency, which it also was
+    # not. There is no exchange rate here and inventing one would be worse.
+    totals: dict[str, float] = defaultdict(float)
+    for series in live.values():
+        totals[series.currency] += series.monthly_minor
+    rendered = "; ".join(
+        f"{_text(Money(round(minor), code))}/mo ({_text(Money(round(minor * 12), code))}/yr)"
+        for code, minor in sorted(totals.items())
+    )
+    header = f"{len(live)} live subscriptions"
+    if rendered:
+        header += f", {rendered}"
     lines = [header, ""]
     for _key, s in sorted(live.items(), key=lambda kv: -kv[1].monthly_minor):
         lines.append(

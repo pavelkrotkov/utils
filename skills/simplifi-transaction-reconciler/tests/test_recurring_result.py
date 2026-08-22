@@ -16,7 +16,7 @@ from datetime import date
 import pytest
 from simplifi_runtime import judgment_examples, report, review_packet
 from simplifi_runtime.money import Money
-from simplifi_runtime.subscriptions import FINDING_KINDS, RecurringFinding, analyse
+from simplifi_runtime.subscriptions import FINDING_KINDS, RecurringFinding, analyse, summary
 
 TODAY = date(2027, 2, 1)
 
@@ -282,3 +282,108 @@ def test_the_packet_transcribes_the_result_rather_than_re_deriving_it():
     assert evidence["amounts"]["current"]["minor_units"] == 2000
     assert evidence["series"][0]["transaction_ids"] == sorted(findings[0].series[0].transaction_ids)
     review_packet.validate_packet(packet)
+
+
+# --- what the reviewers caught ----------------------------------------------
+
+
+def test_a_mixed_currency_summary_totals_each_currency_separately():
+    """Minor units are only comparable within a currency.
+
+    ¥1,000 and $10.00 are both 1000 minor units. Adding them produced a number
+    correct in no currency, labelled with whichever code sorted first.
+    """
+    rows = _rows("tokyo_stream", [1000] * 4, start=(2026, 10), currency="JPY", prefix="jpy")
+    rows += _rows("us_stream", [1000] * 4, start=(2026, 10), currency="USD", prefix="usd")
+
+    text = summary(rows, today=TODAY)
+
+    header = text.splitlines()[0]
+
+    assert header.startswith("2 live subscriptions")
+    # One total per currency, each in its own units — 982 JPY beside 9.82 USD,
+    # never 1,964 of anything.
+    assert "982 JPY/mo" in header
+    assert "9.82 USD/mo" in header
+    assert "1,964" not in header and "1964" not in header
+
+
+def test_a_single_currency_summary_is_unchanged():
+    rows = _rows("us_stream", [1000] * 4, start=(2026, 10))
+
+    text = summary(rows, today=TODAY)
+
+    # 1000 minor units every ~31 days, normalized to a 30.44-day month.
+    assert text.startswith("1 live subscriptions, 9.82 USD/mo (117.83 USD/yr)")
+
+
+def test_a_hike_publishes_the_current_regime_as_the_series_cost():
+    """The median spans both price regimes, so it understates a live series."""
+    hike = _finding("hike")
+
+    assert hike.amounts["current"] == Money(2000, "USD")
+    # The series cost must agree with the price the finding says is current,
+    # not the median of a history that includes the old one.
+    assert hike.series[0].monthly.minor_units == pytest.approx(2000, rel=0.05)
+
+
+def test_a_series_without_an_account_name_uses_the_unknown_sentinel():
+    """An empty string reads as malformed evidence, not as an unnamed account."""
+    rows = lapsed_rows()  # no account_name on any row
+    findings = analyse(rows, today=TODAY)
+    packet = review_packet.build_packet(
+        run_id=1,
+        source="csv",
+        analysis_date=TODAY.isoformat(),
+        rows=rows,
+        prioritized=[],
+        proposals=[],
+        subscription_findings=findings,
+    )
+    evidence = next(
+        finding["evidence"]
+        for finding in packet["findings"]
+        if finding["scope"] == "merchant_series"
+    )
+
+    assert evidence["series"][0]["account_name"] == "unknown account"
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        (lambda e: e.update(series="not-a-list"), "series must be a non-empty array"),
+        (lambda e: e["series"][0].pop("transaction_ids"), "transaction_ids"),
+        (lambda e: e["series"][0].update(surprise=1), "unsupported fields"),
+        (lambda e: e.update(facts="not-an-object"), "facts must be an object"),
+        (lambda e: e.update(kind="invented"), "kind must be one of"),
+    ],
+    ids=[
+        "series-not-a-list",
+        "entry-missing-ids",
+        "unknown-entry-key",
+        "facts-not-object",
+        "bad-kind",
+    ],
+)
+def test_malformed_series_evidence_is_refused(mutate, expected):
+    """Money validation says nothing about the structure carrying the money."""
+    rows = hike_rows()
+    packet = review_packet.build_packet(
+        run_id=1,
+        source="csv",
+        analysis_date=TODAY.isoformat(),
+        rows=rows,
+        prioritized=[],
+        proposals=[],
+        subscription_findings=analyse(rows, today=TODAY),
+    )
+    evidence = next(
+        finding["evidence"]
+        for finding in packet["findings"]
+        if finding["scope"] == "merchant_series"
+    )
+    mutate(evidence)
+
+    with pytest.raises(review_packet.PacketValidationError, match=expected):
+        review_packet.validate_packet(packet)

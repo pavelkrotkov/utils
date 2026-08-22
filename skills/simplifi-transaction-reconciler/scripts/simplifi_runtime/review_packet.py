@@ -21,6 +21,7 @@ from .evidence import UNKNOWN_ACCOUNT, UNKNOWN_MERCHANT, evidence_from_row
 from .money import Money
 from .semantics import SOURCE_CAPABILITIES, assess_eligibility
 from .store import ALGORITHM_VERSION, RULESET_VERSION
+from .subscriptions import FINDING_KINDS
 
 PACKET_TYPE = "simplifi.transaction.review"
 PACKET_VERSION = "1"
@@ -157,6 +158,27 @@ _PROPOSAL_KEYS = {
     "transaction_id",
 }
 _EXCLUDED_KEYS = {"reason_codes", "transaction_id"}
+#: A merchant-series finding's evidence, field by field.
+_SERIES_EVIDENCE_KEYS = {
+    "amounts",
+    "annual_impact",
+    "detail",
+    "facts",
+    "kind",
+    "merchant",
+    "series",
+}
+#: `amounts` and `facts` are kind-specific: a twin carries facts and no
+#: amounts, a ghost carries both. Everything else is always present.
+_SERIES_EVIDENCE_REQUIRED = {"annual_impact", "detail", "kind", "merchant", "series"}
+_SERIES_ENTRY_KEYS = {
+    "account_name",
+    "interval_days",
+    "last_charge",
+    "merchant",
+    "monthly",
+    "transaction_ids",
+}
 
 
 class PacketValidationError(ValueError):
@@ -394,7 +416,11 @@ def _subscription_findings(subscription_findings: list[Any]) -> list[dict[str, A
             "series": [
                 {
                     "merchant": _string(ref.merchant),
-                    "account_name": _string(ref.account),
+                    # The same sentinel transaction evidence uses. An empty
+                    # string reads as malformed evidence rather than as an
+                    # account the source never named, and a consumer cannot
+                    # tell the two apart.
+                    "account_name": _string(ref.account) or UNKNOWN_ACCOUNT,
                     "transaction_ids": sorted(str(txid) for txid in ref.transaction_ids),
                     "monthly": _money_fact(ref.monthly),
                     "interval_days": ref.interval_days,
@@ -776,8 +802,63 @@ def _validate_finding_shape(finding: Any, path: str) -> None:
     evidence = finding.get("evidence")
     if not isinstance(evidence, (Mapping, list)):
         raise PacketValidationError(f"{path}.evidence must be an object or an array")
+    if finding.get("scope") == "merchant_series":
+        _validate_series_evidence(evidence, f"{path}.evidence")
     for money_path, money in _money_facts(evidence, f"{path}.evidence"):
         _check_money(money, money_path)
+
+
+def _validate_series_evidence(evidence: Any, path: str) -> None:
+    """Check the recurring-finding shape, not just the money inside it.
+
+    Money validation walks the tree looking for monetary key names, which says
+    nothing about the structure carrying them: `series` set to a string, a
+    series entry missing its transaction IDs, an unknown key, or a `facts`
+    value that is not an object all crossed the file boundary unchallenged.
+    The contract is an allowlist everywhere else in this packet; it is one here
+    too.
+    """
+    if not isinstance(evidence, Mapping):
+        raise PacketValidationError(f"{path} must be an object for a merchant_series finding")
+    _check_keys(evidence, path, _SERIES_EVIDENCE_KEYS, _SERIES_EVIDENCE_REQUIRED)
+    for key in ("kind", "merchant", "detail"):
+        _check_string(evidence.get(key), f"{path}.{key}")
+    if evidence["kind"] not in FINDING_KINDS:
+        raise PacketValidationError(
+            f"{path}.kind must be one of {list(FINDING_KINDS)}, found {evidence['kind']!r}"
+        )
+    _check_money(evidence.get("annual_impact"), f"{path}.annual_impact")
+
+    series = evidence.get("series")
+    if not isinstance(series, list) or not series:
+        raise PacketValidationError(f"{path}.series must be a non-empty array")
+    for index, entry in enumerate(series):
+        entry_path = f"{path}.series[{index}]"
+        if not isinstance(entry, Mapping):
+            raise PacketValidationError(f"{entry_path} must be an object")
+        _check_keys(entry, entry_path, _SERIES_ENTRY_KEYS)
+        _check_string(entry.get("merchant"), f"{entry_path}.merchant")
+        _check_string(entry.get("account_name"), f"{entry_path}.account_name")
+        _check_string_list(entry.get("transaction_ids"), f"{entry_path}.transaction_ids")
+        if not entry["transaction_ids"]:
+            raise PacketValidationError(f"{entry_path}.transaction_ids must name a transaction")
+        _check_money(entry.get("monthly"), f"{entry_path}.monthly")
+        interval = entry.get("interval_days")
+        if isinstance(interval, bool) or not isinstance(interval, (int, float)):
+            raise PacketValidationError(f"{entry_path}.interval_days must be a number")
+        last_charge = entry.get("last_charge")
+        if last_charge is not None:
+            _check_string(last_charge, f"{entry_path}.last_charge")
+
+    for optional, checker in (("amounts", _check_money), ("facts", None)):
+        value = evidence.get(optional)
+        if value is None:
+            continue
+        if not isinstance(value, Mapping):
+            raise PacketValidationError(f"{path}.{optional} must be an object")
+        if checker is not None:
+            for name, money in value.items():
+                checker(money, f"{path}.{optional}.{name}")
 
 
 def _money_facts(value: Any, path: str):
