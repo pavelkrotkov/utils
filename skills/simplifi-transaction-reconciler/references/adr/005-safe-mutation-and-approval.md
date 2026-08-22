@@ -1,14 +1,16 @@
 # ADR-005: Make mutation explicit, validated, and recoverable
 
-> **Design record only.** The current Simplifi skill is strictly read-only and
-> does not implement or invoke this protocol. This ADR is retained as sanitized
-> future design input for issue #122; it is not an operational instruction.
+> **Implemented for one capability.** `transaction_category` follows this
+> protocol; the [mutation register](../mutations.md) records what is available,
+> what is refused, and why. Everything else here remains design input.
 
-- Status: Accepted as future design; not implemented
+- Status: Accepted; implemented for `transaction_category`
 - Scope: category edits, native rules, and undo
 - Evidence: [Simplifi API reference](../simplifi-api.md), including its
   [transaction rules and renaming](../simplifi-api.md#transaction-rules-and-renaming)
   section and [evidence status legend](../simplifi-api.md#evidence-status-legend)
+- Implementation: `scripts/simplifi_runtime/mutations.py`, the `mutate`
+  command, and the [mutation register](../mutations.md)
 
 ## Context
 
@@ -58,6 +60,35 @@ asynchronous write jobs before recording success. Store before/after payloads,
 responses, decisions, and resolved job IDs; rate-limit writes. Undo restores
 the saved prior document where the provider still permits it, without claiming
 rollback is guaranteed in every provider state.
+
+## What is implemented
+
+`transaction_category` is the only registered write, because
+`PUT /transactions/{id}` is the only one whose endpoint, job envelope and
+polling path were captured against the live app. Its *request body* was not:
+the capture showed the app sending fields no GET route returns, so the document
+this runtime can assemble is a strict subset of the real one on an endpoint
+that replaces what it omits. Sending it is therefore gated until a write
+capture settles the body; planning, preview, preconditions, audit and undo all
+run regardless. Endpoint evidence and payload evidence are tracked separately
+in the register for exactly this reason.
+
+The decision boundary is preserved rather than widened. `decide` still records
+judgment and still cannot authorize a write: its action vocabulary contains no
+mutation, and a proposal document carries no authority. `mutate` reads the
+stored decision records as *input* and requires a separate authorization naming
+a person and a reason, both of which are written to the audit trail. It is
+dry-run by default, refused under `--unattended`, and its preview is rendered
+from the same plan objects the apply path executes.
+
+Audit is two append-only tables. The attempt — including the complete pre-write
+document — is committed before the request leaves, so a process killed mid-write
+leaves an attempt with no outcome rather than no record at all. An unknown
+outcome is not a failure and is never retried automatically.
+
+Undo restores the preserved document, appends its own attempt, and refuses when
+the original never settled, has already been undone, or when the provider's
+copy no longer holds what the original set.
 
 ## Consequences
 
