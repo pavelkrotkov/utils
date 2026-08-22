@@ -519,10 +519,8 @@ def _run(arguments):
     return args.func(args)
 
 
-def test_the_dry_run_command_sends_nothing_and_needs_no_writer(tmp_path, monkeypatch, capsys):
-    """The default is a description. It must not need a provider to produce one."""
-    from simplifi_runtime import cli
-
+def _seeded_db(tmp_path):
+    """A database with one API run, one current row, and one accepted decision."""
     db = tmp_path / "mutate.sqlite"
     store = Store(db)
     run_id = store.start_run("api", "fixture")
@@ -584,6 +582,14 @@ def test_the_dry_run_command_sends_nothing_and_needs_no_writer(tmp_path, monkeyp
     )
     store.commit()
     store.close()
+    return db
+
+
+def test_the_dry_run_command_sends_nothing_and_needs_no_writer(tmp_path, monkeypatch, capsys):
+    """The default is a description. It must not need a provider to produce one."""
+    from simplifi_runtime import cli
+
+    db = _seeded_db(tmp_path)
 
     def _refuse_writer(_args):
         raise AssertionError("a dry run must not construct a provider client")
@@ -701,3 +707,62 @@ def test_a_poll_failure_keeps_the_job_id(store):
     assert results[0].outcome == "unknown"
     assert results[0].job_id == "job-1"
     assert store.mutation_outcome(results[0].attempt_id)["job_id"] == "job-1"
+
+
+# --- the payload gate --------------------------------------------------------
+
+
+def test_the_verified_capability_still_declares_its_payload_unverified():
+    """The endpoint and the request body are separate evidence questions."""
+    cap = mutations.CAPABILITIES["transaction_category"]
+
+    assert cap.available, "the endpoint is verified and the plan is buildable"
+    assert not cap.payload_verified
+    assert "cpData" in cap.payload_blocked_because
+
+
+def test_a_plan_reports_which_capabilities_have_unverified_payloads():
+    plan, _ = _plan()
+
+    blocked = mutations.unverified_payloads(plan)
+
+    assert [cap.name for cap in blocked] == ["transaction_category"]
+
+
+def test_applying_is_refused_while_the_payload_is_unverified(tmp_path, monkeypatch, capsys):
+    """A full-document PUT replaces what it omits, so an unproven body is not sent."""
+    from simplifi_runtime import cli
+
+    db = _seeded_db(tmp_path)
+    monkeypatch.setattr(
+        cli, "_transaction_writer", lambda _args: pytest.fail("no writer may be built")
+    )
+
+    assert (
+        _run(
+            [
+                "mutate",
+                "--db",
+                str(db),
+                "--apply",
+                "--authorized-by",
+                "pavel",
+                "--authorization-note",
+                "approved the grocery recategorization",
+            ]
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert "cannot be applied" in captured.err
+    assert "no write was attempted" in captured.err
+    # The dry run is still complete and inspectable.
+    assert "PUT /transactions/txn-1" in captured.out
+
+
+def test_the_capability_register_shows_the_payload_status(capsys):
+    assert _run(["mutate", "--capabilities"]) == 0
+
+    printed = capsys.readouterr().out
+    assert "payload      : UNVERIFIED" in printed
+    assert "write gated  :" in printed

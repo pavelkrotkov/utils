@@ -19,14 +19,35 @@ cannot drift.
 
 ## What is available
 
-| Capability | Endpoint | Evidence | Blast radius | Reversible |
-|---|---|---|---|---|
-| `transaction_category` | `PUT /transactions/{id}` | Verified 2026-08-04/05 | one transaction | yes |
+| Capability | Endpoint | Endpoint evidence | Payload evidence | Blast radius | Reversible |
+|---|---|---|---|---|---|
+| `transaction_category` | `PUT /transactions/{id}` | Verified 2026-08-04/05 | **Unverified — writes gated** | one transaction | yes |
 
 **Risk.** It is a full-document write, not a PATCH. Every field in the request
 replaces the provider's copy, so a document assembled from anything other than
 the live one silently reverts whatever it omits. The category itself affects
 budgets, reports and any rule keyed on it, retroactively.
+
+### Why the write is gated
+
+The endpoint is verified and the payload is not, and those are separate
+questions. Conflating them is how a guessed body reaches a live account.
+
+The capture recorded the PUT *body* carrying `memo`, `split`, review and
+exclusion flags, `isSubscription` and `cpData` — and no GET route returns any of
+them. This runtime can only assemble a document from what GET serves, so what it
+would send is a strict subset of what the app sends, on an endpoint that
+replaces whatever it omits.
+
+So `mutate --apply` refuses, naming the gap, while everything up to the send
+runs: planning, preconditions, the live re-fetch, the dry run, the audit schema
+and undo are all exercised end to end against fixtures. The plan the dry run
+prints is exactly what would be sent once the payload is known.
+
+**What unblocks it:** a capture of one real category change made in the web app,
+recording which fields the request body carries and what the provider does with
+those it omits. That is a write capture, so it needs its own authorization —
+it is not part of the read-only rule-capture procedure.
 
 ## What is refused, and why
 
@@ -42,6 +63,8 @@ evidence is.
 
 ## The write path
 
+0. Confirm the capability's payload is verified. `transaction_category`'s is
+   not, so steps 3–6 are currently refused; steps 1 and 2 still run in full.
 1. Build a plan from **stored decision records**, never from a proposal file.
    The category to set, the transaction ID, and the original value are read out
    of the local store. A proposal document carries judgment, not authority.

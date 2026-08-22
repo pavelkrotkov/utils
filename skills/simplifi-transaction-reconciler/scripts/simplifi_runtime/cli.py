@@ -1190,6 +1190,23 @@ def cmd_mutate(args: argparse.Namespace) -> int:
     print(mutations.render_plan(plan, skipped))
     if not args.apply:
         return 0
+
+    # The dry run above is complete and inspectable. What is refused here is
+    # sending it: the endpoint is verified, the request body is not, and a
+    # full-document PUT replaces whatever it omits.
+    blocked = mutations.unverified_payloads(plan)
+    if blocked:
+        for cap in blocked:
+            print(
+                f"ERROR {cap.name} cannot be applied: {cap.payload_blocked_because}",
+                file=sys.stderr,
+            )
+        print(
+            "ERROR no write was attempted. The plan above is what would be sent once "
+            "the payload is captured; `mutate --capabilities` shows the register.",
+            file=sys.stderr,
+        )
+        return 2
     if not plan:
         print("INFO nothing to apply")
         return 0

@@ -42,9 +42,15 @@ rollback is guaranteed in every provider state.
 
 ## What is implemented
 
-`transaction_category` is the only callable capability, because
-`PUT /transactions/{id}` is the only write whose request shape, job envelope
-and polling endpoint were captured against the live app.
+`transaction_category` is the only registered write, because
+`PUT /transactions/{id}` is the only one whose endpoint, job envelope and
+polling path were captured against the live app. Its *request body* was not:
+the capture showed the app sending fields no GET route returns, so the document
+this runtime can assemble is a strict subset of the real one on an endpoint
+that replaces what it omits. Sending it is therefore gated until a write
+capture settles the body; planning, preview, preconditions, audit and undo all
+run regardless. Endpoint evidence and payload evidence are tracked separately
+in the register for exactly this reason.
 
 The decision boundary is preserved rather than widened. `decide` still records
 judgment and still cannot authorize a write: its action vocabulary contains no

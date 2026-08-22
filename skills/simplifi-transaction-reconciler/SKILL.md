@@ -25,6 +25,11 @@ when the person you are working with has explicitly asked for that write, in
 this session, having seen the dry run. If you are unsure whether that has
 happened, it has not.
 
+`--apply` is currently refused for every capability: the endpoint is verified
+but the request body is not, and a full-document write replaces what it omits.
+The dry run is complete and is the artifact to work from. See the
+[mutation register](references/mutations.md).
+
 Keep deployment-specific categories, merchant mappings, rules, credentials,
 databases, logs, and undo files outside this skill. Load only the reference
 material needed for the current decision:

@@ -111,6 +111,12 @@ class MutationCapability:
     available: bool
     #: Why not, when it is not.
     unavailable_because: str = ""
+    #: Whether the *request body* this runtime builds is backed by a capture,
+    #: separately from whether the endpoint is. They are different questions and
+    #: conflating them is how a guessed payload reaches a live account.
+    payload_verified: bool = True
+    #: What is missing, and what would settle it.
+    payload_blocked_because: str = ""
 
 
 CAPABILITIES: dict[str, MutationCapability] = {
@@ -132,6 +138,18 @@ CAPABILITIES: dict[str, MutationCapability] = {
         blast_radius="one transaction",
         reversible=True,
         available=True,
+        payload_verified=False,
+        payload_blocked_because=(
+            "The endpoint, its job envelope and its polling path are verified; the "
+            "request body is not. The API reference records that the PUT body is "
+            "richer than the 18-field GET response — it was observed carrying `memo`, "
+            "`split`, review and exclusion flags, `isSubscription` and `cpData`, none "
+            "of which any GET route returns. This runtime can only build a document "
+            "from what GET serves, so sending it risks clearing fields the response "
+            "never showed it. Unblocking needs a capture of one real write from the "
+            "web app, recording which fields the body must carry and what the provider "
+            "does with the ones it omits."
+        ),
     ),
     "transaction_rule": MutationCapability(
         name="transaction_rule",
@@ -203,6 +221,21 @@ def capability(name: str) -> MutationCapability:
     if not found.available:
         raise MutationError(f"{name} is not available: {found.unavailable_because}")
     return found
+
+
+def unverified_payloads(plan: Sequence[PlannedMutation]) -> list[MutationCapability]:
+    """Capabilities in this plan whose request body no capture backs.
+
+    Checked where the decision to contact the provider is made, not inside
+    `apply_plan`, so the planning, preview, precondition, audit and undo paths
+    stay exercisable end to end against a fixture. The gate is about writing to
+    a real account, and that is the only thing it stops.
+    """
+    seen: dict[str, MutationCapability] = {}
+    for planned in plan:
+        if not planned.capability.payload_verified:
+            seen[planned.capability.name] = planned.capability
+    return list(seen.values())
 
 
 # --- authorization ----------------------------------------------------------
@@ -893,8 +926,11 @@ def describe_capabilities() -> str:
         lines.append(f"  risk         : {cap.risk}")
         lines.append(f"  blast radius : {cap.blast_radius}")
         lines.append(f"  reversible   : {'yes' if cap.reversible else 'no'}")
+        lines.append(f"  payload      : {'verified' if cap.payload_verified else 'UNVERIFIED'}")
         if not cap.available:
             lines.append(f"  refused      : {cap.unavailable_because}")
+        if not cap.payload_verified:
+            lines.append(f"  write gated  : {cap.payload_blocked_because}")
         lines.append("")
     return "\n".join(lines).rstrip()
 
@@ -916,4 +952,5 @@ __all__ = [
     "plan_category_writes",
     "render_plan",
     "undo",
+    "unverified_payloads",
 ]
