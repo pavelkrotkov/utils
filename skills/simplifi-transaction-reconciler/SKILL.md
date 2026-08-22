@@ -358,9 +358,10 @@ uv run ./scripts/simplifi_transaction_reconciler.py status --data-dir /path/to/d
 **Reports never present a false clean.** Every report identifies its own
 inputs — run ID, source, dataset, the cursor window covered, and whether the
 run was a complete snapshot — and carries input/eligible/analyzed/discarded
-counts. Since transaction state is isolated by source alone, a database holding
-several cursor scopes is reported as a composite dataset with the scopes
-listed, rather than being labelled with whichever run happened to be latest.
+counts. Transaction state is scoped alongside the cursor, so a report covers
+exactly one profile/dataset/query scope and names it; a database holding others
+says how many it is one of, because a report silent about a dataset would
+otherwise read as evidence that dataset is empty.
 
 Note that *eligible for review* and *analyzed* are different populations, and
 the gap between them matters: a CSV export carries no settlement state, so all

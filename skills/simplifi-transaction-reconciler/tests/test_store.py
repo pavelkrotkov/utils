@@ -11,6 +11,7 @@ from simplifi_runtime.store import (
     RUN_SUCCEEDED,
     Store,
 )
+from simplifi_runtime.sync_scope import csv_scope
 
 
 def _record(transaction_id: str) -> dict:
@@ -202,35 +203,121 @@ def test_record_run_scope_persists_scope_cursor_and_detail(tmp_path: Path):
     store.close()
 
 
-def test_snapshot_owner_scope_reports_the_last_replacing_run(tmp_path: Path):
+def test_a_rescan_retires_only_its_own_scope(tmp_path: Path):
+    """The collision migration 011 could only survive, migration 015 prevents.
+
+    Before state was scoped, a complete rescan under one scope retired every
+    other scope's rows: they were absent from the observed-ID set and nothing
+    on the row said they belonged to a different dataset.
+    """
     store = Store(tmp_path / "review.sqlite")
     first = store.start_run("api", "scope one")
     store.record_run_scope(first, None, '{"dataset":"one"}')
+    store.upsert_version(first, _record("txn-one"))
     store.finish_run(first, RUN_SUCCEEDED, 1, complete_snapshot=True)
-    second = store.start_run("api", "scope two incremental")
+
+    second = store.start_run("api", "scope two, complete rescan")
     store.record_run_scope(second, None, '{"dataset":"two"}')
-    store.finish_run(second, RUN_SUCCEEDED, 1, complete_snapshot=False)
+    store.upsert_version(second, _record("txn-two"))
+    retired = store.retire_absent_snapshot(second, {"txn-two"})
+    store.finish_run(second, RUN_SUCCEEDED, 1, complete_snapshot=True)
     store.commit()
 
-    # The incremental run did not replace the snapshot, so ownership stands.
-    assert store.snapshot_owner_scope("api") == (True, '{"dataset":"one"}')
+    assert retired == 0, "scope one's rows are not absent, they are not asked about"
+    assert store.retired_transaction_ids("api", '{"dataset":"one"}') == set()
+    assert store.current_scopes("api") == ['{"dataset":"one"}', '{"dataset":"two"}']
     store.close()
 
 
-def test_snapshot_owner_scope_distinguishes_never_from_unscoped(tmp_path: Path):
-    """ "No snapshot has ever run" and "the legacy history owns it" differ.
-
-    A bare None cannot tell them apart, and the caller's decision does.
-    """
+def test_a_rescan_still_retires_absences_inside_its_own_scope(tmp_path: Path):
+    """Scoping must not turn the absence inference off, only aim it."""
     store = Store(tmp_path / "review.sqlite")
+    first = store.start_run("api", "seed")
+    store.record_run_scope(first, None, '{"dataset":"one"}')
+    store.upsert_version(first, _record("txn-gone"))
+    store.finish_run(first, RUN_SUCCEEDED, 1, complete_snapshot=True)
 
-    assert store.snapshot_owner_scope("api") == (False, None)
-
-    run_id = store.start_run("api", "pre-scoping snapshot")
-    store.finish_run(run_id, RUN_SUCCEEDED, 1, complete_snapshot=True)
+    second = store.start_run("api", "rescan without it")
+    store.record_run_scope(second, None, '{"dataset":"one"}')
+    retired = store.retire_absent_snapshot(second, set())
     store.commit()
 
-    assert store.snapshot_owner_scope("api") == (True, None)
+    assert retired == 1
+    assert store.retired_transaction_ids("api", '{"dataset":"one"}') == {"txn-gone"}
+    store.close()
+
+
+def test_the_same_transaction_id_in_two_scopes_stays_two_rows(tmp_path: Path):
+    """Provider IDs are unique within a dataset, not across datasets."""
+    store = Store(tmp_path / "review.sqlite")
+    one = store.start_run("api", "scope one")
+    store.record_run_scope(one, None, '{"dataset":"one"}')
+    store.upsert_version(one, _record("txn-1"))
+    two = store.start_run("api", "scope two")
+    store.record_run_scope(two, None, '{"dataset":"two"}')
+    assert store.upsert_version(two, _record("txn-1")) == "new", (
+        "the second scope has never seen this transaction"
+    )
+    store.commit()
+
+    current = store.conn.execute(
+        "SELECT cursor_scope FROM transaction_version WHERE is_current = 1 ORDER BY cursor_scope"
+    ).fetchall()
+    assert [row["cursor_scope"] for row in current] == ['{"dataset":"one"}', '{"dataset":"two"}']
+    store.close()
+
+
+def test_legacy_rows_are_adopted_by_the_first_scope_to_ingest(tmp_path: Path):
+    """Pre-scoping rows are a real scope, not a wildcard — and not a leak."""
+    store = Store(tmp_path / "review.sqlite")
+    legacy = store.start_run("api", "before scoping")
+    store.upsert_version(legacy, _record("txn-old"))
+    store.finish_run(legacy, RUN_SUCCEEDED, 1)
+    store.commit()
+    assert store.unattributed_row_count("api") == 1
+
+    scoped = store.start_run("api", "after upgrading")
+    store.record_run_scope(scoped, None, '{"dataset":"one"}')
+    assert store.adopt_legacy_scope(scoped) == 1
+    store.commit()
+
+    assert store.unattributed_row_count("api") == 0
+    assert store.current_scopes("api") == ['{"dataset":"one"}']
+    store.close()
+
+
+def test_legacy_rows_are_not_adopted_when_several_scopes_exist(tmp_path: Path):
+    """A mixture nobody can separate is left alone and reported, not guessed at."""
+    store = Store(tmp_path / "review.sqlite")
+    legacy = store.start_run("api", "before scoping")
+    store.upsert_version(legacy, _record("txn-old"))
+    store.finish_run(legacy, RUN_SUCCEEDED, 1)
+    for dataset in ('{"dataset":"one"}', '{"dataset":"two"}'):
+        run_id = store.start_run("api", dataset)
+        store.record_run_scope(run_id, None, dataset)
+        store.finish_run(run_id, RUN_SUCCEEDED, 0)
+    store.commit()
+
+    claimant = store.start_run("api", "scope one again")
+    store.record_run_scope(claimant, None, '{"dataset":"one"}')
+    assert store.adopt_legacy_scope(claimant) == 0
+    store.commit()
+
+    assert store.unattributed_row_count("api") == 1
+    store.close()
+
+
+def test_a_csv_run_never_writes_into_the_legacy_scope(tmp_path: Path):
+    """CSV has one scope, but it is a named one — the legacy bucket is drained."""
+    assert csv_scope().key() is not None
+    store = Store(tmp_path / "review.sqlite")
+    run_id = store.start_run("csv", "export")
+    store.record_run_scope(run_id, None, csv_scope().key())
+    store.upsert_version(run_id, _record("txn-1"))
+    store.commit()
+
+    assert store.current_scopes("csv") == [csv_scope().key()]
+    assert store.unattributed_row_count("csv") == 0
     store.close()
 
 
@@ -343,7 +430,7 @@ def test_stored_decisions_return_the_database_copy_not_the_candidate(tmp_path: P
 
 def test_latest_successful_run_ignores_unfinished_and_failed_runs(tmp_path: Path):
     store = Store(tmp_path / "review.sqlite")
-    assert store.latest_successful_run() == (0, "unknown")
+    assert store.latest_successful_run() == (0, "unknown", None)
 
     good = store.start_run("csv", "good")
     store.finish_run(good, RUN_SUCCEEDED, 1)
@@ -352,7 +439,7 @@ def test_latest_successful_run_ignores_unfinished_and_failed_runs(tmp_path: Path
     store.start_run("api", "still running")
     store.commit()
 
-    assert store.latest_successful_run() == (good, "csv")
+    assert store.latest_successful_run() == (good, "csv", None)
     store.close()
 
 
@@ -471,7 +558,7 @@ def test_aborted_and_failed_runs_are_both_excluded_from_analysis_input(tmp_path:
     store.start_run("api", "still running")
     store.commit()
 
-    assert store.latest_successful_run() == (0, "unknown")
+    assert store.latest_successful_run() == (0, "unknown", None)
     # Nor may either contribute a cursor, whatever they managed to record.
     assert store.latest_cursor("api") is None
     store.close()
@@ -684,13 +771,13 @@ def test_a_restored_transaction_is_no_longer_reported_as_retired(tmp_path: Path)
     store.upsert_version(second, {"transaction_id": "txn-1", "is_deleted": True})
     store.commit()
 
-    assert store.retired_transaction_ids("api") == {"txn-1"}
+    assert store.retired_transaction_ids("api", None) == {"txn-1"}
 
     third = store.start_run("api", "provider resurrects it")
     store.upsert_version(third, _record("txn-1"))
     store.commit()
 
-    assert store.retired_transaction_ids("api") == set()
+    assert store.retired_transaction_ids("api", None) == set()
     # The history of it having been retired is still there.
     assert len(store.retirements(transaction_id="txn-1")) == 1
     store.close()
@@ -706,8 +793,8 @@ def test_retirement_is_scoped_to_its_own_source(tmp_path: Path):
     store.upsert_version(tombstone, {"transaction_id": "txn-1", "is_deleted": True})
     store.commit()
 
-    assert store.retired_transaction_ids("api") == {"txn-1"}
-    assert store.retired_transaction_ids("csv") == set()
+    assert store.retired_transaction_ids("api", None) == {"txn-1"}
+    assert store.retired_transaction_ids("csv", None) == set()
     assert [item["source"] for item in store.retirements()] == ["api"]
     store.close()
 
@@ -766,6 +853,6 @@ def test_a_current_row_in_another_source_does_not_mask_a_retirement(tmp_path: Pa
     store.commit()
 
     # csv still holds a current txn-1; that must not hide the api retirement.
-    assert store.retired_transaction_ids("api") == {"txn-1"}
-    assert store.retired_transaction_ids("csv") == set()
+    assert store.retired_transaction_ids("api", None) == {"txn-1"}
+    assert store.retired_transaction_ids("csv", None) == set()
     store.close()

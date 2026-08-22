@@ -167,15 +167,18 @@ before scoping existed keep a NULL scope, match no resolved scope, and are
 never adopted: the first run after upgrading re-reads its window once, says so,
 and earns a scoped cursor.
 
-Two cases refuse a stored cursor even when one exists for the scope:
+Materialized state carries the same scope, so a cursor describes what is
+stored as well as what the provider served. Current rows and retirement records
+are keyed by `(source, cursor scope)`: a complete rescan retires only its own
+scope's rows, and an incremental run upserts only into its own. Two datasets in
+one database therefore keep independent current-row sets, and analysis reports
+one of them at a time and says when others exist. Rows written before scoping
+carry a NULL scope; the first scoped run adopts them, unless the run history
+shows several scopes, in which case they are an unattributable mixture and are
+reported rather than claimed.
 
-- **The snapshot belongs elsewhere.** Current rows are still isolated by source
-  alone, so a complete rescan under one scope retires every other scope's rows.
-  A cursor earned before that retirement remains a truthful statement about the
-  provider and a wrong one about what is stored; resuming from it would fetch
-  only deltas and never restore the retired history. Runs record whether they
-  replaced the snapshot (`runs.complete_snapshot`), and a scope whose rows were
-  last replaced by another scope reads its full window instead.
+One case refuses a stored cursor even when one exists for the scope:
+
 - **The principal is unidentifiable.** An opaque, non-JWT token exposes no
   `sub`, so two principals on one profile and dataset produce the same key and a
   broader replacement token would inherit a narrower one's mark. Fingerprinting

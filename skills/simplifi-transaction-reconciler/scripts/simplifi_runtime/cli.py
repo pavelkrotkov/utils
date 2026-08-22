@@ -40,7 +40,7 @@ from .semantics import (
 )
 from .sources.csv_source import SchemaError, SimplifiCsvSource
 from .store import RUN_ABORTED, RUN_FAILED, RUN_STARTED, RUN_SUCCEEDED, Store
-from .sync_scope import SyncScope, api_scope, scope_from_profile
+from .sync_scope import SyncScope, api_scope, csv_scope, scope_from_profile
 
 #: Arguments that name an artifact this runtime owns, and therefore places.
 #: The ingest CSV is deliberately absent: it is the user's export, read where
@@ -226,7 +226,14 @@ def _aggregator_health(
     return out
 
 
-def _rows(db: Path, source: str) -> list[dict]:
+def _rows(db: Path, source: str, cursor_scope: str | None) -> list[dict]:
+    """Current rows for exactly one `(source, scope)` pair.
+
+    `IS` rather than `=`, so a caller reading the legacy scope matches the NULL
+    rows written before scoping; under `=` a NULL matches nothing, including
+    itself. Selecting on source alone would return every dataset sharing the
+    database, which is the mixture this scoping exists to end.
+    """
     if not db.exists():
         raise ValueError(f"no database at {db}; run `ingest` first")
     with sqlite3.connect(db) as conn:
@@ -235,13 +242,13 @@ def _rows(db: Path, source: str) -> list[dict]:
             dict(row)
             for row in conn.execute(
                 "SELECT * FROM transaction_version WHERE is_current = 1 "
-                "AND source = ? ORDER BY posted_on, transaction_id",
-                (source,),
+                "AND source = ? AND cursor_scope IS ? ORDER BY posted_on, transaction_id",
+                (source, cursor_scope),
             )
         ]
 
 
-def _latest_run(db: Path) -> tuple[int, str]:
+def _latest_run(db: Path) -> tuple[int, str, str | None]:
     """The newest succeeded run, opening through `Store` so migrations run.
 
     Deliberately not a raw `sqlite3.connect`. A read-only command can be the
@@ -464,6 +471,9 @@ def _ingest_within_run(args: argparse.Namespace, store: Store, run_id: int, mode
             _finalize_failed_run(store, run_id, RUN_FAILED, exc)
             return 1
         artifacts.warn_if_exposed(path)
+        scope = csv_scope()
+        cursor_scope = scope.key()
+        store.record_run_scope(run_id, None, cursor_scope, f"csv {path.name} mode={mode}")
         try:
             records = SimplifiCsvSource(path, currency=args.currency).fetch()
         except (OSError, SchemaError, ValueError) as exc:
@@ -480,15 +490,14 @@ def _ingest_within_run(args: argparse.Namespace, store: Store, run_id: int, mode
             legacy_cursor = store.has_unscoped_cursor("api")
             stored_cursor = store.latest_cursor("api", cursor_scope)
 
-            # A cursor can be a truthful statement about the provider and still
-            # be wrong about what is on disk. Current rows are isolated by
-            # source alone, so a complete rescan under another scope retires
-            # this scope's rows; resuming from a mark earned before that
-            # retirement would fetch only deltas and never restore them.
-            snapshot_found, snapshot_scope = store.snapshot_owner_scope("api")
-            foreign_snapshot = snapshot_found and snapshot_scope != cursor_scope
+            # Materialized state is scoped as of migration 015, so a complete
+            # rescan under another scope no longer retires this scope's rows and
+            # a cursor earned before it still describes what is stored. The
+            # `complete_snapshot` guard that made that collision survivable is
+            # therefore no longer consulted here; the column is still recorded
+            # as run provenance.
             reuse_blocker = scope.reuse_blocker()
-            if stored_cursor is not None and (foreign_snapshot or reuse_blocker):
+            if stored_cursor is not None and reuse_blocker:
                 stored_cursor = None
 
             cursor_before = None if args.full_rescan else args.modified_after or stored_cursor
@@ -522,15 +531,7 @@ def _ingest_within_run(args: argparse.Namespace, store: Store, run_id: int, mode
         if cursor_before is None and not args.full_rescan:
             if reuse_blocker:
                 print(f"WARNING {reuse_blocker}.", file=sys.stderr)
-            if foreign_snapshot:
-                print(
-                    "WARNING this database's current API rows were last replaced by a "
-                    "complete rescan under a different cursor scope, so this scope's "
-                    "cursor no longer describes what is stored. This run re-reads its "
-                    "full window rather than resuming past rows that are not there.",
-                    file=sys.stderr,
-                )
-            elif legacy_cursor and not stored_cursor:
+            if legacy_cursor and not stored_cursor:
                 print(
                     "WARNING this database holds a cursor from before cursor scoping, which "
                     "cannot be attributed to a profile/dataset/query scope after the fact. "
@@ -545,6 +546,24 @@ def _ingest_within_run(args: argparse.Namespace, store: Store, run_id: int, mode
         cursor_after, cursor_warning = _next_cursor(as_of, cursor_floor)
 
     complete_snapshot = _is_complete_snapshot(args)
+    # Before anything is written under the new scope, claim the rows that
+    # predate scoping — otherwise they stay current forever in a scope no
+    # reader selects, and this run re-materializes every one of them alongside.
+    adopted = store.adopt_legacy_scope(run_id)
+    if adopted:
+        print(
+            f"INFO adopted {adopted} row(s) written before cursor scoping into this run's scope",
+        )
+    else:
+        stranded = store.unattributed_row_count(args.source)
+        if stranded:
+            print(
+                f"WARNING {stranded} current row(s) predate cursor scoping and this "
+                "database has synchronized more than one scope, so they cannot be "
+                "attributed to any of them. They are excluded from analysis. Run "
+                "`ingest --full-rescan` under each scope to rebuild its state.",
+                file=sys.stderr,
+            )
     # No local guard here: persistence failures, and anything else raised in
     # this block, propagate to the caller's `_run_finalized`, which rolls the
     # work back and records the run as failed with its cause.
@@ -630,23 +649,30 @@ def _no_successful_run_error(db: Path) -> str:
     return f"no successful run in {db}; run `ingest` first"
 
 
-def _analysis_rows(args: argparse.Namespace) -> tuple[list[dict], int, str]:
+def _analysis_rows(args: argparse.Namespace) -> tuple[list[dict], int, str, str | None]:
+    """Rows, and the run and scope they belong to.
+
+    The scope travels with the rows because analysis is a statement about one
+    dataset. A caller holding only the source would have to guess which of the
+    database's scopes it was looking at, and every consumer would guess
+    separately.
+    """
     db = Path(args.db)
     if not db.exists():
         raise ValueError(f"no database at {db}; run `ingest` first")
     artifacts.harden_existing(db)
-    run_id, source = _latest_run(db)
+    run_id, source, cursor_scope = _latest_run(db)
     if not run_id:
         # Only a succeeded run may become analysis input. Falling through would
         # select rows by source alone and report on whatever a failed or
         # half-finished run happened to leave behind.
         raise ValueError(_no_successful_run_error(db))
-    rows = _rows(db, source)
+    rows = _rows(db, source, cursor_scope)
     if not rows:
         raise ValueError(
             f"no current transactions for source {source!r} in {db}; run `ingest` first"
         )
-    return rows, run_id, source
+    return rows, run_id, source, cursor_scope
 
 
 def _memory_proposals(
@@ -669,8 +695,46 @@ def _as_of_rows(rows: list[dict], today: date) -> list[dict]:
     return [row for row in rows if is_projected(row) or row["posted_on"] <= cutoff]
 
 
-def _analysis_limitations(source: str, rows: list[dict]) -> list[str]:
+def _other_scope_limitations(db: Path | None, source: str, cursor_scope: str | None) -> list[str]:
+    """Say so when the database holds datasets this report does not cover.
+
+    A scoped report is correct about its own dataset and silent about the
+    others, and silence reads as absence. Someone who pointed two profiles at
+    one database and sees a total that covers one of them should be told which
+    situation they are in, rather than inferring it from a number that looks
+    plausible either way.
+    """
+    if db is None or not db.exists():
+        return []
+    store = Store(db)
+    try:
+        scopes = store.current_scopes(source)
+        stranded = store.unattributed_row_count(source)
+    finally:
+        store.close()
+    others = [scope for scope in scopes if scope != cursor_scope and scope is not None]
+    limitations = []
+    if others:
+        limitations.append(
+            f"This database holds current {source.upper()} rows under "
+            f"{len(others) + 1} cursor scopes. This report covers one of them; the "
+            "others are not included and are not missing data. Run `status` to see "
+            "each scope's synchronization."
+        )
+    if stranded and cursor_scope is not None:
+        limitations.append(
+            f"{stranded:,} current {source.upper()} row(s) predate cursor scoping and "
+            "could not be attributed to a scope, so they are excluded from this "
+            "report. Run `ingest --full-rescan` under each scope to rebuild state."
+        )
+    return limitations
+
+
+def _analysis_limitations(
+    source: str, rows: list[dict], db: Path | None = None, cursor_scope: str | None = None
+) -> list[str]:
     limitations: list[str] = []
+    limitations.extend(_other_scope_limitations(db, source, cursor_scope))
     capabilities = SOURCE_CAPABILITIES.get(source)
     review_visible = [
         row for row in rows if row.get("review_eligible", assess_eligibility(row).eligible)
@@ -789,7 +853,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         return 2
     print(f"INFO {egress.local_declaration('analyze').describe()}")
     try:
-        rows, run_id, source = _analysis_rows(args)
+        rows, run_id, source, cursor_scope = _analysis_rows(args)
     except ValueError as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
@@ -799,7 +863,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     prioritized = prioritize.analyse(analysis_rows, today)
     staleness = prioritize.activity_staleness(analysis_rows, today)
     findings = subscriptions.analyse(analysis_rows, today)
-    limitations = _analysis_limitations(source, analysis_rows)
+    limitations = _analysis_limitations(source, analysis_rows, Path(args.db), cursor_scope)
     # Measured from the rows themselves at the points where they are actually
     # lost, so a zero result can say which stage consumed them rather than
     # leaving an operator to guess between "clean week" and "broken ingest".
@@ -980,15 +1044,15 @@ def cmd_decide(args: argparse.Namespace) -> int:
         print(f"ERROR no database at {db}; run `ingest` first", file=sys.stderr)
         return 1
 
-    latest_run_id, latest_source = _latest_run(db)
-    rows = _rows(db, latest_source)
+    latest_run_id, latest_source, latest_scope = _latest_run(db)
+    rows = _rows(db, latest_source, latest_scope)
     binding = _packet_binding_error(packet, rows, latest_run_id, latest_source)
     if binding:
         print(f"ERROR {binding}; no decision was recorded", file=sys.stderr)
         return 1
     retirement_store = Store(db)
     try:
-        retired_ids = retirement_store.retired_transaction_ids(latest_source)
+        retired_ids = retirement_store.retired_transaction_ids(latest_source, latest_scope)
     finally:
         retirement_store.close()
     try:
@@ -1017,7 +1081,7 @@ def cmd_decide(args: argparse.Namespace) -> int:
         # One atomic step: take the write lock, re-confirm the run has not been
         # superseded, append, and prove the artifact is writable before commit.
         store.begin_immediate()
-        if store.latest_successful_run() != (latest_run_id, latest_source):
+        if store.latest_successful_run() != (latest_run_id, latest_source, latest_scope):
             print(
                 f"ERROR run {latest_run_id} was superseded by a concurrent ingest; "
                 "no decision was recorded. Re-run `analyze` and review the new packet",
@@ -1060,7 +1124,7 @@ def cmd_subs(args: argparse.Namespace) -> int:
         return 2
     print(f"INFO {egress.local_declaration('subs').describe()}")
     try:
-        rows, _, _ = _analysis_rows(args)
+        rows, _, _, _ = _analysis_rows(args)
     except ValueError as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
@@ -1110,11 +1174,11 @@ def cmd_classify(args: argparse.Namespace) -> int:
         print(f"ERROR {exc}", file=sys.stderr)
         return 2
     try:
-        rows, _, source = _analysis_rows(args)
+        rows, _, source, cursor_scope = _analysis_rows(args)
     except ValueError as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
-    limitations = _analysis_limitations(source, rows)
+    limitations = _analysis_limitations(source, rows, Path(args.db), cursor_scope)
     for limitation in limitations:
         print(f"WARNING {limitation}", file=sys.stderr)
 

@@ -71,12 +71,13 @@ incremental. A periodic report that does not name its own inputs cannot be
 compared with last week's, and cannot be told apart from one produced against a
 different dataset.
 
-The dataset field describes the *analyzed rows*, not the latest run. Those
-differ: `transaction_version` is isolated by source alone, so a database
-holding two cursor scopes produces a report containing both while only one run
-supplied the scope. Naming that run's scope would be a confident lie, so a
-multi-scope source is reported as a composite and the scopes are listed. Issue
-#136 would make the state itself scoped and this honest hedge unnecessary.
+The dataset field describes the *analyzed rows*. Those used to differ from the
+latest run's scope: `transaction_version` was isolated by source alone, so a
+database holding two cursor scopes produced a report containing both while only
+one run supplied the scope, and the honest answer was "composite". Migration
+015 scopes the stored state, so the rows and the run now agree and the field
+names the scope. A database holding other scopes still says so — the report is
+silent about them, and silence reads as absence.
 
 **A zero result carries its own diagnosis.** The `Funnel` records how many rows
 entered, how many were eligible for review, how many survived the date bound,

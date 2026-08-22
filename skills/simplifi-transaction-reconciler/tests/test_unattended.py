@@ -548,14 +548,18 @@ def test_an_unparsable_timestamp_is_not_treated_as_stale():
     assert unattended.stale_runs(runs, max_age_hours=1) == []
 
 
-def test_a_report_over_two_scopes_says_its_dataset_is_composite():
-    """Rows are isolated by source alone, so one scope name would be a lie."""
+def test_a_report_names_its_scope_and_admits_the_others():
+    """Scoped rows make the name true; the count keeps the silence honest.
+
+    The report covers scope-b exactly. Saying only "scope-b" would leave a
+    reader unable to tell a one-dataset database from this one, and a report
+    that never mentions scope-a reads as evidence scope-a is empty.
+    """
     identity = unattended.RunIdentity(
         run_id=4, source="api", cursor_scope="scope-b", known_scopes=("scope-a", "scope-b")
     )
 
-    assert "composite of 2 scopes" in identity.dataset
-    assert "scope-a" in identity.dataset
+    assert identity.dataset == "scope-b (1 of 2 scopes in this database)"
 
 
 def test_a_single_scope_report_names_that_scope():

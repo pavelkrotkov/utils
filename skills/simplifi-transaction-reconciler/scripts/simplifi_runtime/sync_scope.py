@@ -155,6 +155,22 @@ def scope_from_profile(client, profile: dict, since: str | None = None) -> SyncS
     )
 
 
+def csv_scope() -> SyncScope:
+    """The one scope a CSV ingest writes under.
+
+    A CSV export carries no profile, dataset, or subject: it is a file, and two
+    files are told apart by being ingested one after the other, not by any
+    identity in the data. So every CSV run shares a scope, which is what the
+    source did before scoping existed and remains correct for it.
+
+    It still gets a key rather than NULL. NULL is the legacy scope — the rows
+    written before migration 015 — and a CSV run writing there would land in a
+    bucket the runtime is trying to drain, and would be adopted later by an API
+    scope that never read a line of it.
+    """
+    return SyncScope(source="csv")
+
+
 def api_scope(client, since: str | None = None) -> SyncScope:
     """Resolve the cursor scope for an API run.
 
@@ -169,6 +185,7 @@ def api_scope(client, since: str | None = None) -> SyncScope:
 __all__ = [
     "SyncScope",
     "api_scope",
+    "csv_scope",
     "fingerprint",
     "profile_identifier",
     "scope_from_profile",
