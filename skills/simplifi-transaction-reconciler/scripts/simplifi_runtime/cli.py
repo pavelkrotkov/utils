@@ -549,19 +549,26 @@ def _ingest_within_run(args: argparse.Namespace, store: Store, run_id: int, mode
     # Before anything is written under the new scope, claim the rows that
     # predate scoping — otherwise they stay current forever in a scope no
     # reader selects, and this run re-materializes every one of them alongside.
-    adopted = store.adopt_legacy_scope(run_id)
+    observed_ids = {str(r["transaction_id"]) for r in records if r.get("transaction_id")}
+    adopted = store.adopt_legacy_scope(run_id, observed_ids) if complete_snapshot else 0
     if adopted:
         print(
-            f"INFO adopted {adopted} row(s) written before cursor scoping into this run's scope",
+            f"INFO adopted {adopted} row(s) written before cursor scoping, each one "
+            "returned by this complete rescan",
         )
+    if args.retire_legacy_rows:
+        retired_legacy = store.retire_orphaned_legacy(run_id)
+        print(f"INFO retired {retired_legacy} unclaimed pre-scoping row(s)")
     else:
         stranded = store.unattributed_row_count(args.source)
         if stranded:
             print(
-                f"WARNING {stranded} current row(s) predate cursor scoping and this "
-                "database has synchronized more than one scope, so they cannot be "
-                "attributed to any of them. They are excluded from analysis. Run "
-                "`ingest --full-rescan` under each scope to rebuild its state.",
+                f"WARNING {stranded} current row(s) predate cursor scoping and no "
+                "complete rescan has claimed them, so they are attributed to no scope "
+                "and excluded from analysis. Run `ingest --full-rescan` under each "
+                "scope; each claims the rows the provider returns for it. Once every "
+                "scope has been rebuilt, `ingest --retire-legacy-rows` retires "
+                "whatever is left.",
                 file=sys.stderr,
             )
     # No local guard here: persistence failures, and anything else raised in
@@ -695,7 +702,11 @@ def _as_of_rows(rows: list[dict], today: date) -> list[dict]:
     return [row for row in rows if is_projected(row) or row["posted_on"] <= cutoff]
 
 
-def _other_scope_limitations(db: Path | None, source: str, cursor_scope: str | None) -> list[str]:
+def _other_scope_limitations(
+    db: Path | None,
+    source: str,
+    cursor_scope: str | None,
+) -> list[str]:
     """Say so when the database holds datasets this report does not cover.
 
     A scoped report is correct about its own dataset and silent about the
@@ -962,6 +973,31 @@ def _load_json(path: Path, label: str) -> Any:
         raise ValueError(f"{label} at {path} is not valid JSON: {exc}") from exc
 
 
+def _latest_run_for_packet(db: Path, packet: dict) -> tuple[int, str, str | None]:
+    """The newest successful run in the scope the packet was analyzed for.
+
+    Supersession became a per-scope question when state did. Asking it
+    database-wide let an ingest for an unrelated dataset invalidate a reviewed
+    packet it provably never touched — which, in the multi-scope setup this
+    scoping exists to support, is every scheduled run of every other dataset.
+
+    Falls back to the database-wide latest when the packet names a run this
+    database does not have; that is a packet from somewhere else, and the
+    binding check downstream is what says so.
+    """
+    store = Store(db)
+    try:
+        run = store.run_by_id(int(packet.get("run", {}).get("run_id") or 0))
+        if run is None:
+            return store.latest_successful_run()
+        scope = run["cursor_scope"]
+        return store.latest_successful_run_in_scope(
+            str(run["source"]), str(scope) if scope is not None else None
+        )
+    finally:
+        store.close()
+
+
 def _packet_binding_error(
     packet: dict, rows: list[dict], latest_run_id: int, latest_source: str
 ) -> str | None:
@@ -1044,7 +1080,7 @@ def cmd_decide(args: argparse.Namespace) -> int:
         print(f"ERROR no database at {db}; run `ingest` first", file=sys.stderr)
         return 1
 
-    latest_run_id, latest_source, latest_scope = _latest_run(db)
+    latest_run_id, latest_source, latest_scope = _latest_run_for_packet(db, packet)
     rows = _rows(db, latest_source, latest_scope)
     binding = _packet_binding_error(packet, rows, latest_run_id, latest_source)
     if binding:
@@ -1081,7 +1117,11 @@ def cmd_decide(args: argparse.Namespace) -> int:
         # One atomic step: take the write lock, re-confirm the run has not been
         # superseded, append, and prove the artifact is writable before commit.
         store.begin_immediate()
-        if store.latest_successful_run() != (latest_run_id, latest_source, latest_scope):
+        if store.latest_successful_run_in_scope(latest_source, latest_scope) != (
+            latest_run_id,
+            latest_source,
+            latest_scope,
+        ):
             print(
                 f"ERROR run {latest_run_id} was superseded by a concurrent ingest; "
                 "no decision was recorded. Re-run `analyze` and review the new packet",
@@ -1514,6 +1554,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="API only: omit modifiedAfter and perform a recovery/full scan",
     )
     ingest.add_argument("--db", default="simplifi.sqlite")
+    ingest.add_argument(
+        "--retire-legacy-rows",
+        action="store_true",
+        help=(
+            "retire pre-scoping rows no complete rescan has claimed. Run this only "
+            "once every scope has been rebuilt: the runtime cannot tell a scope that "
+            "no longer exists from one that has not run yet"
+        ),
+    )
     ingest.add_argument("--verbose", action="store_true")
     _add_storage_args(ingest)
     ingest.set_defaults(func=cmd_ingest)

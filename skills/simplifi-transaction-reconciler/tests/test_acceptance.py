@@ -355,12 +355,26 @@ def test_an_ingest_racing_the_write_lock_fails_closed(tmp_path: Path, monkeypatc
     original = Store.begin_immediate
 
     def racing_begin(self):
-        """Land a successful ingest between the staleness read and the lock."""
+        """Land a successful ingest between the staleness read and the lock.
+
+        In the packet's own scope: supersession is per-scope now, and a run in
+        a different scope provably does not touch these rows.
+        """
         with sqlite3.connect(db) as conn:
             conn.execute(
                 "INSERT INTO runs (started_at, source, source_detail, algorithm_version,"
-                " ruleset_version, state, row_count) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                ("2026-06-16T00:00:00+00:00", "csv", "racing", "0.1.0", "0.2.0", RUN_SUCCEEDED, 1),
+                " ruleset_version, state, row_count, cursor_scope)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "2026-06-16T00:00:00+00:00",
+                    "csv",
+                    "racing",
+                    "0.1.0",
+                    "0.2.0",
+                    RUN_SUCCEEDED,
+                    1,
+                    sync_scope.csv_scope().key(),
+                ),
             )
         monkeypatch.setattr(Store, "begin_immediate", original)
         original(self)
@@ -758,7 +772,11 @@ def test_two_datasets_keep_independent_current_rows(tmp_path: Path, monkeypatch,
     assert {row["transaction_id"] for row in _scoped_rows(db, "api", scope_two)} == seeded
 
 
-def test_an_incremental_run_does_not_upsert_into_another_scope(tmp_path: Path, monkeypatch, capsys):
+def test_an_incremental_run_does_not_upsert_into_another_scope(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
     """The quieter half of the bug: a shared current set, not a wiped one."""
     payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
     first = FixtureApiClient(payload)

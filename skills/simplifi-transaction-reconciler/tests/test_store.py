@@ -267,43 +267,84 @@ def test_the_same_transaction_id_in_two_scopes_stays_two_rows(tmp_path: Path):
     store.close()
 
 
-def test_legacy_rows_are_adopted_by_the_first_scope_to_ingest(tmp_path: Path):
-    """Pre-scoping rows are a real scope, not a wildcard — and not a leak."""
+def test_legacy_rows_are_adopted_only_where_a_rescan_returned_them(tmp_path: Path):
+    """Adoption is by evidence: the provider returned this ID for this scope."""
     store = Store(tmp_path / "review.sqlite")
     legacy = store.start_run("api", "before scoping")
-    store.upsert_version(legacy, _record("txn-old"))
-    store.finish_run(legacy, RUN_SUCCEEDED, 1)
+    store.upsert_version(legacy, _record("txn-mine"))
+    store.upsert_version(legacy, _record("txn-theirs"))
+    store.finish_run(legacy, RUN_SUCCEEDED, 2)
     store.commit()
-    assert store.unattributed_row_count("api") == 1
+    assert store.unattributed_row_count("api") == 2
 
-    scoped = store.start_run("api", "after upgrading")
+    scoped = store.start_run("api", "complete rescan of dataset one")
     store.record_run_scope(scoped, None, '{"dataset":"one"}')
-    assert store.adopt_legacy_scope(scoped) == 1
+    assert store.adopt_legacy_scope(scoped, {"txn-mine"}) == 1
     store.commit()
 
-    assert store.unattributed_row_count("api") == 0
-    assert store.current_scopes("api") == ['{"dataset":"one"}']
+    # The row this dataset never returned stays unattributed, for another
+    # scope's rescan to claim.
+    assert store.unattributed_row_count("api") == 1
+    assert store.current_scopes("api") == [None, '{"dataset":"one"}']
     store.close()
 
 
-def test_legacy_rows_are_not_adopted_when_several_scopes_exist(tmp_path: Path):
-    """A mixture nobody can separate is left alone and reported, not guessed at."""
+def test_an_incremental_run_never_adopts(tmp_path: Path):
+    """Only a complete snapshot's observed set means "everything this dataset holds"."""
     store = Store(tmp_path / "review.sqlite")
     legacy = store.start_run("api", "before scoping")
-    store.upsert_version(legacy, _record("txn-old"))
+    store.upsert_version(legacy, _record("txn-1"))
     store.finish_run(legacy, RUN_SUCCEEDED, 1)
-    for dataset in ('{"dataset":"one"}', '{"dataset":"two"}'):
-        run_id = store.start_run("api", dataset)
-        store.record_run_scope(run_id, None, dataset)
-        store.finish_run(run_id, RUN_SUCCEEDED, 0)
     store.commit()
 
-    claimant = store.start_run("api", "scope one again")
-    store.record_run_scope(claimant, None, '{"dataset":"one"}')
-    assert store.adopt_legacy_scope(claimant) == 0
+    # The CLI only calls adopt on a complete snapshot; with no observed IDs
+    # there is nothing to claim either way.
+    scoped = store.start_run("api", "incremental")
+    store.record_run_scope(scoped, None, '{"dataset":"one"}')
+    assert store.adopt_legacy_scope(scoped, set()) == 0
     store.commit()
 
     assert store.unattributed_row_count("api") == 1
+    store.close()
+
+
+def test_orphaned_legacy_rows_can_be_retired_explicitly(tmp_path: Path):
+    """The escape hatch, once every scope has been rebuilt."""
+    store = Store(tmp_path / "review.sqlite")
+    legacy = store.start_run("api", "before scoping")
+    store.upsert_version(legacy, _record("txn-gone"))
+    store.finish_run(legacy, RUN_SUCCEEDED, 1)
+    store.commit()
+
+    scoped = store.start_run("api", "rescan that never returned it")
+    store.record_run_scope(scoped, None, '{"dataset":"one"}')
+    assert store.retire_orphaned_legacy(scoped) == 1
+    store.commit()
+
+    assert store.unattributed_row_count("api") == 0
+    # Recorded as the inference it is, not as a provider deletion.
+    assert [item["reason"] for item in store.retirements(source="api")] == [RETIRED_BY_ABSENCE]
+    store.close()
+
+
+def test_supersession_is_asked_per_scope(tmp_path: Path):
+    """An unrelated dataset's ingest must not invalidate another's packet."""
+    store = Store(tmp_path / "review.sqlite")
+    one = store.start_run("api", "scope one")
+    store.record_run_scope(one, None, '{"dataset":"one"}')
+    store.finish_run(one, RUN_SUCCEEDED, 1)
+    two = store.start_run("api", "scope two, later")
+    store.record_run_scope(two, None, '{"dataset":"two"}')
+    store.finish_run(two, RUN_SUCCEEDED, 1)
+    store.commit()
+
+    assert store.latest_successful_run() == (two, "api", '{"dataset":"two"}')
+    # Scope one is still its own latest, despite two having run afterwards.
+    assert store.latest_successful_run_in_scope("api", '{"dataset":"one"}') == (
+        one,
+        "api",
+        '{"dataset":"one"}',
+    )
     store.close()
 
 

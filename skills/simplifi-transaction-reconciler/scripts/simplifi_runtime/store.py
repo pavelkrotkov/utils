@@ -520,37 +520,89 @@ class Store:
             str(row["cursor_scope"]) if row["cursor_scope"] is not None else None for row in rows
         ]
 
-    def adopt_legacy_scope(self, run_id: int) -> int:
-        """Attribute pre-scoping current rows to this run's scope.
+    def adopt_legacy_scope(self, run_id: int, observed_ids: set[str]) -> int:
+        """Claim pre-scoping rows this run's own fetch just proved are its own.
 
         Rows written before migration 015 carry NULL, which is a real scope
         holding everything the source materialized back when state was isolated
-        by source alone. Left there they would be current forever and invisible
-        to every scoped reader — a slow leak plus a permanently stale view.
+        by source alone. Left there they are current forever and invisible to
+        every scoped reader — a slow leak plus a permanently stale view.
 
-        Adoption is only honest when the run history shows one scope, or none.
-        Where several scopes have succeeded, those rows are a mixture of
-        datasets that nothing on disk can separate, and assigning the whole pile
-        to whichever scope ingests first would be a guess presented as a fact.
-        The caller reports that case instead; a complete rescan per scope
-        rebuilds the state truthfully.
+        Adoption is by evidence, one transaction at a time: a legacy row is
+        claimed only when this run's complete rescan actually returned that
+        transaction ID, which is the provider stating it belongs to this
+        dataset. The first version claimed the whole bucket whenever no other
+        scope had succeeded yet, which on a fresh upgrade meant the first scope
+        to run adopted another dataset's rows outright — and because a normal
+        incremental ingest is not a complete snapshot, absence retirement never
+        cleaned them up and `analyze` reported the mixture as one clean scope.
+        That was worse than the collision it replaced: it was silent.
+
+        Only a complete snapshot may adopt, since only a complete snapshot has
+        an observed-ID set that means "everything this dataset holds". Rows no
+        rescan has claimed stay put; another scope's rescan may still claim
+        them, and :meth:`retire_orphaned_legacy` clears whatever is left once
+        every scope has been rebuilt.
 
         Retirement rows keep their NULL: that table is append-only by trigger,
         and :meth:`retired_transaction_ids` reads legacy rows across scopes for
         exactly this reason.
         """
         source, cursor_scope = self.run_scope(run_id)
-        if cursor_scope is None:
+        if cursor_scope is None or not observed_ids:
             return 0
-        known = set(self.cursor_scopes(source)) - {cursor_scope}
-        if known:
-            return 0
-        cur = self.conn.execute(
-            "UPDATE transaction_version SET cursor_scope = ? "
-            "WHERE source = ? AND cursor_scope IS NULL",
-            (cursor_scope, source),
-        )
-        return int(cur.rowcount)
+        legacy = self.conn.execute(
+            "SELECT id, transaction_id FROM transaction_version "
+            "WHERE source = ? AND cursor_scope IS NULL AND is_current = 1",
+            (source,),
+        ).fetchall()
+        claimed = [row["id"] for row in legacy if str(row["transaction_id"]) in observed_ids]
+        for version_id in claimed:
+            self.conn.execute(
+                "UPDATE transaction_version SET cursor_scope = ? WHERE id = ?",
+                (cursor_scope, version_id),
+            )
+        return len(claimed)
+
+    def retire_orphaned_legacy(self, run_id: int) -> int:
+        """Retire the legacy rows no scope's rescan ever claimed.
+
+        The escape hatch for a database whose scopes have all been rebuilt: what
+        is still sitting in the NULL bucket then belongs to no dataset the
+        provider still serves, and without this it would warn forever.
+
+        Deliberately explicit rather than automatic. "Every scope has been
+        rescanned" is a fact only the operator knows — the runtime cannot tell a
+        scope that no longer exists from one that simply has not run yet, and
+        guessing wrong retires live history.
+        """
+        source, _ = self.run_scope(run_id)
+        legacy = self.conn.execute(
+            "SELECT id, transaction_id FROM transaction_version "
+            "WHERE source = ? AND cursor_scope IS NULL AND is_current = 1",
+            (source,),
+        ).fetchall()
+        for row in legacy:
+            self._retire_version(
+                run_id, source, int(row["id"]), str(row["transaction_id"]), RETIRED_BY_ABSENCE
+            )
+        return len(legacy)
+
+    def latest_successful_run_in_scope(
+        self, source: str, cursor_scope: str | None
+    ) -> tuple[int, str, str | None]:
+        """The newest successful run for one `(source, scope)` pair.
+
+        Supersession is a per-scope question now that state is per-scope. Asking
+        it database-wide would let an unrelated dataset's ingest invalidate a
+        packet it provably did not touch.
+        """
+        row = self.conn.execute(
+            "SELECT id FROM runs WHERE state = 'succeeded' AND source = ? "
+            "AND cursor_scope IS ? ORDER BY id DESC LIMIT 1",
+            (source, cursor_scope),
+        ).fetchone()
+        return (int(row["id"]), source, cursor_scope) if row else (0, source, cursor_scope)
 
     def unattributed_row_count(self, source: str) -> int:
         """Current rows still in the legacy scope, which adoption declined."""
