@@ -754,6 +754,18 @@ class Store:
 
         An attempt with no outcome counts as applied. It may have landed, and
         the safe reading of "we do not know" is not "do it again".
+
+        **Before the write path is unblocked, this needs a database constraint
+        behind it.** Read here and acted on later, it is a check-then-write:
+        two overlapping processes can both see a decision unapplied. Today the
+        caller re-reads under `begin_immediate()` and SQLite's write lock
+        serializes them, so the guarantee is the lock's rather than the
+        schema's. The structural fix is a partial unique index —
+        `CREATE UNIQUE INDEX … ON mutation_attempt (decision_id)
+        WHERE undoes_attempt_id IS NULL` — and it belongs with a test that
+        genuinely runs two concurrent applies, which is why it is not here yet.
+        The mutation register records it alongside the other write-path
+        preconditions so it is not found only by reading this docstring.
         """
         return {
             str(row["decision_id"])

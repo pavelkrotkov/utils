@@ -16,6 +16,7 @@ cannot drift.
 - [Preconditions](#preconditions)
 - [Audit trail](#audit-trail)
 - [The stale-write race](#the-stale-write-race)
+- [Before the write is unblocked](#before-the-write-is-unblocked)
 - [Undo](#undo)
 
 ## What is available
@@ -157,6 +158,22 @@ rejected it breaks every write.
 
 So it is recorded here as an open risk rather than resolved quietly. Items 3 and
 4 of the capture above are what would settle it.
+
+## Before the write is unblocked
+
+Two things must land with the capture, not after it:
+
+- **A uniqueness constraint on applied decisions.** `applied_decision_ids()` is
+  read at plan time and acted on later, which is a check-then-write. The caller
+  re-reads it under `begin_immediate()` and SQLite's write lock serializes
+  concurrent processes, so the guarantee today is the lock's rather than the
+  schema's. A partial unique index on `mutation_attempt (decision_id)` excluding
+  undo rows makes it structural. It wants a test that actually runs two
+  concurrent applies, which is why it is deferred rather than asserted.
+- **Whatever items 3 and 4 of the capture establish about preconditions** — if
+  the provider enforces a version check, the write should carry it; if it does
+  not, the stale-write race above is a permanent property to design around
+  rather than a gap to close.
 
 ## Undo
 
