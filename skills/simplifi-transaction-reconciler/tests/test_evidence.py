@@ -700,3 +700,70 @@ def test_migration_014_is_idempotent_against_its_own_diagnostic(tmp_path):
     codes = _stored(store, "api-3")["eligibility_reason_codes"].split(",")
 
     assert codes.count("account_name_unknown") == 1
+
+
+def test_the_packet_and_the_report_state_one_annual_impact(tmp_path):
+    """Two artifacts formatting the same figure will eventually disagree."""
+    from datetime import date
+
+    from simplifi_runtime import report, review_packet, subscriptions
+
+    rows = [
+        {
+            "transaction_id": f"jpy-{index}",
+            "posted_on": f"2026-{index:02d}-01",
+            "payee_canonical": "streamline_video",
+            "payee_raw": "Streamline Video",
+            "payee_normalized": "Streamline Video",
+            "payee_display": "Streamline Video",
+            "account_name": "Travel Card",
+            "account_name_known": 1,
+            "amount_minor_units": -amount,
+            "currency": "JPY",
+            "currency_exponent": 0,
+            "category": "Subscriptions",
+            "is_uncategorized": 0,
+            "kind": "spend",
+            "txn_state": "CLEARED",
+            "exclusion_flag": 0,
+            "review_eligible": 1,
+            "eligibility_reason_codes": "eligible",
+        }
+        for index, amount in enumerate([1000, 1000, 1000, 1000, 2000, 2000], start=1)
+    ]
+    findings = subscriptions.analyse(rows, today=date(2026, 6, 15))
+    assert findings
+
+    packet = review_packet.build_packet(
+        run_id=1,
+        source="csv",
+        analysis_date="2026-06-15",
+        rows=rows,
+        prioritized=[],
+        proposals=[],
+        subscription_findings=findings,
+    )
+    impact = next(
+        finding["evidence"]["annual_impact"]
+        for finding in packet["findings"]
+        if finding["scope"] == "merchant_series"
+    )
+    rendered = report.render(
+        run_id=1,
+        source="csv",
+        analysis_date="2026-06-15",
+        rows=rows,
+        prioritized=[],
+        staleness=[],
+        proposals=[],
+        memory_stats={},
+        subscription_findings=findings,
+    )
+
+    assert impact["currency"] == "JPY"
+    assert impact["currency_exponent"] == 0
+    # The figure a person reads and the figure the packet states are one value.
+    assert (
+        review_packet.series_annual_impact(findings[0], rows).minor_units == (impact["minor_units"])
+    )
+    assert f"{impact['minor_units']:,} JPY" in rendered

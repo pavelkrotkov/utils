@@ -8,6 +8,7 @@ from datetime import date
 from .evidence import evidence_from_row
 from .memory import Proposal
 from .money import Money
+from .review_packet import series_annual_impact
 from .semantics import is_statistics_quarantined
 from .unattended import Funnel, RunIdentity
 
@@ -215,7 +216,7 @@ def render(
             p.append(
                 f"<tr><td><span class='chip warn'>{_e(finding.kind)}</span></td>"
                 f"<td>{_e(finding.merchant)}</td><td>{_e(finding.detail)}</td>"
-                f"<td class=num>{_e(f'{finding.annual_impact:,.2f}')}</td></tr>"
+                f"<td class=num>{_money(series_annual_impact(finding, rows))}</td></tr>"
             )
         p.append("</table>")
 

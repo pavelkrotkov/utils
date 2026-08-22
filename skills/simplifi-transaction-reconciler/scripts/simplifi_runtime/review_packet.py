@@ -76,7 +76,7 @@ _EXAMPLE_FORBIDDEN_KEYS = _FORBIDDEN_KEYS | {
     "transaction_id",
     "transaction_ids",
 }
-_MONEY_EVIDENCE_FIELDS = {"amount", "median", "now", "previous_typical"}
+_MONEY_EVIDENCE_FIELDS = {"amount", "annual_impact", "median", "now", "previous_typical"}
 
 
 class PacketValidationError(ValueError):
@@ -275,10 +275,32 @@ def _prioritized_findings(prioritized: list[Any]) -> list[dict[str, Any]]:
     return findings
 
 
-def _subscription_findings(subscription_findings: list[Any]) -> list[dict[str, Any]]:
+def series_annual_impact(finding: Any, rows: Sequence[Mapping[str, Any]]) -> Money:
+    """A recurring finding's yearly cost, in the currency of its own series.
+
+    `annual_impact` reaches here as a float in major units — the one figure in
+    the packet whose currency a reader could not determine, in the section that
+    exists to say what a subscription costs per year. The series' own rows
+    supply it, and both the packet and the report render through this, so the
+    two artifacts cannot state the figure differently.
+    """
+    by_id = {_string(row.get("transaction_id")): row for row in rows}
+    member = next(
+        (by_id[str(txid)] for txid in sorted(finding.transaction_ids) if str(txid) in by_id),
+        None,
+    )
+    currency = (_string(member.get("currency")) if member else "") or "USD"
+    exponent = Money(0, currency).exponent
+    return Money(round(float(finding.annual_impact) * (10**exponent)), currency)
+
+
+def _subscription_findings(
+    subscription_findings: list[Any], rows: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
     findings = []
     for finding in subscription_findings:
         reason = f"subscription:{finding.kind}"
+        impact = series_annual_impact(finding, rows)
         findings.append(
             {
                 "transaction_id": None,
@@ -293,7 +315,11 @@ def _subscription_findings(subscription_findings: list[Any]) -> list[dict[str, A
                 "evidence": {
                     "merchant": _string(finding.merchant),
                     "detail": _string(finding.detail),
-                    "annual_impact": round(float(finding.annual_impact), 2),
+                    "annual_impact": {
+                        "minor_units": impact.minor_units,
+                        "currency": impact.currency,
+                        "currency_exponent": impact.exponent,
+                    },
                 },
                 "policy_references": ["ADR-003", "ADR-004"],
             }
@@ -360,7 +386,7 @@ def build_packet(
         raise PacketValidationError(f"unsupported source {source!r}")
 
     findings = _prioritized_findings(prioritized)
-    findings.extend(_subscription_findings(list(subscription_findings or [])))
+    findings.extend(_subscription_findings(list(subscription_findings or []), rows))
     findings.sort(
         key=lambda finding: (
             finding["transaction_id"] is None,
