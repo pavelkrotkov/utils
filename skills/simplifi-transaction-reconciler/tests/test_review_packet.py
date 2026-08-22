@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from simplifi_runtime.money import Money
 from simplifi_runtime.prioritize import Prioritized, Signal
 from simplifi_runtime.review_packet import (
     PacketValidationError,
@@ -11,7 +12,7 @@ from simplifi_runtime.review_packet import (
     validate_packet,
     write_packet,
 )
-from simplifi_runtime.subscriptions import Finding
+from simplifi_runtime.subscriptions import RecurringFinding, SeriesRef
 
 FIXTURE = Path(__file__).parent / "fixtures" / "review_packet.json"
 
@@ -194,12 +195,22 @@ def test_recurring_finding_does_not_expose_internal_series_key():
         prioritized=[],
         proposals=[],
         subscription_findings=[
-            Finding(
-                "hike",
-                "fixture market",
-                "price increased",
-                series_key="fixture market::sensitive-account-id",
-                transaction_ids=("tx-1", "tx-2"),
+            RecurringFinding(
+                kind="hike",
+                series=(
+                    SeriesRef(
+                        merchant="fixture market",
+                        account="Checking",
+                        transaction_ids=("tx-1", "tx-2"),
+                        monthly=Money(1200, "USD"),
+                        interval_days=30.0,
+                        last_charge="2026-08-01",
+                    ),
+                ),
+                detail="price increased",
+                annual_impact=Money(2400, "USD"),
+                amounts={"previous": Money(1000, "USD"), "current": Money(1200, "USD")},
+                facts={"ratio": 1.2},
             )
         ],
     )
@@ -208,6 +219,14 @@ def test_recurring_finding_does_not_expose_internal_series_key():
     assert "sensitive-account-id" not in encoded
     assert "series_key" not in encoded
     assert packet["findings"][0]["transaction_ids"] == ["tx-1", "tx-2"]
+    evidence = packet["findings"][0]["evidence"]
+    assert evidence["annual_impact"] == {
+        "minor_units": 2400,
+        "currency": "USD",
+        "currency_exponent": 2,
+    }
+    assert evidence["amounts"]["previous"]["minor_units"] == 1000
+    assert evidence["series"][0]["account_name"] == "Checking"
 
 
 def test_validation_rejects_credentials():

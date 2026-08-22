@@ -12,13 +12,20 @@ from __future__ import annotations
 
 import statistics
 from collections import defaultdict
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from datetime import date
 from itertools import pairwise
+from typing import Any
 
 from .evidence import account_ref
 from .money import Money, money_from_row
 from .semantics import is_projected, is_statistics_eligible
+
+#: The finding kinds this module can produce. A stable vocabulary, because it
+#: is a reason code in the packet and a chip in the report: consumers switch on
+#: it, and a kind invented at a call site would reach them unannounced.
+FINDING_KINDS = ("zombie", "hike", "twin", "renamed", "ghost", "lapsed")
 
 #: A series needs this many cleared charges before we will call it recurring.
 #: Two is coincidence; three is a pattern.
@@ -96,15 +103,103 @@ BILL_CATEGORIES = {
 MIN_GHOST_HISTORY = 1
 
 
-def _amount(series: Series, major_units: float) -> str:
-    """A derived figure rendered as money, in the series' own currency.
+def _text(money: Money) -> str:
+    """A money value rendered for a sentence, at its own currency's precision.
 
-    These read `$1,000.00 -> $1,200.00` regardless of currency, so a ¥1,000 to
-    ¥1,200 increase was reported in dollars — a number a reader would act on,
-    with a symbol that was simply wrong.
+    Derived figures used to be carried around as major-unit floats and rendered
+    by the caller, which read `$1,000.00 -> $1,200.00` whatever the currency: a
+    ¥1,000 to ¥1,200 increase was reported in dollars — a number a reader would
+    act on, with a symbol that was simply wrong.
     """
-    money = series.money(major_units)
     return f"{money.formatted(grouped=True)} {money.currency}"
+
+
+@dataclass(frozen=True)
+class SeriesRef:
+    """One merchant series, as everything outside this module may see it.
+
+    Deliberately not the `Series` itself and deliberately not its dictionary
+    key. The key is `f"{merchant}::{account correlation}"`, and that
+    correlation is built from the provider's account ID — a join key that
+    separates two people billed by the same merchant. It is not evidence, and a
+    key is exactly the sort of string that ends up in an artifact once anything
+    outside this module can reach it.
+    """
+
+    merchant: str
+    account: str
+    transaction_ids: tuple[str, ...]
+    monthly: Money
+    interval_days: float
+    last_charge: str | None
+
+    @property
+    def label(self) -> str:
+        """A human-readable name that never carries the account key."""
+        return f"{self.merchant} [{self.account}]" if self.account else self.merchant
+
+
+@dataclass(frozen=True)
+class RecurringFinding:
+    """One recurring-analysis result, complete enough to render from.
+
+    The packet and the report both build their output from this and nothing
+    else. They used to re-derive: the report parsed nothing but read a float
+    and formatted it, the packet guessed the finding's currency by looking up a
+    member transaction, and the meaning of a finding lived in `detail` — a
+    sentence — so any consumer wanting a number had to either re-run the
+    analysis or read English.
+
+    `detail` is still here, because a rendered sentence is the right thing to
+    show a human. It is now a rendering *of* the structure rather than the only
+    place the structure exists.
+    """
+
+    kind: str
+    series: tuple[SeriesRef, ...]
+    detail: str
+    annual_impact: Money
+    #: Named money facts specific to the kind — `previous`/`current` for a
+    #: hike, `projected_charge` for a ghost. Money, never a bare number: a
+    #: figure whose currency a reader has to assume is a figure that is wrong
+    #: in every currency but one.
+    amounts: Mapping[str, Money] = field(default_factory=dict)
+    #: Named non-money facts — counts, day gaps, dates, the shared token.
+    facts: Mapping[str, Any] = field(default_factory=dict)
+
+    @property
+    def merchant(self) -> str:
+        """The display name, joined across series for multi-series kinds."""
+        return " + ".join(ref.label for ref in self.series)
+
+    @property
+    def transaction_ids(self) -> tuple[str, ...]:
+        """Every contributing transaction, across every series in the finding."""
+        return tuple(sorted({txid for ref in self.series for txid in ref.transaction_ids}))
+
+
+@dataclass
+class _Draft:
+    """A finding under construction, still holding its internal series keys.
+
+    The keys are needed for the successor pass, which has to look a lapsed
+    series back up and edit its detail. Keeping them on a private type — rather
+    than on the published one with a note asking consumers not to read it —
+    means the key cannot leave this module at all.
+    """
+
+    kind: str
+    keys: tuple[str, ...]
+    detail: str
+    annual_impact: Money
+    amounts: dict[str, Money] = field(default_factory=dict)
+    facts: dict[str, Any] = field(default_factory=dict)
+    #: Overrides the published series cost where the series median would
+    #: misdescribe it. A hike is the case: the median spans both price regimes,
+    #: so a finding whose `amounts.current` says 20.00 would publish a monthly
+    #: cost of about 9.82 beside it, and a consumer reading the structure
+    #: rather than the sentence would understate a live subscription.
+    series_monthly: Money | None = None
 
 
 @dataclass
@@ -135,6 +230,25 @@ class Series:
         return ""
 
     @property
+    def ref(self) -> SeriesRef:
+        """The safe, publishable view of this series.
+
+        Everything a consumer is allowed to know: the normalized merchant, the
+        account's display name where it has one, the member transaction IDs and
+        the cadence. Not `identity` — that is a join key built from the
+        provider's account ID, and it exists to keep two people billed by the
+        same merchant apart, not to be read.
+        """
+        return SeriesRef(
+            merchant=self.merchant,
+            account=self.account_display,
+            transaction_ids=self.transaction_ids,
+            monthly=self.monthly if self.charges else Money(0, self.currency),
+            interval_days=round(self.interval_days, 1),
+            last_charge=self.last_charge.isoformat() if self.last_charge else None,
+        )
+
+    @property
     def transaction_ids(self) -> tuple[str, ...]:
         """Stable member IDs without exposing the internal account identity."""
         return tuple(
@@ -162,14 +276,26 @@ class Series:
                 return code.upper()
         return "USD"
 
-    def money(self, major_units: float) -> Money:
-        """A derived figure carried back into this series' own currency."""
-        exponent = Money(0, self.currency).exponent
-        return Money(round(major_units * (10**exponent)), self.currency)
+    def money(self, minor_units: float) -> Money:
+        """A derived figure carried back into this series' own currency.
+
+        Takes minor units, because every figure derived here is derived from
+        minor units. The old signature took major units and scaled by the
+        currency's exponent, which meant each caller had to divide first and
+        this had to multiply back — two lossy steps around arithmetic that was
+        exact to begin with.
+        """
+        return Money(round(minor_units), self.currency)
 
     @property
-    def amounts(self) -> list[float]:
-        return [abs(money_from_row(c).as_float) for c in self.charges]
+    def amounts(self) -> list[int]:
+        """Charge magnitudes in minor units, which is what they are stored as.
+
+        Integers, not major-unit floats. Every statistic below — median, stdev,
+        the hike ratio — is computed on these, so the only rounding in the
+        module happens once, where a derived figure becomes a `Money`.
+        """
+        return [abs(money_from_row(c).minor_units) for c in self.charges]
 
     @property
     def dates(self) -> list[date]:
@@ -192,13 +318,23 @@ class Series:
         return max(self.dates) if self.charges else None
 
     @property
-    def monthly(self) -> float:
+    def monthly_minor(self) -> float:
         """Normalised to a month, so annual plans compare with monthly ones."""
         interval = self.interval_days or 30
         return statistics.median(self.amounts) * (30.44 / interval)
 
     @property
-    def recent_amounts(self) -> list[float]:
+    def monthly(self) -> Money:
+        """The monthly cost as money, in this series' own currency."""
+        return self.money(self.monthly_minor)
+
+    @property
+    def annual(self) -> Money:
+        """The yearly cost as money. Rounded once, from the monthly figure."""
+        return self.money(self.monthly_minor * 12)
+
+    @property
+    def recent_amounts(self) -> list[int]:
         """The last few charges, oldest first."""
         return [a for _, a in sorted(zip(self.dates, self.amounts, strict=True))][-RECENT_WINDOW:]
 
@@ -218,16 +354,6 @@ class Series:
         if len(a) < 2 or statistics.mean(a) == 0:
             return 0.0
         return statistics.stdev(a) / statistics.mean(a)
-
-
-@dataclass
-class Finding:
-    kind: str
-    merchant: str
-    detail: str
-    annual_impact: float = 0.0
-    series_key: str | None = None
-    transaction_ids: tuple[str, ...] = ()
 
 
 def _series(rows: list[dict]) -> dict[str, Series]:
@@ -275,7 +401,7 @@ def _has_regular_cadence(s: Series) -> bool:
     return len(s.charges) >= MIN_CHARGES and MIN_DAYS <= s.interval_days <= MAX_DAYS
 
 
-def _hike(s: Series, interval: float) -> Finding | None:
+def _hike(key: str, s: Series, interval: float) -> _Draft | None:
     """Return a price-hike finding before recent variation can reject a series."""
     if len(s.amounts) < PRICE_REGIME_OBSERVATIONS * 2:
         return None
@@ -284,7 +410,7 @@ def _hike(s: Series, interval: float) -> Finding | None:
     old_window = by_date[split - PRICE_REGIME_OBSERVATIONS : split]
     new_window = by_date[split:]
 
-    def stable(values: list[float]) -> bool:
+    def stable(values: list[int]) -> bool:
         median = statistics.median(values)
         return median > 0 and max(values) - min(values) <= median * MAX_VARIATION
 
@@ -293,12 +419,15 @@ def _hike(s: Series, interval: float) -> Finding | None:
     old, new = statistics.median(old_window), statistics.median(new_window)
     if old <= 0 or new / old < HIKE_RATIO:
         return None
-    return Finding(
+    previous, current = s.money(old), s.money(new)
+    return _Draft(
         "hike",
-        s.merchant,
-        f"{_amount(s, old)} -> {_amount(s, new)} per charge ({new / old:.1f}x)",
-        (new - old) * (30.44 / interval) * 12,
-        transaction_ids=s.transaction_ids,
+        (key,),
+        f"{_text(previous)} -> {_text(current)} per charge ({new / old:.1f}x)",
+        s.money((new - old) * (30.44 / interval) * 12),
+        amounts={"previous": previous, "current": current},
+        facts={"ratio": round(new / old, 3), "interval_days": round(interval, 1)},
+        series_monthly=s.money(new * (30.44 / interval)),
     )
 
 
@@ -317,11 +446,29 @@ def _is_live(s: Series, today: date) -> bool:
     )
 
 
-def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
+def _publish(draft: _Draft, everything: Mapping[str, Series]) -> RecurringFinding:
+    """Turn an internal draft into the result consumers see.
+
+    This is where the series keys are dropped and replaced by safe references.
+    """
+    refs = [everything[key].ref for key in draft.keys]
+    if draft.series_monthly is not None and refs:
+        refs[0] = replace(refs[0], monthly=draft.series_monthly)
+    return RecurringFinding(
+        kind=draft.kind,
+        series=tuple(refs),
+        detail=draft.detail,
+        annual_impact=draft.annual_impact,
+        amounts=dict(draft.amounts),
+        facts=dict(draft.facts),
+    )
+
+
+def analyse(rows: list[dict], today: date | None = None) -> list[RecurringFinding]:
     today = today or date.today()
     everything = _series(rows)
     live = {k: s for k, s in everything.items() if _is_live(s, today)}
-    findings: list[Finding] = []
+    findings: list[_Draft] = []
 
     for key, s in sorted(everything.items()):
         interval = s.interval_days or 30
@@ -330,17 +477,23 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
         # GHOST — projected but not actually charging.
         future = [p for p in s.projected if p["posted_on"] > today.isoformat()]
         if future and len(s.charges) >= MIN_GHOST_HISTORY and silent > interval * SILENT_INTERVALS:
-            waste = abs(money_from_row(future[0]).as_float) * (365.25 / interval)
+            projected = Money(abs(money_from_row(future[0]).minor_units), s.currency)
             findings.append(
-                Finding(
+                _Draft(
                     "ghost",
-                    s.merchant,
+                    (key,),
                     f"Simplifi projects {len(future)} future charges but nothing has "
                     f"cleared in {f'{silent} days' if s.last_charge else 'ever'} "
                     f"(last real charge: {s.last_charge or 'none'}). Forecast only "
                     f"— NOT money leaving your account.",
-                    waste,
-                    transaction_ids=s.transaction_ids,
+                    s.money(projected.minor_units * (365.25 / interval)),
+                    amounts={"projected_charge": projected},
+                    facts={
+                        "projected_count": len(future),
+                        "silent_days": None if s.last_charge is None else silent,
+                        "last_charge": s.last_charge.isoformat() if s.last_charge else None,
+                        "interval_days": round(interval, 1),
+                    },
                 )
             )
             continue
@@ -350,7 +503,7 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
 
         # HIKE — detect a stable pre/post regime before recent variation can
         # reject the series because the price change itself is large.
-        if hike := _hike(s, interval):
+        if hike := _hike(key, s, interval):
             findings.append(hike)
 
         if not _is_recurring(s):
@@ -359,32 +512,40 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
         # LAPSED — was regular, stopped, nothing projected.
         if silent > interval * SILENT_INTERVALS and not future:
             findings.append(
-                Finding(
+                _Draft(
                     "lapsed",
-                    s.merchant,
+                    (key,),
                     f"was every ~{interval:.0f}d, nothing since {s.last_charge} "
                     f"({silent} days). Confirm this was deliberate.",
-                    -s.monthly * 12,
-                    key,
-                    s.transaction_ids,
+                    s.money(-s.monthly_minor * 12),
+                    amounts={"monthly": s.monthly},
+                    facts={
+                        "interval_days": round(interval, 1),
+                        "silent_days": silent,
+                        "last_charge": s.last_charge.isoformat() if s.last_charge else None,
+                    },
                 )
             )
 
     # ZOMBIE — a charge cleared after the newest projection ran out, i.e. the
     # series looked finished and then billed anyway.
-    for _key, s in live.items():
+    for key, s in live.items():
         if s.projected:
             newest_projection = max(p["posted_on"] for p in s.projected)
             after = [c for c in s.charges if c["posted_on"] > newest_projection]
             if after:
                 findings.append(
-                    Finding(
+                    _Draft(
                         "zombie",
-                        s.merchant,
+                        (key,),
                         f"{len(after)} charge(s) cleared after the projected series "
                         f"ended {newest_projection} — billing outlived the schedule",
-                        s.monthly * 12,
-                        transaction_ids=s.transaction_ids,
+                        s.annual,
+                        amounts={"monthly": s.monthly},
+                        facts={
+                            "charges_after_schedule": len(after),
+                            "schedule_ended": newest_projection,
+                        },
                     )
                 )
 
@@ -421,19 +582,25 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
         if sig in seen_pairs:
             continue
         seen_pairs.add(sig)
-        total = sum(live[k].monthly for k in keys)
-        merchant_names = [live[k].merchant for k in keys]
-        transaction_ids = tuple(
-            sorted({txid for key in keys for txid in live[key].transaction_ids})
-        )
+        # Twins are per-account series, so two of them can be denominated
+        # differently. Summing across currencies would produce a total in no
+        # currency at all, so the shared one wins and the odd series out is
+        # named as a fact rather than folded in silently.
+        currency = live[sig[0]].currency
+        shared_currency = [k for k in keys if live[k].currency == currency]
+        total_minor = sum(live[k].monthly_minor for k in shared_currency)
         findings.append(
-            Finding(
+            _Draft(
                 "twin",
-                " + ".join(merchant_names),
+                sig,
                 f"{len(keys)} concurrent series both contain '{tok}' — one service "
                 f"billed twice, or a rebrand still double-running",
-                total * 12,
-                transaction_ids=transaction_ids,
+                Money(round(total_minor * 12), currency),
+                facts={
+                    "shared_token": tok,
+                    "series_count": len(keys),
+                    "mixed_currency": len(shared_currency) != len(keys),
+                },
             )
         )
 
@@ -483,19 +650,19 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
     }
 
     for f in [f for f in findings if f.kind == "lapsed"]:
-        if f.series_key is None:
-            continue
-        old = everything[f.series_key]
+        old = everything[f.keys[0]]
         old_toks = {t for t in old.merchant.split("_") if len(t) >= 4 and t not in GENERIC_TOK}
         best = None
         for key, cand in candidates.items():
-            if key == f.series_key or not cand.charges:
+            if key == f.keys[0] or not cand.charges:
                 continue
             started = min(cand.dates)
             gap = (started - old.last_charge).days if old.last_charge else 999
             if not (-7 <= gap <= 45):
                 continue
-            if not (old.monthly > 0 and 0.8 <= cand.monthly / old.monthly <= 1.25):
+            if not (
+                old.monthly_minor > 0 and 0.8 <= cand.monthly_minor / old.monthly_minor <= 1.25
+            ):
                 continue
             shared = old_toks & {
                 t for t in cand.merchant.split("_") if len(t) >= 4 and t not in GENERIC_TOK
@@ -503,18 +670,24 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
             if shared:
                 findings.remove(f)
                 findings.append(
-                    Finding(
+                    _Draft(
                         "renamed",
-                        f"{old.merchant} -> {cand.merchant}",
+                        (f.keys[0], key),
                         f"stopped {old.last_charge}; {cand.merchant} started {started} at "
-                        f"{_amount(cand, cand.monthly)} (was {_amount(old, old.monthly)}) "
+                        f"{_text(cand.monthly)} (was {_text(old.monthly)}) "
                         f"and shares "
                         f"'{sorted(shared)[0]}'. Same service, new name — not a "
                         f"cancellation.",
-                        0.0,
-                        transaction_ids=tuple(
-                            sorted((*old.transaction_ids, *cand.transaction_ids))
-                        ),
+                        # A rename moves money, it does not change how much: the
+                        # successor bills what the predecessor billed, so there
+                        # is no annual impact to report.
+                        Money(0, old.currency),
+                        amounts={"previous": old.monthly, "current": cand.monthly},
+                        facts={
+                            "shared_token": sorted(shared)[0],
+                            "successor_started": started.isoformat(),
+                            "confidence_basis": "shared_distinctive_token",
+                        },
                     )
                 )
                 best = None
@@ -524,26 +697,48 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
             key, started, cand = best
             f.detail += (
                 f" Possibly replaced by {cand.merchant} (started {started}, "
-                f"{_amount(cand, cand.monthly)}/mo) — similar price and timing "
+                f"{_text(cand.monthly)}/mo) — similar price and timing "
                 f"only, names unrelated, so treat as a guess."
             )
+            # Recorded as a candidate, never as a second series on the finding:
+            # the whole point of the `lapsed`/`renamed` split is that this one
+            # is a guess, and putting the candidate in `series` would make it
+            # look like established membership.
+            f.facts["successor_candidate"] = cand.merchant
+            f.facts["successor_started"] = started.isoformat()
+            f.facts["successor_basis"] = "price_and_timing_only"
 
-    order = {"zombie": 0, "hike": 1, "twin": 2, "renamed": 3, "ghost": 4, "lapsed": 5}
-    return sorted(findings, key=lambda f: (order.get(f.kind, 9), -abs(f.annual_impact)))
+    order = {kind: index for index, kind in enumerate(FINDING_KINDS)}
+    published = [_publish(draft, everything) for draft in findings]
+    return sorted(
+        published,
+        key=lambda f: (order.get(f.kind, len(order)), -abs(f.annual_impact.minor_units)),
+    )
 
 
 def summary(rows: list[dict], today: date | None = None) -> str:
     today = today or date.today()
     live = {k: s for k, s in _series(rows).items() if _is_live(s, today)}
-    lines = [
-        f"{len(live)} live subscriptions, "
-        f"{sum(s.monthly for s in live.values()):,.2f}/mo "
-        f"({sum(s.monthly for s in live.values()) * 12:,.2f}/yr)",
-        "",
-    ]
-    for _key, s in sorted(live.items(), key=lambda kv: -kv[1].monthly):
+    # One total per currency. Minor units are only comparable within a
+    # currency — ¥1,000 and $10.00 are both 1000 of them — so adding across
+    # currencies produces a number that is correct in none of them. The first
+    # version did exactly that and then labelled the result with whichever code
+    # sorted first, while calling it the "majority" currency, which it also was
+    # not. There is no exchange rate here and inventing one would be worse.
+    totals: dict[str, float] = defaultdict(float)
+    for series in live.values():
+        totals[series.currency] += series.monthly_minor
+    rendered = "; ".join(
+        f"{_text(Money(round(minor), code))}/mo ({_text(Money(round(minor * 12), code))}/yr)"
+        for code, minor in sorted(totals.items())
+    )
+    header = f"{len(live)} live subscriptions"
+    if rendered:
+        header += f", {rendered}"
+    lines = [header, ""]
+    for _key, s in sorted(live.items(), key=lambda kv: -kv[1].monthly_minor):
         lines.append(
-            f"  {_amount(s, s.monthly):>12}/mo  {s.merchant[:34]:34} "
+            f"  {_text(s.monthly):>12}/mo  {s.merchant[:34]:34} "
             f"every ~{s.interval_days:.0f}d, last {s.last_charge}"
         )
     findings = analyse(rows, today)
