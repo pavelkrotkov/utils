@@ -67,6 +67,20 @@ def _scoped_cursor(db: Path, client: FixtureApiClient, since: str | None = None)
         store.close()
 
 
+def _scoped_rows(db: Path, source: str, cursor_scope: str | None) -> list[dict]:
+    """Current rows for one scope — what a reader of that dataset would see."""
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        return [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM transaction_version WHERE source = ? AND cursor_scope IS ? "
+                "AND is_current = 1 ORDER BY posted_on, transaction_id",
+                (source, cursor_scope),
+            )
+        ]
+
+
 def _current_rows(db: Path, source: str) -> list[dict]:
     with sqlite3.connect(db) as conn:
         conn.row_factory = sqlite3.Row
@@ -341,12 +355,26 @@ def test_an_ingest_racing_the_write_lock_fails_closed(tmp_path: Path, monkeypatc
     original = Store.begin_immediate
 
     def racing_begin(self):
-        """Land a successful ingest between the staleness read and the lock."""
+        """Land a successful ingest between the staleness read and the lock.
+
+        In the packet's own scope: supersession is per-scope now, and a run in
+        a different scope provably does not touch these rows.
+        """
         with sqlite3.connect(db) as conn:
             conn.execute(
                 "INSERT INTO runs (started_at, source, source_detail, algorithm_version,"
-                " ruleset_version, state, row_count) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                ("2026-06-16T00:00:00+00:00", "csv", "racing", "0.1.0", "0.2.0", RUN_SUCCEEDED, 1),
+                " ruleset_version, state, row_count, cursor_scope)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "2026-06-16T00:00:00+00:00",
+                    "csv",
+                    "racing",
+                    "0.1.0",
+                    "0.2.0",
+                    RUN_SUCCEEDED,
+                    1,
+                    sync_scope.csv_scope().key(),
+                ),
             )
         monkeypatch.setattr(Store, "begin_immediate", original)
         original(self)
@@ -696,31 +724,106 @@ def test_cursor_scope_is_recorded_and_reported(tmp_path: Path, monkeypatch, caps
     assert "scope=" in detail
 
 
-def test_foreign_full_rescan_invalidates_this_scope_cursor(tmp_path: Path, monkeypatch, capsys):
-    """The reported bug: A's cursor is valid, but A's rows are gone.
+def test_two_datasets_keep_independent_current_rows(tmp_path: Path, monkeypatch, capsys):
+    """The reported bug, from the other end: B's rescan must not touch A's rows.
 
-    Current rows are isolated by source alone, so B's complete rescan retires
-    A's. Resuming A from its own — entirely truthful — cursor would fetch only
-    post-cursor deltas and never restore the history B retired, while reporting
-    success.
+    Before state was scoped, current rows were isolated by `source` alone, so
+    B's complete rescan retired every row of A's — they were absent from B's
+    observed-ID set and nothing distinguished them. Migration 011 answered that
+    by making A refuse its own cursor and re-read its whole window, which cost
+    a full fetch every time the two alternated. Scoped state removes the
+    collision instead of surviving it.
     """
     payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
     first = FixtureApiClient(payload)
     second = FixtureApiClient(payload, dataset_id="dataset-2")
     db = tmp_path / "api.sqlite"
+    scope_one = sync_scope.api_scope(first).key()
+    scope_two = sync_scope.api_scope(second).key()
+    assert scope_one != scope_two
 
     _ingest_as(monkeypatch, first, db, "--full-rescan")
-    assert _scoped_cursor(db, first) == "2026-06-01T00:00:00Z"
+    seeded = {row["transaction_id"] for row in _scoped_rows(db, "api", scope_one)}
+    assert seeded, "the fixture must materialize something to be robbed of"
 
     _ingest_as(monkeypatch, second, db, "--full-rescan")
     capsys.readouterr()
 
-    # A still owns a cursor, but must not resume from it.
+    # A's rows survive B's complete rescan, and both scopes hold the same set
+    # independently rather than sharing one.
+    assert {row["transaction_id"] for row in _scoped_rows(db, "api", scope_one)} == seeded
+    assert {row["transaction_id"] for row in _scoped_rows(db, "api", scope_two)} == seeded
+    store = Store(db)
+    try:
+        assert store.retired_transaction_ids("api", scope_one) == set()
+        # A set: the claim is that both scopes hold rows, not what order they
+        # come back in. `current_scopes` can also contain the legacy None, which
+        # is not orderable against a string.
+        assert set(store.current_scopes("api")) == {scope_one, scope_two}
+    finally:
+        store.close()
+
+    # And A resumes incrementally, because its cursor still describes its rows.
     _ingest_as(monkeypatch, first, db)
     captured = capsys.readouterr()
+    assert "requested=2026-06-01T00:00:00Z" in captured.out
+    assert "re-reads its full window" not in captured.err
+    assert {row["transaction_id"] for row in _scoped_rows(db, "api", scope_one)} == seeded
+    assert {row["transaction_id"] for row in _scoped_rows(db, "api", scope_two)} == seeded
 
-    assert "requested=none" in captured.out
-    assert "last replaced by a complete rescan under a different cursor scope" in captured.err
+
+def test_an_incremental_run_does_not_upsert_into_another_scope(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    """The quieter half of the bug: a shared current set, not a wiped one."""
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    first = FixtureApiClient(payload)
+    db = tmp_path / "api.sqlite"
+    scope_one = sync_scope.api_scope(first).key()
+    _ingest_as(monkeypatch, first, db, "--full-rescan")
+    before = {row["transaction_id"] for row in _scoped_rows(db, "api", scope_one)}
+
+    # A second dataset whose transactions are entirely its own.
+    other = json.loads(json.dumps(payload))
+    for index, transaction in enumerate(other["transactions"]):
+        transaction["id"] = f"dataset-2-{index}"
+    second = FixtureApiClient(other, dataset_id="dataset-2")
+    scope_two = sync_scope.api_scope(second).key()
+    _ingest_as(monkeypatch, second, db)
+    capsys.readouterr()
+
+    assert {row["transaction_id"] for row in _scoped_rows(db, "api", scope_one)} == before
+    assert all(
+        row["transaction_id"].startswith("dataset-2-") for row in _scoped_rows(db, "api", scope_two)
+    )
+
+
+def test_analysis_says_when_the_database_holds_other_scopes(tmp_path: Path, monkeypatch, capsys):
+    """A scoped report is silent about its siblings, and silence reads as absence."""
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    db = tmp_path / "api.sqlite"
+    _ingest_as(monkeypatch, FixtureApiClient(payload), db, "--full-rescan")
+    _ingest_as(monkeypatch, FixtureApiClient(payload, dataset_id="dataset-2"), db, "--full-rescan")
+    capsys.readouterr()
+
+    html = _run_analyze(db, tmp_path / "review.html")
+
+    assert "holds current API rows under 2 cursor scopes" in html
+    assert "are not missing data" in html
+
+
+def test_a_single_scope_analysis_says_nothing_about_scopes(tmp_path: Path, monkeypatch, capsys):
+    """The ordinary case must not acquire a warning it has no reason to carry."""
+    payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
+    db = tmp_path / "api.sqlite"
+    _ingest_as(monkeypatch, FixtureApiClient(payload), db, "--full-rescan")
+    capsys.readouterr()
+
+    html = _run_analyze(db, tmp_path / "review.html")
+
+    assert "cursor scopes" not in html
 
 
 def test_same_scope_rescan_does_not_invalidate_its_own_cursor(tmp_path: Path, monkeypatch, capsys):
@@ -779,6 +882,11 @@ def test_explicit_modified_after_is_not_described_as_a_full_window(
 
 
 def test_complete_snapshot_ownership_is_recorded(tmp_path: Path, monkeypatch):
+    """Kept as run provenance after scoping made it unnecessary as a guard.
+
+    `status` reports it, and it is the record of which runs replaced a
+    snapshot; scoped state means nothing reads it to decide anything.
+    """
     payload = json.loads((FIXTURE_DIR / "acceptance_api.json").read_text(encoding="utf-8"))
     client = FixtureApiClient(payload)
     db = tmp_path / "api.sqlite"
@@ -787,12 +895,11 @@ def test_complete_snapshot_ownership_is_recorded(tmp_path: Path, monkeypatch):
 
     store = Store(db)
     try:
-        found, owner = store.snapshot_owner_scope("api")
+        scopes = store.cursor_scopes("api")
     finally:
         store.close()
 
-    assert found
-    assert owner == sync_scope.api_scope(client).key()
+    assert scopes == [sync_scope.api_scope(client).key()]
     with sqlite3.connect(db) as conn:
         flags = [row[0] for row in conn.execute("SELECT complete_snapshot FROM runs ORDER BY id")]
     # Only the full rescan replaced the snapshot; the incremental run did not.
@@ -1164,7 +1271,8 @@ def test_tombstoned_and_absent_transactions_are_recorded_distinctly(
         by_id = {item["transaction_id"]: item for item in store.retirements(source="api")}
         assert by_id[tombstoned]["reason"] == RETIRED_BY_TOMBSTONE
         assert by_id[absent]["reason"] == RETIRED_BY_ABSENCE
-        assert store.retired_transaction_ids("api") == {tombstoned, absent}
+        scope = sync_scope.api_scope(client).key()
+        assert store.retired_transaction_ids("api", scope) == {tombstoned, absent}
     finally:
         store.close()
 
@@ -1197,6 +1305,9 @@ def test_a_proposal_about_a_retired_transaction_is_rejected(tmp_path: Path, caps
     # A later complete snapshot no longer contains that row.
     store = Store(db)
     retiring = store.start_run("csv", "complete scan without it")
+    # Under the CSV scope the ingest wrote: a run in the legacy scope would be
+    # a complete scan of a different, empty dataset and would retire nothing.
+    store.record_run_scope(retiring, None, sync_scope.csv_scope().key())
     remaining = {
         row["transaction_id"] for row in _current_rows(db, "csv") if row["transaction_id"] != target
     }

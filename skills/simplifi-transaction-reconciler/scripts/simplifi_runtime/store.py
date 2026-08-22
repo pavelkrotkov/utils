@@ -91,6 +91,7 @@ class Store:
         self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
         self._run_sources: dict[int, str] = {}
+        self._run_scopes: dict[int, str | None] = {}
         self.conn.execute("PRAGMA foreign_keys = ON")
         self._migrate()
 
@@ -212,6 +213,7 @@ class Store:
         The scope can only be resolved once that client is up, so it lands here
         rather than in :meth:`start_run`.
         """
+        self._run_scopes[run_id] = cursor_scope
         if source_detail is None:
             self.conn.execute(
                 "UPDATE runs SET cursor_before = ?, cursor_scope = ? WHERE id = ?",
@@ -222,6 +224,28 @@ class Store:
             "UPDATE runs SET cursor_before = ?, cursor_scope = ?, source_detail = ? WHERE id = ?",
             (cursor_before, cursor_scope, source_detail, run_id),
         )
+
+    def run_scope(self, run_id: int) -> tuple[str, str | None]:
+        """The `(source, cursor scope)` a run writes under.
+
+        Both halves identify the materialized state the run owns, so they are
+        resolved together and cached together. Reading them separately invites
+        a caller to filter current rows by source and forget the scope, which
+        is exactly the bug this pairing exists to prevent.
+        """
+        if run_id in self._run_sources and run_id in self._run_scopes:
+            return self._run_sources[run_id], self._run_scopes[run_id]
+        row = self.conn.execute(
+            "SELECT source, cursor_scope FROM runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        if row is None:
+            raise sqlite3.DatabaseError(f"unknown run ID: {run_id}")
+        source = str(row["source"])
+        scope = row["cursor_scope"]
+        scope = str(scope) if scope is not None else None
+        self._run_sources[run_id] = source
+        self._run_scopes[run_id] = scope
+        return source, scope
 
     def latest_cursor(self, source: str, cursor_scope: str | None = None) -> str | None:
         """The newest earned cursor for exactly this source and scope.
@@ -243,29 +267,6 @@ class Store:
         ).fetchone()
         return str(row["cursor_after"]) if row else None
 
-    def snapshot_owner_scope(self, source: str) -> tuple[bool, str | None]:
-        """Which scope last replaced this source's materialized snapshot.
-
-        Returns ``(found, scope)``. The flag matters: "no complete snapshot has
-        ever run" and "the snapshot belongs to the unscoped legacy history" are
-        different situations, and a bare None cannot tell them apart.
-
-        Current rows are still isolated by source alone, so a complete rescan
-        under one scope retires every other scope's rows. A cursor earned before
-        that retirement is still a truthful statement about the provider — and
-        completely wrong about what is on disk. Callers compare this against
-        their own scope and decline the cursor when it does not match.
-        """
-        row = self.conn.execute(
-            "SELECT cursor_scope FROM runs WHERE source = ? AND complete_snapshot = 1 "
-            "AND state = 'succeeded' ORDER BY id DESC LIMIT 1",
-            (source,),
-        ).fetchone()
-        if row is None:
-            return False, None
-        scope = row["cursor_scope"]
-        return True, (str(scope) if scope is not None else None)
-
     def has_unscoped_cursor(self, source: str) -> bool:
         """Whether an earned but unattributable cursor predates scoping.
 
@@ -279,12 +280,22 @@ class Store:
         ).fetchone()
         return row is not None
 
-    def latest_successful_run(self) -> tuple[int, str]:
-        """Return the newest successful run, or ``(0, "unknown")`` when there is none."""
+    def latest_successful_run(self) -> tuple[int, str, str | None]:
+        """The newest successful run as ``(id, source, cursor scope)``.
+
+        The scope comes back with the source because every consumer needs both:
+        current rows are attributed to a `(source, scope)` pair, and a caller
+        that selected on source alone would read whatever other datasets share
+        the database. ``(0, "unknown", None)`` when there is no successful run.
+        """
         row = self.conn.execute(
-            "SELECT id, source FROM runs WHERE state = 'succeeded' ORDER BY id DESC LIMIT 1"
+            "SELECT id, source, cursor_scope FROM runs WHERE state = 'succeeded' "
+            "ORDER BY id DESC LIMIT 1"
         ).fetchone()
-        return (int(row["id"]), str(row["source"])) if row else (0, "unknown")
+        if row is None:
+            return 0, "unknown", None
+        scope = row["cursor_scope"]
+        return int(row["id"]), str(row["source"]), (str(scope) if scope is not None else None)
 
     def latest_run_summary(self) -> dict | None:
         """The newest run of any state, for explaining why analysis found none.
@@ -328,8 +339,10 @@ class Store:
     def cursor_scopes(self, source: str) -> list[str]:
         """Distinct cursor scopes a source has succeeded under.
 
-        Used to tell whether a report covers one dataset or several, since
-        `transaction_version` is isolated by source alone.
+        Run history, not stored state: it answers "how many datasets has this
+        database ever synchronized?", which is what decides whether legacy rows
+        can be attributed to anyone. For what is materialized right now, ask
+        :meth:`current_scopes`.
         """
         rows = self.conn.execute(
             "SELECT DISTINCT cursor_scope FROM runs "
@@ -370,7 +383,13 @@ class Store:
         self.conn.execute("BEGIN IMMEDIATE")
 
     def _retire_version(
-        self, run_id: int, source: str, version_id: int, transaction_id: str, reason: str
+        self,
+        run_id: int,
+        source: str,
+        version_id: int,
+        transaction_id: str,
+        reason: str,
+        cursor_scope: str | None = None,
     ) -> None:
         """Clear `is_current` and append the evidence that it was cleared.
 
@@ -382,9 +401,9 @@ class Store:
             "UPDATE transaction_version SET is_current = 0 WHERE id = ?", (version_id,)
         )
         self.conn.execute(
-            "INSERT INTO retirement_record (transaction_id, source, prior_version_id, run_id,"
-            " reason, retired_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (transaction_id, source, version_id, run_id, reason, _now()),
+            "INSERT INTO retirement_record (transaction_id, source, cursor_scope,"
+            " prior_version_id, run_id, reason, retired_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (transaction_id, source, cursor_scope, version_id, run_id, reason, _now()),
         )
 
     def retire_absent_snapshot(self, run_id: int, observed_ids: set[str]) -> int:
@@ -394,29 +413,36 @@ class Store:
         The provider said nothing about these transactions; we concluded they
         were gone because a scan we believed complete did not mention them. If
         that belief was wrong the records here are what makes it recoverable.
+
+        Only the run's own scope is considered. A complete rescan of one dataset
+        is silent about every other dataset in the database, and retiring rows
+        it never asked about would record an inference no scan supports.
         """
-        source = self._run_sources.get(run_id)
-        if source is None:
-            row = self.conn.execute("SELECT source FROM runs WHERE id = ?", (run_id,)).fetchone()
-            if row is None:
-                raise sqlite3.DatabaseError(f"unknown run ID: {run_id}")
-            source = str(row["source"])
+        source, cursor_scope = self.run_scope(run_id)
         current = self.conn.execute(
             "SELECT id, transaction_id FROM transaction_version "
-            "WHERE source = ? AND is_current = 1",
-            (source,),
+            "WHERE source = ? AND cursor_scope IS ? AND is_current = 1",
+            (source, cursor_scope),
         ).fetchall()
         retired = 0
         for row in current:
             if row["transaction_id"] not in observed_ids:
                 self._retire_version(
-                    run_id, source, int(row["id"]), str(row["transaction_id"]), RETIRED_BY_ABSENCE
+                    run_id,
+                    source,
+                    int(row["id"]),
+                    str(row["transaction_id"]),
+                    RETIRED_BY_ABSENCE,
+                    cursor_scope,
                 )
                 retired += 1
         return retired
 
     def retirements(
-        self, source: str | None = None, transaction_id: str | None = None
+        self,
+        source: str | None = None,
+        transaction_id: str | None = None,
+        cursor_scope: str | None = None,
     ) -> list[dict]:
         """Retirement history, oldest first. Never filtered by current state.
 
@@ -430,34 +456,162 @@ class Store:
         if transaction_id is not None:
             clauses.append("transaction_id = ?")
             params.append(transaction_id)
+        if cursor_scope is not None:
+            clauses.append("cursor_scope = ?")
+            params.append(cursor_scope)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         return [
             dict(row)
             for row in self.conn.execute(
-                "SELECT id, transaction_id, source, prior_version_id, run_id, reason, retired_at "
+                "SELECT id, transaction_id, source, cursor_scope, prior_version_id, run_id, "
+                "reason, retired_at "
                 f"FROM retirement_record{where} ORDER BY id",
                 params,
             )
         ]
 
-    def retired_transaction_ids(self, source: str) -> set[str]:
-        """Transactions currently retired: ever retired, and not since restored.
+    def retired_transaction_ids(self, source: str, cursor_scope: str | None) -> set[str]:
+        """Transactions currently retired in this scope: retired, not restored.
 
         A retirement is not permanent — a provider can resurrect a transaction,
         and a later run makes it current again. Reading the retirement table
         alone would treat those as still gone, so membership is confirmed
-        against the absence of a current version.
+        against the absence of a current version *in this scope*.
+
+        Legacy retirements (NULL scope, written before migration 015) match
+        every scope. They cannot be attributed after the fact — the table is
+        append-only by trigger, so there is no honest backfill — and the
+        `NOT EXISTS` clause keeps the looseness harmless: a transaction that is
+        current here is not reported retired here whatever the legacy row says.
+        Where it is not current, naming it retired is the fail-closed answer,
+        since the caller uses this set to reject decisions about rows that may
+        no longer exist.
+
+        `cursor_scope` has no default on purpose. A default of None would read
+        as "any scope" at the call site and mean "the legacy scope" in the
+        query, and a caller who omitted it would silently get an empty set —
+        which this function's consumer treats as "nothing is retired".
         """
         return {
             str(row["transaction_id"])
             for row in self.conn.execute(
                 "SELECT DISTINCT r.transaction_id FROM retirement_record r "
-                "WHERE r.source = ? AND NOT EXISTS ("
+                "WHERE r.source = ? AND (r.cursor_scope IS ? OR r.cursor_scope IS NULL) "
+                "AND NOT EXISTS ("
                 "  SELECT 1 FROM transaction_version v WHERE v.transaction_id = r.transaction_id"
-                "  AND v.source = r.source AND v.is_current = 1)",
-                (source,),
+                "  AND v.source = r.source AND v.cursor_scope IS ? AND v.is_current = 1)",
+                (source, cursor_scope, cursor_scope),
             )
         }
+
+    def current_scopes(self, source: str) -> list[str | None]:
+        """Scopes that currently hold materialized rows for this source.
+
+        Distinct from :meth:`cursor_scopes`, which reads run history. A report
+        covers one scope; this is how a caller finds out that the database
+        holds others and can say so rather than quietly showing a slice.
+        """
+        rows = self.conn.execute(
+            "SELECT DISTINCT cursor_scope FROM transaction_version "
+            "WHERE source = ? AND is_current = 1 ORDER BY IFNULL(cursor_scope, '')",
+            (source,),
+        )
+        return [
+            str(row["cursor_scope"]) if row["cursor_scope"] is not None else None for row in rows
+        ]
+
+    def adopt_legacy_scope(self, run_id: int, observed_ids: set[str]) -> int:
+        """Claim pre-scoping rows this run's own fetch just proved are its own.
+
+        Rows written before migration 015 carry NULL, which is a real scope
+        holding everything the source materialized back when state was isolated
+        by source alone. Left there they are current forever and invisible to
+        every scoped reader — a slow leak plus a permanently stale view.
+
+        Adoption is by evidence, one transaction at a time: a legacy row is
+        claimed only when this run's complete rescan actually returned that
+        transaction ID, which is the provider stating it belongs to this
+        dataset. The first version claimed the whole bucket whenever no other
+        scope had succeeded yet, which on a fresh upgrade meant the first scope
+        to run adopted another dataset's rows outright — and because a normal
+        incremental ingest is not a complete snapshot, absence retirement never
+        cleaned them up and `analyze` reported the mixture as one clean scope.
+        That was worse than the collision it replaced: it was silent.
+
+        Only a complete snapshot may adopt, since only a complete snapshot has
+        an observed-ID set that means "everything this dataset holds". Rows no
+        rescan has claimed stay put; another scope's rescan may still claim
+        them, and :meth:`retire_orphaned_legacy` clears whatever is left once
+        every scope has been rebuilt.
+
+        Retirement rows keep their NULL: that table is append-only by trigger,
+        and :meth:`retired_transaction_ids` reads legacy rows across scopes for
+        exactly this reason.
+        """
+        source, cursor_scope = self.run_scope(run_id)
+        if cursor_scope is None or not observed_ids:
+            return 0
+        legacy = self.conn.execute(
+            "SELECT id, transaction_id FROM transaction_version "
+            "WHERE source = ? AND cursor_scope IS NULL AND is_current = 1",
+            (source,),
+        ).fetchall()
+        claimed = [row["id"] for row in legacy if str(row["transaction_id"]) in observed_ids]
+        for version_id in claimed:
+            self.conn.execute(
+                "UPDATE transaction_version SET cursor_scope = ? WHERE id = ?",
+                (cursor_scope, version_id),
+            )
+        return len(claimed)
+
+    def retire_orphaned_legacy(self, run_id: int) -> int:
+        """Retire the legacy rows no scope's rescan ever claimed.
+
+        The escape hatch for a database whose scopes have all been rebuilt: what
+        is still sitting in the NULL bucket then belongs to no dataset the
+        provider still serves, and without this it would warn forever.
+
+        Deliberately explicit rather than automatic. "Every scope has been
+        rescanned" is a fact only the operator knows — the runtime cannot tell a
+        scope that no longer exists from one that simply has not run yet, and
+        guessing wrong retires live history.
+        """
+        source, _ = self.run_scope(run_id)
+        legacy = self.conn.execute(
+            "SELECT id, transaction_id FROM transaction_version "
+            "WHERE source = ? AND cursor_scope IS NULL AND is_current = 1",
+            (source,),
+        ).fetchall()
+        for row in legacy:
+            self._retire_version(
+                run_id, source, int(row["id"]), str(row["transaction_id"]), RETIRED_BY_ABSENCE
+            )
+        return len(legacy)
+
+    def latest_successful_run_in_scope(
+        self, source: str, cursor_scope: str | None
+    ) -> tuple[int, str, str | None]:
+        """The newest successful run for one `(source, scope)` pair.
+
+        Supersession is a per-scope question now that state is per-scope. Asking
+        it database-wide would let an unrelated dataset's ingest invalidate a
+        packet it provably did not touch.
+        """
+        row = self.conn.execute(
+            "SELECT id FROM runs WHERE state = 'succeeded' AND source = ? "
+            "AND cursor_scope IS ? ORDER BY id DESC LIMIT 1",
+            (source, cursor_scope),
+        ).fetchone()
+        return (int(row["id"]), source, cursor_scope) if row else (0, source, cursor_scope)
+
+    def unattributed_row_count(self, source: str) -> int:
+        """Current rows still in the legacy scope, which adoption declined."""
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM transaction_version "
+            "WHERE source = ? AND cursor_scope IS NULL AND is_current = 1",
+            (source,),
+        ).fetchone()
+        return int(row["n"])
 
     def rollback(self) -> None:
         self.conn.rollback()
@@ -490,13 +644,14 @@ class Store:
         return hashlib.sha256(payload.encode()).hexdigest()[:32]
 
     def upsert_version(self, run_id: int, record: dict) -> str:
-        """Append a version if the content hash changed. Returns 'new'|'changed'|'same'."""
-        source = self._run_sources.get(run_id)
-        if source is None:
-            row = self.conn.execute("SELECT source FROM runs WHERE id = ?", (run_id,)).fetchone()
-            if row is None:
-                raise sqlite3.DatabaseError(f"unknown run ID: {run_id}")
-            source = str(row["source"])
+        """Append a version if the content hash changed. Returns 'new'|'changed'|'same'.
+
+        Identity is `(transaction_id, source, cursor scope)`. Provider IDs are
+        unique within a dataset, not across them, and even where they collide
+        by accident the two rows describe different accounts — so the scope is
+        part of what makes a transaction the same transaction.
+        """
+        source, cursor_scope = self.run_scope(run_id)
 
         txid = record["transaction_id"]
         if record.get("is_deleted"):
@@ -505,12 +660,13 @@ class Store:
             # makes a repeated retire/reappear/retire cycle readable afterwards.
             current = self.conn.execute(
                 "SELECT id FROM transaction_version "
-                "WHERE transaction_id = ? AND source = ? AND is_current = 1",
-                (txid, source),
+                "WHERE transaction_id = ? AND source = ? AND cursor_scope IS ? "
+                "AND is_current = 1",
+                (txid, source, cursor_scope),
             ).fetchall()
             for row in current:
                 self._retire_version(
-                    run_id, source, int(row["id"]), str(txid), RETIRED_BY_TOMBSTONE
+                    run_id, source, int(row["id"]), str(txid), RETIRED_BY_TOMBSTONE, cursor_scope
                 )
             return "deleted" if current else "deleted_missing"
 
@@ -518,8 +674,8 @@ class Store:
         row = self.conn.execute(
             "SELECT id, source_hash, algorithm_version, ruleset_version "
             "FROM transaction_version WHERE transaction_id = ? AND source = ? "
-            "AND is_current = 1",
-            (txid, source),
+            "AND cursor_scope IS ? AND is_current = 1",
+            (txid, source, cursor_scope),
         ).fetchone()
 
         if (
@@ -542,6 +698,7 @@ class Store:
             "source_hash",
             "is_current",
             "source",
+            "cursor_scope",
             "algorithm_version",
             "ruleset_version",
             "posted_on",
@@ -585,6 +742,7 @@ class Store:
             "source_hash": shash,
             "is_current": 1,
             "source": source,
+            "cursor_scope": cursor_scope,
             "algorithm_version": ALGORITHM_VERSION,
             "ruleset_version": RULESET_VERSION,
         }

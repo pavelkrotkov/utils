@@ -255,7 +255,7 @@ def test_latest_run_ignores_failed_runs(tmp_path):
     store.commit()
     store.close()
 
-    assert _latest_run(tmp_path / "review.sqlite") == (successful, "csv")
+    assert _latest_run(tmp_path / "review.sqlite") == (successful, "csv", None)
 
 
 def test_api_missing_exclusion_state_is_visible_as_a_report_limitation():

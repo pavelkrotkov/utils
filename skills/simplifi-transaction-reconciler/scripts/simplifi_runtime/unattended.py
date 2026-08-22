@@ -282,25 +282,30 @@ class RunIdentity:
     cursor_before: str | None = None
     cursor_after: str | None = None
     complete_snapshot: bool = False
-    #: Every scope this source has succeeded under. More than one means the
-    #: analyzed rows are a mixture, because `transaction_version` is isolated
-    #: by source alone.
+    #: Every scope this source has succeeded under. The analyzed rows are no
+    #: longer a mixture of them — state is scoped as of migration 015 — but a
+    #: reader still wants to know the database holds datasets this report is
+    #: silent about.
     known_scopes: tuple[str, ...] = ()
 
     @property
     def dataset(self) -> str:
-        """What the analyzed rows actually cover — not what one run covered.
+        """What the analyzed rows cover.
 
-        Naming the latest run's scope here would be a lie whenever a database
-        holds more than one: the rows are selected by source, so a report can
-        contain scope A's transactions while claiming to be about scope B.
-        Until the stored state is scoped too (issue #136), the honest answer is
-        that the dataset is composite, and saying so is better than picking one
-        of the scopes and sounding certain.
+        This names the run's own scope, which is also the scope the rows were
+        selected under. It used to hedge — before migration 015 the rows were
+        selected by source alone, so a report could contain scope A's
+        transactions while the latest run belonged to scope B, and the only
+        honest answer was "composite". Scoped state made the hedge false in the
+        other direction: the report covers exactly one dataset, and calling it
+        composite would understate what it is.
+
+        Sibling scopes are named rather than folded in, so a reader can tell a
+        one-dataset database from one of several.
         """
-        if len(self.known_scopes) > 1:
-            return f"composite of {len(self.known_scopes)} scopes: " + ", ".join(self.known_scopes)
-        return self.cursor_scope or "unscoped"
+        dataset = self.cursor_scope or "unscoped"
+        others = len([scope for scope in self.known_scopes if scope != self.cursor_scope])
+        return f"{dataset} (1 of {others + 1} scopes in this database)" if others else dataset
 
     def items(self) -> list[tuple[str, str]]:
         """Label/value pairs, in the order a reader wants them."""

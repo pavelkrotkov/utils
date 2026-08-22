@@ -519,6 +519,61 @@ def _run(arguments):
     return args.func(args)
 
 
+def _stored_row(transaction_id):
+    """A row with every column `upsert_version` requires."""
+    return {
+        "transaction_id": transaction_id,
+        "posted_on": "2026-06-01",
+        "transacted_on": None,
+        "account_name": "Checking",
+        "account_id": "account-9",
+        "amount_minor_units": -1240,
+        "currency": "USD",
+        "currency_exponent": 2,
+        "payee_raw": "SQ *AURORA BAKERY",
+        "payee_normalized": "aurora bakery",
+        "payee_canonical": "aurora_bakery",
+        "payee_display": "Aurora Bakery",
+        "norm_rules_applied": "",
+        "original_currency": None,
+        "original_amount": None,
+        "is_foreign_charge": 0,
+        "category": "Uncategorized",
+        "inferred_category": None,
+        "is_uncategorized": 1,
+        "exclusion_flag": 0,
+        "recurring_flag": 0,
+        "kind": "spend",
+        "poisons_statistics": 0,
+        "semantics_reasons": "",
+        "txn_state": "CLEARED",
+        "match_state": None,
+        "scheduled_model_id": None,
+        "scheduled_due_on": None,
+    }
+
+
+def _stored_decision(run_id, transaction_id):
+    return {
+        "decision_id": f"decision-{transaction_id}",
+        "run_id": run_id,
+        "source": "api",
+        "analysis_date": "2026-06-15",
+        "transaction_id": transaction_id,
+        "proposal_id": "proposal-1",
+        "proposal_hash": "hash-1",
+        "dataset_hash": "dataset-1",
+        "decision": "accept",
+        "action": "record_category_proposal",
+        "category": "Groceries",
+        "rationale": "the merchant is a bakery and the amount is typical",
+        "reviewer_kind": "human",
+        "reviewer_id": "pavel",
+        "recorded_at": "2026-06-15T00:00:00+00:00",
+        "validator_version": "1.0.0",
+    }
+
+
 def _seeded_db(tmp_path):
     """A database with one API run, one current row, and one accepted decision."""
     db = tmp_path / "mutate.sqlite"
@@ -766,3 +821,39 @@ def test_the_capability_register_shows_the_payload_status(capsys):
     printed = capsys.readouterr().out
     assert "payload      : UNVERIFIED" in printed
     assert "write gated  :" in printed
+
+
+def test_mutate_plans_only_the_latest_scope_rows(tmp_path, monkeypatch, capsys):
+    """A mutation is about one dataset, like every other reader of state.
+
+    Two API scopes in one database. The transaction the decision names is
+    current only in the *older* scope, so the newer scope's run must not plan
+    it — selecting rows by source alone would, and would then address another
+    dataset's transaction at the provider.
+    """
+    from simplifi_runtime import cli
+
+    db = tmp_path / "scoped.sqlite"
+    store = Store(db)
+    older = store.start_run("api", "scope one")
+    store.record_run_scope(older, None, '{"dataset":"one"}')
+    store.upsert_version(older, _stored_row("txn-only-in-one"))
+    store.finish_run(older, RUN_SUCCEEDED, 1)
+
+    newer = store.start_run("api", "scope two")
+    store.record_run_scope(newer, None, '{"dataset":"two"}')
+    store.upsert_version(newer, _stored_row("txn-only-in-two"))
+    store.finish_run(newer, RUN_SUCCEEDED, 1)
+    store.append_decision_records([_stored_decision(newer, "txn-only-in-one")])
+    store.commit()
+    store.close()
+
+    monkeypatch.setattr(
+        cli, "_transaction_writer", lambda _args: pytest.fail("a dry run builds no writer")
+    )
+
+    assert _run(["mutate", "--db", str(db)]) == 0
+
+    out = capsys.readouterr().out
+    assert "0 mutation(s) planned" in out
+    assert "not a current transaction" in out
