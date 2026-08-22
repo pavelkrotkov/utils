@@ -1254,7 +1254,7 @@ def cmd_mutate(args: argparse.Namespace) -> int:
 
     store = Store(db)
     try:
-        latest_run_id, latest_source = store.latest_successful_run()
+        latest_run_id, latest_source, latest_scope = store.latest_successful_run()
         if not latest_run_id:
             print(f"ERROR {_no_successful_run_error(db)}", file=sys.stderr)
             return 1
@@ -1273,12 +1273,14 @@ def cmd_mutate(args: argparse.Namespace) -> int:
             )
             return 1
         records = store.decision_records()
-        retired = store.retired_transaction_ids(latest_source)
+        # Scoped, like every other reader of materialized state: a mutation is
+        # about one dataset, and a retirement in another says nothing about it.
+        retired = store.retired_transaction_ids(latest_source, latest_scope)
         applied = store.applied_decision_ids()
     finally:
         store.close()
 
-    rows = _rows(db, latest_source)
+    rows = _rows(db, latest_source, latest_scope)
     try:
         plan, skipped = mutations.plan_category_writes(
             records,
