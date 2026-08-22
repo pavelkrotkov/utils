@@ -444,11 +444,98 @@ def secure_open(path: str | Path, mode: str = "w", **kwargs: Any) -> Iterator[IO
         yield handle
 
 
+@contextmanager
+def atomic_open(path: str | Path, **kwargs: Any) -> Iterator[IO[Any]]:
+    """Write a whole artifact, or leave the previous one untouched.
+
+    `secure_open` truncates before the first byte is written. For an append it
+    has to; for a report, a packet, or a payload it means a render that raises
+    halfway leaves a file that is neither the old artifact nor the new one — and
+    the failure mode is not a missing file, which someone would notice, but a
+    *truncated* one, which reads as a real artifact with less in it. A packet
+    cut off mid-array is invalid JSON and gets caught; a report cut off after
+    the run-health cards is a page that says the run found nothing.
+
+    So the bytes go to a temporary file beside the target, are flushed to disk,
+    and only then replace it. `os.replace` is atomic within a filesystem, and
+    the temporary lives in the target's own directory so it always is one. A
+    reader either sees the previous artifact or the new one, never a partial.
+
+    The temporary carries the same owner-only mode from creation, and is
+    removed if anything goes wrong.
+    """
+    target = ensure_parent(path)
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW
+    descriptor = os.open(temporary, flags, FILE_MODE)
+    try:
+        os.fchmod(descriptor, FILE_MODE)
+        handle = os.fdopen(descriptor, "w", **kwargs)
+    except BaseException:
+        os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+        raise
+    try:
+        with handle:
+            yield handle
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    # `harden_existing` on the target, not the temporary: replacing a
+    # world-readable artifact is the ordinary way a stale mode would survive,
+    # and after the rename there is nothing left to tighten.
+    harden_existing(target)
+    os.replace(temporary, target)
+
+
 def secure_write_text(path: str | Path, text: str, *, encoding: str = "utf-8") -> Path:
-    """`Path.write_text` with owner-only permissions."""
-    with secure_open(path, "w", encoding=encoding) as handle:
+    """Write a whole file with owner-only permissions, atomically."""
+    with atomic_open(path, encoding=encoding) as handle:
         handle.write(text)
     return Path(path)
+
+
+def reserve_outputs(
+    outputs: dict[str, str | Path],
+    *,
+    inputs: dict[str, str | Path] | None = None,
+) -> None:
+    """Refuse a run whose artifacts would overwrite each other, or an input.
+
+    Every one of these collisions has the same shape: the run succeeds, exits
+    zero, and the damage is a file that is now something else. `--out` naming
+    the database truncates the ledger *after* the analysis read it, so the
+    command reports what it found and destroys the evidence on the way out.
+
+    Checked once, before anything is opened, against normalized absolute paths
+    — the previous pairwise checks compared `Path` objects directly, so `./db`
+    and `db` were different files to the check and the same file to the
+    kernel. And they were pairwise: `analyze` compared the report against the
+    packet and the packet against the database, but never the report against
+    the database, which is the pair that loses the ledger.
+    """
+    resolved: dict[str, Path] = {
+        label: _resolve_without_requiring_existence(Path(str(value)).expanduser())
+        for label, value in {**(inputs or {}), **outputs}.items()
+        if str(value).strip()
+    }
+    writable = set(outputs)
+    seen: dict[Path, str] = {}
+    for label in sorted(resolved):
+        target = resolved[label]
+        previous = seen.get(target)
+        if previous is None:
+            seen[target] = label
+            continue
+        if label not in writable and previous not in writable:
+            continue  # two reads of one file are fine
+        first, second = sorted((previous, label))
+        raise ArtifactError(
+            f"{first} and {second} both name {target}; one would overwrite the "
+            f"other, so nothing was written. Give them different paths."
+        )
 
 
 def describe_policy(data_dir: Path) -> str:

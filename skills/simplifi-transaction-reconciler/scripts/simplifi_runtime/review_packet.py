@@ -78,6 +78,70 @@ _EXAMPLE_FORBIDDEN_KEYS = _FORBIDDEN_KEYS | {
 }
 _MONEY_EVIDENCE_FIELDS = {"amount", "annual_impact", "median", "now", "previous_typical"}
 
+#: Exactly what a packet transaction may carry. Validating *presence* was never
+#: enough: the required-key check passed on a transaction that also carried
+#: `payee_raw` alongside them, and only the separate forbidden-key scan caught
+#: that — which means a sensitive field nobody thought to forbid by name would
+#: have travelled. An allowlist inverts the burden: a field is in the contract
+#: or it is not in the packet.
+_TRANSACTION_KEYS = {
+    "account_name",
+    "amount",
+    "category",
+    "flags",
+    "inferred_category",
+    "kind",
+    "match_state",
+    "merchant",
+    "posted_on",
+    "provenance",
+    "reason_codes",
+    "transacted_on",
+    "transaction_id",
+    "transaction_state",
+}
+_TRANSACTION_REQUIRED = {
+    "account_name",
+    "amount",
+    "flags",
+    "kind",
+    "merchant",
+    "posted_on",
+    "provenance",
+    "reason_codes",
+    "transaction_id",
+}
+_MERCHANT_KEYS = {"canonical", "display", "normalized"}
+_MONEY_KEYS = {"currency", "currency_exponent", "minor_units"}
+_FLAG_KEYS = {"foreign_charge", "projected", "recurring", "reviewed", "split", "uncategorized"}
+_PROVENANCE_KEYS = {
+    "algorithm_version",
+    "run_id",
+    "ruleset_version",
+    "source_hash",
+    "transaction_version_id",
+}
+_FINDING_KEYS = {
+    "confidence",
+    "confidence_basis",
+    "evidence",
+    "policy_references",
+    "priority",
+    "reason_codes",
+    "scope",
+    "transaction_id",
+    "transaction_ids",
+}
+_PROPOSAL_KEYS = {
+    "category",
+    "confidence",
+    "evidence",
+    "policy_references",
+    "reason_codes",
+    "transaction_id",
+}
+_EXCLUDED_KEYS = {"reason_codes", "transaction_id"}
+
 
 class PacketValidationError(ValueError):
     """Raised when a packet does not satisfy the review-packet contract."""
@@ -154,13 +218,19 @@ def _merchant(row: Mapping[str, Any]) -> dict[str, str]:
     }
 
 
-def _transaction(row: Mapping[str, Any]) -> dict[str, Any]:
+def transaction_view(row: Mapping[str, Any]) -> dict[str, Any]:
     """Map a stored row to the packet's deliberately small transaction shape.
 
     Every field here comes from `evidence`, so the packet, the report and the
     model payload describe the same transaction the same way. This function
     previously re-derived the merchant display, the safe account name and the
     currency exponent itself, and the report derived all three differently.
+
+    Public because the HTML report renders through it. Two artifacts that
+    select and format their own fields will eventually disagree about one, and
+    a reader comparing a report against the packet it was generated with has no
+    way to tell which is right. Deriving one from the other's projection makes
+    the disagreement unrepresentable rather than merely unlikely.
     """
     evidence = evidence_from_row(row)
     return {
@@ -198,6 +268,10 @@ def _transaction(row: Mapping[str, Any]) -> dict[str, Any]:
             "ruleset_version": evidence.provenance.ruleset_version or RULESET_VERSION,
         },
     }
+
+
+#: Retained for existing callers and tests; `transaction_view` is the name.
+_transaction = transaction_view
 
 
 def dataset_hash(rows: Sequence[Mapping[str, Any]]) -> str:
@@ -300,11 +374,12 @@ def _subscription_findings(
     findings = []
     for finding in subscription_findings:
         reason = f"subscription:{finding.kind}"
+        transaction_ids = sorted(str(txid) for txid in finding.transaction_ids)
         impact = series_annual_impact(finding, rows)
         findings.append(
             {
                 "transaction_id": None,
-                "transaction_ids": sorted(str(txid) for txid in finding.transaction_ids),
+                "transaction_ids": transaction_ids,
                 "scope": "merchant_series",
                 "priority": None,
                 "confidence": None,
@@ -423,7 +498,7 @@ def build_packet(
             "stale_account_count": int(stale_account_count),
         },
         "transaction_ids": [_string(row.get("transaction_id")) for row in eligible_rows],
-        "transactions": [_transaction(row) for row in eligible_rows],
+        "transactions": [transaction_view(row) for row in eligible_rows],
         "excluded_transactions": [
             {
                 "transaction_id": _string(row.get("transaction_id")),
@@ -441,7 +516,74 @@ def build_packet(
         "examples": list(examples or []),
     }
     validate_packet(packet)
+    assert_no_sensitive_values(packet, rows)
     return packet
+
+
+#: Row columns whose *value* must not appear anywhere in a packet, whatever it
+#: is called there. The key-name scan cannot catch these: a raw descriptor that
+#: arrived as `merchant.display`, or an account ID rendered as `account_name`,
+#: sits under a permitted key and passes every structural check.
+_SENSITIVE_COLUMNS = ("account_id", "payee_raw", "source_path", "original_amount")
+
+#: Below this a value is not identifying and collides with ordinary prose. The
+#: same threshold `egress` uses, for the same reason: a three-character token
+#: proves nothing and would fail every packet.
+_MIN_SENSITIVE_LENGTH = 4
+
+
+def assert_no_sensitive_values(
+    packet: Mapping[str, Any], rows: Sequence[Mapping[str, Any]]
+) -> None:
+    """Check the finished packet against the rows it was built from.
+
+    The structural contract says which *fields* may appear. This asks the
+    different question of whether a forbidden *value* ended up in the document
+    anyway — through a rule's evidence dictionary, a curated example, a legacy
+    row whose `payee_display` was really the bank descriptor, or a future
+    mapping change. It is what keeps the allowlist a guarantee rather than a
+    convention, and it runs on the exact text that is about to be written.
+
+    Modelled on `egress.assert_payload_is_permitted`, deliberately: the packet
+    and the model payload are two agent-facing artifacts, and a value unsafe
+    for one is unsafe for the other. A packet that refused less than the
+    payload would be the softer of two doors into the same room.
+
+    A forbidden value that IS a value we are entitled to publish is not a
+    finding — a descriptor that normalization found nothing to strip equals its
+    own merchant name, and refusing that would fail the simplest merchants.
+    """
+    document = json.dumps(packet, ensure_ascii=False, sort_keys=True)
+    for row in rows:
+        permitted = _publishable_values(row)
+        for column in _SENSITIVE_COLUMNS:
+            value = row.get(column)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if len(text) < _MIN_SENSITIVE_LENGTH:
+                continue
+            if any(text == item or text in item for item in permitted):
+                continue
+            if text in document:
+                raise PacketValidationError(
+                    f"packet contains {column}, which is not publishable "
+                    f"(transaction {row.get('transaction_id', 'unknown')})"
+                )
+
+
+def _publishable_values(row: Mapping[str, Any]) -> set[str]:
+    """Exactly what this row is entitled to contribute to a packet."""
+    evidence = evidence_from_row(row)
+    values = {
+        evidence.merchant.safe_display(),
+        evidence.merchant.normalized,
+        evidence.merchant.canonical,
+        evidence.account.display,
+        evidence.money.formatted(),
+        evidence.transaction_id,
+    }
+    return {value for value in values if value}
 
 
 def _require_mapping(packet: Mapping[str, Any], key: str) -> Mapping[str, Any]:
@@ -449,6 +591,169 @@ def _require_mapping(packet: Mapping[str, Any], key: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise PacketValidationError(f"{key} must be an object")
     return value
+
+
+def _object_at(parent: Mapping[str, Any], key: str, path: str) -> Mapping[str, Any]:
+    value = parent.get(key)
+    if not isinstance(value, Mapping):
+        raise PacketValidationError(f"{path}.{key} must be an object")
+    return value
+
+
+def _check_keys(
+    value: Mapping[str, Any],
+    path: str,
+    allowed: set[str],
+    required: set[str] | None = None,
+) -> None:
+    keys = {str(key) for key in value}
+    unknown = sorted(keys - allowed)
+    if unknown:
+        raise PacketValidationError(f"{path} contains unsupported fields: {unknown}")
+    missing = sorted((required if required is not None else allowed) - keys)
+    if missing:
+        raise PacketValidationError(f"{path} is missing required fields: {missing}")
+
+
+def _check_int(value: Any, path: str) -> None:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise PacketValidationError(f"{path} must be an integer")
+
+
+def _check_string(value: Any, path: str, *, optional: bool = False) -> None:
+    if optional and value is None:
+        return
+    if not isinstance(value, str):
+        raise PacketValidationError(f"{path} must be a string")
+
+
+def _check_money(value: Any, path: str) -> None:
+    """A money fact is three fields or it is not a money fact.
+
+    Rejected rather than coerced. A packet whose amount is a bare float has
+    already lost the distinction this runtime is built on — 1500 is ¥1,500 and
+    $15.00, and a reader with only the number cannot tell which it was handed.
+    """
+    if not isinstance(value, Mapping):
+        raise PacketValidationError(f"{path} must be an object")
+    _check_keys(value, path, _MONEY_KEYS)
+    _check_int(value.get("minor_units"), f"{path}.minor_units")
+    _check_int(value.get("currency_exponent"), f"{path}.currency_exponent")
+    exponent = value.get("currency_exponent")
+    if isinstance(exponent, int) and not 0 <= exponent <= 4:
+        raise PacketValidationError(
+            f"{path}.currency_exponent is not a plausible ISO 4217 exponent"
+        )
+    currency = value.get("currency")
+    _check_string(currency, f"{path}.currency")
+    if not isinstance(currency, str) or not currency.strip():
+        raise PacketValidationError(f"{path}.currency is required")
+
+
+def _check_string_list(value: Any, path: str) -> None:
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise PacketValidationError(f"{path} must be an array of strings")
+
+
+def _validate_transaction_shape(transaction: Any, path: str) -> None:
+    if not isinstance(transaction, Mapping):
+        raise PacketValidationError(f"{path} must be an object")
+    _check_keys(transaction, path, _TRANSACTION_KEYS, _TRANSACTION_REQUIRED)
+
+    _check_string(transaction.get("transaction_id"), f"{path}.transaction_id")
+    _check_string(transaction.get("posted_on"), f"{path}.posted_on")
+    _check_string(transaction.get("transacted_on"), f"{path}.transacted_on", optional=True)
+    _check_string(transaction.get("category"), f"{path}.category", optional=True)
+    _check_string(transaction.get("inferred_category"), f"{path}.inferred_category", optional=True)
+    _check_string(transaction.get("kind"), f"{path}.kind")
+
+    account_name = transaction.get("account_name")
+    _check_string(account_name, f"{path}.account_name")
+    if not isinstance(account_name, str) or not account_name.strip():
+        # An empty account is what the packet is supposed to be unable to say.
+        # The unnamed case has its own word, and it is not the empty string.
+        raise PacketValidationError(
+            f"{path}.account_name must name the account or be {UNKNOWN_ACCOUNT!r}"
+        )
+
+    merchant = _object_at(transaction, "merchant", path)
+    _check_keys(merchant, f"{path}.merchant", _MERCHANT_KEYS)
+    for key in sorted(_MERCHANT_KEYS):
+        _check_string(merchant.get(key), f"{path}.merchant.{key}")
+    if not str(merchant.get("display") or "").strip():
+        raise PacketValidationError(f"{path}.merchant.display must not be empty")
+
+    _check_money(transaction.get("amount"), f"{path}.amount")
+
+    flags = _object_at(transaction, "flags", path)
+    # Every flag, not only `projected`. A packet that simply omitted a flag
+    # would read as False to any consumer using `.get`, so a projection that
+    # lost its marker in transit would be presented as a real charge.
+    _check_keys(flags, f"{path}.flags", _FLAG_KEYS)
+    for key in sorted(_FLAG_KEYS):
+        if not isinstance(flags.get(key), bool):
+            raise PacketValidationError(f"{path}.flags.{key} must be boolean")
+
+    _check_string_list(transaction.get("reason_codes"), f"{path}.reason_codes")
+
+    provenance = _object_at(transaction, "provenance", path)
+    _check_keys(provenance, f"{path}.provenance", _PROVENANCE_KEYS)
+    for key in ("algorithm_version", "ruleset_version", "source_hash"):
+        _check_string(provenance.get(key), f"{path}.provenance.{key}")
+
+
+def _validate_finding_shape(finding: Any, path: str) -> None:
+    if not isinstance(finding, Mapping):
+        raise PacketValidationError(f"{path} must be an object")
+    _check_keys(finding, path, _FINDING_KEYS)
+    _check_string(finding.get("transaction_id"), f"{path}.transaction_id", optional=True)
+    _check_string_list(finding.get("transaction_ids"), f"{path}.transaction_ids")
+    if not finding["transaction_ids"]:
+        raise PacketValidationError(f"{path}.transaction_ids must name at least one transaction")
+    _check_string(finding.get("scope"), f"{path}.scope")
+    _check_string(finding.get("confidence_basis"), f"{path}.confidence_basis")
+    _check_string_list(finding.get("reason_codes"), f"{path}.reason_codes")
+    _check_string_list(finding.get("policy_references"), f"{path}.policy_references")
+    for key in ("priority", "confidence"):
+        value = finding.get(key)
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))):
+            raise PacketValidationError(f"{path}.{key} must be a number or null")
+    evidence = finding.get("evidence")
+    if not isinstance(evidence, (Mapping, list)):
+        raise PacketValidationError(f"{path}.evidence must be an object or an array")
+    for money_path, money in _money_facts(evidence, f"{path}.evidence"):
+        _check_money(money, money_path)
+
+
+def _money_facts(value: Any, path: str):
+    """Every nested money-shaped fact, so malformed ones cannot hide in evidence."""
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if str(key) in _MONEY_EVIDENCE_FIELDS:
+                yield f"{path}.{key}", item
+            else:
+                yield from _money_facts(item, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from _money_facts(item, f"{path}[{index}]")
+
+
+def _validate_proposal_shape(proposal: Any, path: str) -> None:
+    if not isinstance(proposal, Mapping):
+        raise PacketValidationError(f"{path} must be an object")
+    _check_keys(proposal, path, _PROPOSAL_KEYS)
+    _check_string(proposal.get("transaction_id"), f"{path}.transaction_id")
+    _check_string(proposal.get("category"), f"{path}.category", optional=True)
+    _check_string_list(proposal.get("reason_codes"), f"{path}.reason_codes")
+    _check_string_list(proposal.get("policy_references"), f"{path}.policy_references")
+    confidence = proposal.get("confidence")
+    if confidence is not None:
+        if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+            raise PacketValidationError(f"{path}.confidence must be a number or null")
+        if not 0.0 <= float(confidence) <= 1.0:
+            raise PacketValidationError(f"{path}.confidence must be between 0 and 1")
+    if not isinstance(proposal.get("evidence"), Mapping):
+        raise PacketValidationError(f"{path}.evidence must be an object")
 
 
 def _validate_examples(examples: list[Any]) -> None:
@@ -508,33 +813,27 @@ def validate_packet(packet: Mapping[str, Any]) -> None:
     ]:
         raise PacketValidationError("transaction_ids must match transactions")
     for index, transaction in enumerate(transactions):
-        if not isinstance(transaction, Mapping):
-            raise PacketValidationError(f"transactions[{index}] must be an object")
-        for key in (
-            "transaction_id",
-            "posted_on",
-            "account_name",
-            "merchant",
-            "amount",
-            "kind",
-            "reason_codes",
-            "provenance",
-        ):
-            if key not in transaction:
-                raise PacketValidationError(f"transactions[{index}].{key} is required")
-        flags = transaction.get("flags")
-        if not isinstance(flags, Mapping):
-            raise PacketValidationError(f"transactions[{index}].flags must be an object")
-        if not isinstance(flags.get("projected"), bool):
-            raise PacketValidationError(f"transactions[{index}].flags.projected must be boolean")
+        _validate_transaction_shape(transaction, f"transactions[{index}]")
 
     for key in ("excluded_transactions", "findings", "category_proposals", "examples"):
         if not isinstance(packet.get(key), list):
             raise PacketValidationError(f"{key} must be an array")
-    if not isinstance(packet.get("limitations"), list):
-        raise PacketValidationError("limitations must be an array")
+    _check_string_list(packet.get("limitations"), "limitations")
     if not isinstance(packet.get("policy_references"), list):
         raise PacketValidationError("policy_references must be an array")
+
+    for index, excluded in enumerate(packet["excluded_transactions"]):
+        path = f"excluded_transactions[{index}]"
+        if not isinstance(excluded, Mapping):
+            raise PacketValidationError(f"{path} must be an object")
+        _check_keys(excluded, path, _EXCLUDED_KEYS)
+        _check_string(excluded.get("transaction_id"), f"{path}.transaction_id")
+        _check_string_list(excluded.get("reason_codes"), f"{path}.reason_codes")
+    for index, finding in enumerate(packet["findings"]):
+        _validate_finding_shape(finding, f"findings[{index}]")
+    for index, proposal in enumerate(packet["category_proposals"]):
+        _validate_proposal_shape(proposal, f"category_proposals[{index}]")
+
     _validate_examples(packet["examples"])
     _assert_no_forbidden_keys(packet)
     try:

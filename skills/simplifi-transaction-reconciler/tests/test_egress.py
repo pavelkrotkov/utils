@@ -481,7 +481,8 @@ def test_a_prompt_path_colliding_with_the_database_is_refused(prepared, capsys):
     code = run(["classify", "--db", str(collision), "--out", str(prepared / "collide.csv")])
 
     assert code == 2
-    assert "also --db" in capsys.readouterr().err
+    error = capsys.readouterr().err
+    assert "--db" in error and "the derived payload path" in error
     assert collision.read_bytes() == db.read_bytes()
 
 

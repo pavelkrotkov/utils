@@ -826,11 +826,16 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         return 1
     out = Path(args.out)
     packet_path = Path(args.packet_out) if args.packet_out else out.with_name("review-packet.json")
-    if out.resolve() == packet_path.resolve():
-        print("ERROR --out and --packet-out must name different files", file=sys.stderr)
-        return 2
-    if Path(args.db).resolve() == packet_path.resolve():
-        print("ERROR --packet-out and --db must name different files", file=sys.stderr)
+    try:
+        # The database is an input here, not an output: `analyze` has already
+        # read it, and a report or packet written over it would destroy the
+        # ledger after a run that reported success.
+        artifacts.reserve_outputs(
+            {"--out": out, "--packet-out": packet_path},
+            inputs={"--db": args.db},
+        )
+    except artifacts.ArtifactError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
         return 2
     artifacts.ensure_parent(out)
     packet = review_packet.build_packet(
@@ -1096,14 +1101,14 @@ def cmd_classify(args: argparse.Namespace) -> int:
     # and then the payload write truncated the database — a successful exit
     # that destroyed its own input.
     prompt_path = Path(args.out).with_suffix(".prompt.txt")
-    for label, other in (("--db", args.db), ("--out", args.out)):
-        if prompt_path == Path(other):
-            print(
-                f"ERROR the payload would be written to {prompt_path}, which is "
-                f"also {label}; choose a different --out",
-                file=sys.stderr,
-            )
-            return 2
+    try:
+        artifacts.reserve_outputs(
+            {"--out": args.out, "the derived payload path": prompt_path},
+            inputs={"--db": args.db},
+        )
+    except artifacts.ArtifactError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
     try:
         rows, _, source = _analysis_rows(args)
     except ValueError as exc:
@@ -1194,7 +1199,7 @@ def cmd_classify(args: argparse.Namespace) -> int:
 
     out = Path(args.out)
     rows_by_id = {row["transaction_id"]: row for row in residue}
-    with artifacts.secure_open(out, "w", newline="", encoding="utf-8") as fh:
+    with artifacts.atomic_open(out, newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
         writer.writerow(
             [
