@@ -1,6 +1,7 @@
+from simplifi_runtime.money import Money
 from simplifi_runtime.prioritize import Prioritized, Signal
 from simplifi_runtime.report import render
-from simplifi_runtime.subscriptions import Finding
+from simplifi_runtime.subscriptions import RecurringFinding, SeriesRef
 
 
 def test_csv_report_surfaces_capability_limit_and_row_provenance():
@@ -50,7 +51,24 @@ def test_report_renders_all_prioritized_rows_and_findings():
         }
 
     prioritized = [Prioritized(row(index), [Signal("review", 1.0, {})]) for index in range(61)]
-    findings = [Finding("hike", f"Merchant {index}", "detail") for index in range(41)]
+    findings = [
+        RecurringFinding(
+            kind="hike",
+            series=(
+                SeriesRef(
+                    merchant=f"Merchant {index}",
+                    account="",
+                    transaction_ids=(f"tx-{index}",),
+                    monthly=Money(100, "USD"),
+                    interval_days=30.0,
+                    last_charge="2026-08-01",
+                ),
+            ),
+            detail="detail",
+            annual_impact=Money(1200, "USD"),
+        )
+        for index in range(41)
+    ]
 
     html = render(
         run_id=4,

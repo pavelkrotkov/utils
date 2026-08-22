@@ -106,16 +106,44 @@ def test_an_unattended_classify_still_writes_its_payload_locally(ingested):
 # --- unattended runs never mutate -------------------------------------------
 
 
-def test_no_command_offers_a_mutating_option():
-    """The read-only boundary is a property of the interface, not a habit."""
+def test_only_mutate_offers_a_mutating_option():
+    """Writing is one command's business, and the interface says so.
+
+    The boundary used to be "no command writes". `mutate` moved it to "one
+    command writes, deliberately, and every other one still cannot" — which is
+    the invariant worth defending, because a write reachable from `analyze` or
+    `classify` is a write nobody asked for.
+    """
     parser = build_parser()
     forbidden = ("--write", "--apply", "--push", "--commit", "--update-provider", "--delete")
-    rendered = parser.format_help()
-    for subparser in _subparsers(parser).choices.values():
-        rendered += subparser.format_help()
+    assert not any(option in parser.format_help() for option in forbidden)
 
-    for option in forbidden:
-        assert option not in rendered, option
+    for name, subparser in _subparsers(parser).choices.items():
+        rendered = subparser.format_help()
+        for option in forbidden:
+            if name == "mutate" and option == "--apply":
+                continue
+            assert option not in rendered, f"{name} offers {option}"
+
+
+def test_an_unattended_run_cannot_apply_a_mutation(tmp_path):
+    """A scheduled write has nobody to answer for it."""
+    assert (
+        run(
+            [
+                "mutate",
+                "--apply",
+                "--unattended",
+                "--db",
+                str(tmp_path / "simplifi.sqlite"),
+                "--authorized-by",
+                "someone",
+                "--authorization-note",
+                "a note long enough to count",
+            ]
+        )
+        == 2
+    )
 
 
 def test_an_unattended_analyze_leaves_the_transaction_table_untouched(ingested):

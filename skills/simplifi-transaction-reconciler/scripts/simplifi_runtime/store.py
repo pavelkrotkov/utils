@@ -807,6 +807,145 @@ class Store:
             )
         return [dict(row) for row in rows]
 
+    # --- mutations ----------------------------------------------------------
+
+    def record_mutation_attempt(
+        self,
+        *,
+        attempt_id: str,
+        capability: str,
+        transaction_id: str,
+        decision_id: str | None,
+        run_id: int | None,
+        source: str,
+        source_hash: str,
+        authorization,
+        before_document,
+        after_document,
+        change_summary: str,
+        undoes_attempt_id: str | None = None,
+    ) -> None:
+        """Record an intended write. Committed *before* the request leaves.
+
+        The documents are stored whole, as JSON text, exactly as they were read
+        and as they will be sent. A field-level diff would be smaller and would
+        also be useless for an undo, which has to reconstruct a document.
+        """
+        self.conn.execute(
+            "INSERT INTO mutation_attempt (attempt_id, capability, transaction_id,"
+            " decision_id, run_id, source, source_hash, authorized_by, authorization_note,"
+            " authorized_at, before_document, after_document, change_summary, attempted_at,"
+            " undoes_attempt_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                attempt_id,
+                capability,
+                transaction_id,
+                decision_id,
+                run_id,
+                source,
+                source_hash,
+                authorization.authorized_by,
+                authorization.note,
+                authorization.authorized_at,
+                json.dumps(before_document, sort_keys=True),
+                json.dumps(after_document, sort_keys=True),
+                change_summary,
+                _now(),
+                undoes_attempt_id,
+            ),
+        )
+
+    def record_mutation_outcome(
+        self,
+        *,
+        attempt_id: str,
+        outcome: str,
+        job_id: str = "",
+        job_status: str = "",
+        error_class: str = "",
+        error_message: str = "",
+    ) -> None:
+        """Record what the provider did. An attempt with no outcome never settled."""
+        self.conn.execute(
+            "INSERT INTO mutation_outcome (attempt_id, outcome, job_id, job_status,"
+            " error_class, error_message, settled_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                attempt_id,
+                outcome,
+                job_id or None,
+                job_status or None,
+                error_class or None,
+                error_message or None,
+                _now(),
+            ),
+        )
+
+    def mutation_attempt(self, attempt_id: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM mutation_attempt WHERE attempt_id = ?", (attempt_id,)
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def mutation_outcome(self, attempt_id: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM mutation_outcome WHERE attempt_id = ?", (attempt_id,)
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def undo_of(self, attempt_id: str) -> dict | None:
+        """The attempt that reversed this one, if any — settled or not.
+
+        The newest one, and deliberately not filtered by outcome: an undo that
+        left and never settled may have landed, so the caller decides. Newest
+        rather than first because a rejected undo may be followed by a
+        successful retry, and it is the retry that must block a third.
+        """
+        row = self.conn.execute(
+            "SELECT * FROM mutation_attempt WHERE undoes_attempt_id = ? ORDER BY id DESC LIMIT 1",
+            (attempt_id,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def applied_decision_ids(self) -> set[str]:
+        """Decisions already carried out, so a rerun does not write them twice.
+
+        An attempt with no outcome counts as applied. It may have landed, and
+        the safe reading of "we do not know" is not "do it again".
+
+        **Before the write path is unblocked, this needs a database constraint
+        behind it.** Read here and acted on later, it is a check-then-write:
+        two overlapping processes can both see a decision unapplied. Today the
+        caller re-reads under `begin_immediate()` and SQLite's write lock
+        serializes them, so the guarantee is the lock's rather than the
+        schema's. The structural fix is a partial unique index —
+        `CREATE UNIQUE INDEX … ON mutation_attempt (decision_id)
+        WHERE undoes_attempt_id IS NULL` — and it belongs with a test that
+        genuinely runs two concurrent applies, which is why it is not here yet.
+        The mutation register records it alongside the other write-path
+        preconditions so it is not found only by reading this docstring.
+        """
+        return {
+            str(row["decision_id"])
+            for row in self.conn.execute(
+                "SELECT DISTINCT a.decision_id FROM mutation_attempt a "
+                "LEFT JOIN mutation_outcome o ON o.attempt_id = a.attempt_id "
+                "WHERE a.decision_id IS NOT NULL AND a.undoes_attempt_id IS NULL "
+                "AND (o.outcome IS NULL OR o.outcome != 'failed')"
+            )
+        }
+
+    def mutation_history(self, limit: int = 20) -> list[dict]:
+        """Attempts newest first, each with its outcome where one exists."""
+        rows = self.conn.execute(
+            "SELECT a.*, o.outcome, o.job_id, o.job_status, o.error_class, o.error_message,"
+            " o.settled_at FROM mutation_attempt a"
+            " LEFT JOIN mutation_outcome o ON o.attempt_id = a.attempt_id"
+            " ORDER BY a.id DESC LIMIT ?",
+            (int(limit),),
+        )
+        return [dict(row) for row in rows]
+
     def record_accounts(self, names: set[str]) -> None:
         for name in sorted(names):
             self.conn.execute(

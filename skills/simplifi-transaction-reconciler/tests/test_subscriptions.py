@@ -147,7 +147,11 @@ def test_ghost_annual_impact_uses_observed_quarterly_cadence():
     findings = analyse(rows, today=date(2027, 2, 1))
     ghost = next(finding for finding in findings if finding.kind == "ghost")
 
-    assert ghost.annual_impact == pytest.approx(100 * 365.25 / 90, rel=0.02)
+    # Minor units, in the series' own currency: $100 a quarter is about $406 a
+    # year, and the figure is money rather than a bare number a reader has to
+    # assume is dollars.
+    assert ghost.annual_impact.currency == "USD"
+    assert ghost.annual_impact.minor_units == pytest.approx(10000 * 365.25 / 90, rel=0.02)
 
 
 def test_repeated_merchant_token_does_not_create_self_twin():
