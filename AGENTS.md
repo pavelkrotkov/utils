@@ -217,3 +217,35 @@ Agent Notes
 
 There are no Cursor or Copilot rule files in this repo.
 If you add one in the future, mirror it here and keep this file updated.
+
+-------------------------------------------------------------------------------
+Development Workflow (agents)
+-------------------------------------------------------------------------------
+
+Follow this sequence for every change, not just large ones.
+
+1. Pull `main`.
+2. Do the work on a new branch in its own git worktree cut from `main`, so
+   unrelated work never shares a checkout:
+   `git worktree add -b <branch> <path> origin/main`
+3. Open the pull request as a draft, then run two review cycles. Each cycle:
+   - Wait ~15 minutes for the review bots to post.
+   - Action every review comment: implement it if you agree and push the fix;
+     refute it in a reply, with evidence, if you disagree.
+   - Fix any CI failure and push.
+   - Reply to every unresolved review thread whether you agreed or not, then
+     resolve it.
+   Two cycles matter because the second catches reviews prompted by fixes
+   pushed during the first.
+4. Merge once every thread is addressed and CI is green.
+
+Do not merge a pull request whose review threads are still open, and do not
+merge on a red or unverified head.
+
+Notes:
+- Bot review findings are bug reports until disproven. Verify each against the
+  actual diff rather than accepting or dismissing it on the summary alone;
+  bots have both caught real defects here and mis-described diffs entirely.
+- Checks passing is not proof a change is correct, only that nothing checked
+  rejected it. When a defect slips through green CI, add an assertion that
+  would have caught it.
