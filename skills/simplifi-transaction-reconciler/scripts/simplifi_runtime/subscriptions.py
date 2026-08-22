@@ -17,7 +17,7 @@ from datetime import date
 from itertools import pairwise
 
 from .evidence import account_ref
-from .money import money_from_row
+from .money import Money, money_from_row
 from .semantics import is_projected, is_statistics_eligible
 
 #: A series needs this many cleared charges before we will call it recurring.
@@ -96,6 +96,17 @@ BILL_CATEGORIES = {
 MIN_GHOST_HISTORY = 1
 
 
+def _amount(series: Series, major_units: float) -> str:
+    """A derived figure rendered as money, in the series' own currency.
+
+    These read `$1,000.00 -> $1,200.00` regardless of currency, so a ¥1,000 to
+    ¥1,200 increase was reported in dollars — a number a reader would act on,
+    with a symbol that was simply wrong.
+    """
+    money = series.money(major_units)
+    return f"{money.formatted(grouped=True)} {money.currency}"
+
+
 @dataclass
 class Series:
     merchant: str
@@ -135,6 +146,26 @@ class Series:
                 }
             )
         )
+
+    @property
+    def currency(self) -> str:
+        """The series' currency, taken from its own rows.
+
+        A series is per-merchant and per-account, so its charges share an
+        account and therefore a currency. Reported so that every figure derived
+        from `amounts` can be rendered as money rather than as a bare number
+        that a reader has to assume is dollars.
+        """
+        for row in (*self.charges, *self.projected):
+            code = str(row.get("currency") or "").strip()
+            if code:
+                return code.upper()
+        return "USD"
+
+    def money(self, major_units: float) -> Money:
+        """A derived figure carried back into this series' own currency."""
+        exponent = Money(0, self.currency).exponent
+        return Money(round(major_units * (10**exponent)), self.currency)
 
     @property
     def amounts(self) -> list[float]:
@@ -265,7 +296,7 @@ def _hike(s: Series, interval: float) -> Finding | None:
     return Finding(
         "hike",
         s.merchant,
-        f"${old:,.2f} -> ${new:,.2f} per charge ({new / old:.1f}x)",
+        f"{_amount(s, old)} -> {_amount(s, new)} per charge ({new / old:.1f}x)",
         (new - old) * (30.44 / interval) * 12,
         transaction_ids=s.transaction_ids,
     )
@@ -476,7 +507,8 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
                         "renamed",
                         f"{old.merchant} -> {cand.merchant}",
                         f"stopped {old.last_charge}; {cand.merchant} started {started} at "
-                        f"${cand.monthly:,.2f} (was ${old.monthly:,.2f}) and shares "
+                        f"{_amount(cand, cand.monthly)} (was {_amount(old, old.monthly)}) "
+                        f"and shares "
                         f"'{sorted(shared)[0]}'. Same service, new name — not a "
                         f"cancellation.",
                         0.0,
@@ -492,7 +524,7 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
             key, started, cand = best
             f.detail += (
                 f" Possibly replaced by {cand.merchant} (started {started}, "
-                f"${cand.monthly:,.2f}/mo) — similar price and timing "
+                f"{_amount(cand, cand.monthly)}/mo) — similar price and timing "
                 f"only, names unrelated, so treat as a guess."
             )
 
@@ -505,13 +537,13 @@ def summary(rows: list[dict], today: date | None = None) -> str:
     live = {k: s for k, s in _series(rows).items() if _is_live(s, today)}
     lines = [
         f"{len(live)} live subscriptions, "
-        f"${sum(s.monthly for s in live.values()):,.2f}/mo "
-        f"(${sum(s.monthly for s in live.values()) * 12:,.2f}/yr)",
+        f"{sum(s.monthly for s in live.values()):,.2f}/mo "
+        f"({sum(s.monthly for s in live.values()) * 12:,.2f}/yr)",
         "",
     ]
     for _key, s in sorted(live.items(), key=lambda kv: -kv[1].monthly):
         lines.append(
-            f"  ${s.monthly:>8,.2f}/mo  {s.merchant[:34]:34} "
+            f"  {_amount(s, s.monthly):>12}/mo  {s.merchant[:34]:34} "
             f"every ~{s.interval_days:.0f}d, last {s.last_charge}"
         )
     findings = analyse(rows, today)

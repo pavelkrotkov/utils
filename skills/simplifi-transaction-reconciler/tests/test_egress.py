@@ -127,7 +127,7 @@ def test_redacting_the_account_removes_it_entirely():
 def test_redacting_the_amount_coarsens_it_to_a_band():
     record = egress.minimize([row()], redact="amount").records[0]
 
-    assert record[egress.AMOUNT] == "debit 0-20"
+    assert record[egress.AMOUNT] == "debit 0-20 USD"
     assert "12.40" not in str(record)
 
 
@@ -147,9 +147,9 @@ def test_a_band_is_expressed_in_the_row_s_own_currency():
     usd = egress.amount_band(row(amount_minor_units=-50_000, currency="USD"))
     jpy = egress.amount_band(row(amount_minor_units=-50_000, currency="JPY", currency_exponent=0))
 
-    assert usd == "debit 500-inf"
+    assert usd == "debit 500-inf USD"
     # Same integer, a hundredth of the boundary in a zero-decimal currency.
-    assert jpy == "debit 50000-inf"
+    assert jpy == "debit 50000-inf JPY"
 
 
 # --- minimization -----------------------------------------------------------
@@ -424,6 +424,14 @@ def test_a_zero_amount_is_not_called_a_debit():
     assert egress.minimize([row(amount_minor_units=0)], redact="amount").records[0]["amount"] == (
         "zero"
     )
+
+
+def test_the_model_is_told_which_currency_an_amount_is_in():
+    """Correct precision is not enough: -1500 is both ¥1,500 and $1,500."""
+    jpy = row(amount_minor_units=-1500, currency="JPY", currency_exponent=0)
+
+    assert egress.minimize([jpy]).records[0][egress.AMOUNT] == "-1500 JPY"
+    assert egress.minimize([row()]).records[0][egress.AMOUNT] == "-12.40 USD"
 
 
 def test_send_refuses_a_payload_that_was_never_reviewed(prepared, capsys):

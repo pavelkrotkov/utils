@@ -136,8 +136,8 @@ therefore always fails once — that is the two-step confirmation working.
 `--dry-run` is retained for existing scripts but is now the default behaviour;
 passing it together with `--send` is an error.
 
-**What is sent:** the normalized payee name, the amount, the account name, the
-posted date, and a per-request surrogate ID (`t1`, `t2`, …). The category
+**What is sent:** the normalized payee name, the amount *with its currency
+code*, the account name, the posted date, and a per-request surrogate ID (`t1`, `t2`, …). The category
 taxonomy goes too, since the model must choose from it. The *raw* bank
 descriptor is never sent — it can carry card fragments, terminal IDs, and store
 locations that normalization removes. Both adapters now agree on the safe

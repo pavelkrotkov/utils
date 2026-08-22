@@ -405,10 +405,13 @@ def test_every_artifact_renders_a_zero_decimal_amount_at_its_own_precision(tmp_p
         "currency": "JPY",
         "currency_exponent": 0,
     }
+    # The bare figure is what the payload scan matches on; the model is shown
+    # the figure with its currency.
     assert egress.format_amount(row) == "-1500"
+    assert egress.sendable_amount(row) == "-1500 JPY"
     # The band edges are minor-unit thresholds, so they read as ¥2000 here and
     # as $20 on a USD row. The label describes the row's own magnitudes.
-    assert egress.amount_band(row) == "debit 0-2000"
+    assert egress.amount_band(row) == "debit 0-2000 JPY"
 
 
 def test_a_derived_figure_uses_the_row_s_currency_not_the_row_s_amount():
@@ -474,7 +477,15 @@ def test_a_currency_that_is_not_a_code_is_refused_at_ingest(tmp_path, bad):
 # --- the migration cleans up what the old fallback left behind ---------------
 
 
-def _legacy_store(tmp_path: Path, rows: list[tuple[str, str, str]]):
+def _legacy_store(
+    tmp_path: Path,
+    rows: list[tuple[str, str, str | None]],
+    *,
+    eligibility: str = "report_exclusion_unknown,eligible",
+    review_eligible: int = 1,
+    exclusion_flag: int = 2,
+    posted_on: str = "2026-08-01",
+):
     """A pre-014 database holding rows the old adapter would have written.
 
     Migrated only as far as 013, then written to with raw SQL — the current
@@ -494,22 +505,33 @@ def _legacy_store(tmp_path: Path, rows: list[tuple[str, str, str]]):
 
     legacy = Store(tmp_path / "legacy.sqlite", migrations_dir=staged)
     run_id = legacy.start_run("api", "legacy")
+    columns = (
+        "transaction_id, run_id, observed_at, source_hash, is_current, source,"
+        " algorithm_version, ruleset_version, posted_on, account_name, account_id,"
+        " amount_minor_units, currency, currency_exponent, payee_raw, payee_normalized,"
+        " payee_canonical, payee_display, norm_rules_applied, is_foreign_charge,"
+        " category, is_uncategorized, recurring_flag, kind, poisons_statistics,"
+        " semantics_reasons, exclusion_flag, eligibility_reason_codes, review_eligible"
+    )
     for transaction_id, account_name, account_id in rows:
         legacy.conn.execute(
-            "INSERT INTO transaction_version ("
-            " transaction_id, run_id, observed_at, source_hash, is_current, source,"
-            " algorithm_version, ruleset_version, posted_on, account_name, account_id,"
-            " amount_minor_units, currency, currency_exponent, payee_raw, payee_normalized,"
-            " payee_canonical, payee_display, norm_rules_applied, is_foreign_charge,"
-            " category, is_uncategorized, recurring_flag,"
-            " kind, poisons_statistics, semantics_reasons,"
-            " exclusion_flag, eligibility_reason_codes, review_eligible"
-            ") VALUES (?, ?, '2026-08-01T00:00:00+00:00', 'hash', 1, 'api',"
-            " '0.1.0', '0.2.0', '2026-08-01', ?, ?, -1200, 'USD', 2,"
-            " 'Costco', 'Costco', 'costco', 'Costco', '', 0,"
-            " 'Groceries', 0, 0, 'spend', 0, '',"
-            " 2, 'report_exclusion_unknown,eligible', 1)",
-            (transaction_id, run_id, account_name, account_id),
+            f"INSERT INTO transaction_version ({columns}) VALUES ("
+            " ?, ?, '2026-08-01T00:00:00+00:00', 'hash', 1, 'api',"
+            " '0.1.0', '0.2.0', ?, ?, ?,"
+            " -1200, 'USD', 2, 'Costco', 'Costco',"
+            " 'costco', 'Costco', '', 0,"
+            " 'Groceries', 0, 0, 'spend', 0,"
+            " '', ?, ?, ?)",
+            (
+                transaction_id,
+                run_id,
+                posted_on,
+                account_name,
+                account_id,
+                exclusion_flag,
+                eligibility,
+                review_eligible,
+            ),
         )
     legacy.conn.commit()
     legacy.conn.close()
@@ -519,7 +541,8 @@ def _legacy_store(tmp_path: Path, rows: list[tuple[str, str, str]]):
 def _stored(store, transaction_id: str) -> dict:
     return dict(
         store.conn.execute(
-            "SELECT account_name, account_name_known, account_id, eligibility_reason_codes"
+            "SELECT account_name, account_name_known, account_id,"
+            " eligibility_reason_codes, review_eligible"
             " FROM transaction_version WHERE transaction_id = ?",
             (transaction_id,),
         ).fetchone()
@@ -538,6 +561,121 @@ def test_migration_014_clears_an_account_id_left_in_the_account_name(tmp_path):
     assert row["account_id"] == "acct-99887766"
     assert "account_name_unknown" in row["eligibility_reason_codes"]
     assert evidence.account_ref(row).display == evidence.UNKNOWN_ACCOUNT
+
+
+def test_migration_014_restores_review_for_a_row_the_old_rule_disqualified(tmp_path):
+    """The old rule required the account name; the new one does not.
+
+    Annotating without recomputing would leave the row `review_eligible = 0`
+    and out of every `analyze` until something happened to re-ingest it — a
+    current row silently omitted under a policy that says it is reviewable.
+    """
+    store = _legacy_store(
+        tmp_path,
+        [("api-4", "", None)],
+        eligibility="missing_required_field",
+        review_eligible=0,
+    )
+
+    row = _stored(store, "api-4")
+    codes = row["eligibility_reason_codes"].split(",")
+
+    assert row["review_eligible"] == 1
+    assert "missing_required_field" not in codes
+    assert "account_name_unknown" in codes
+    assert "eligible" in codes
+
+
+def test_migration_014_keeps_a_row_that_is_genuinely_incomplete_out(tmp_path):
+    """Only the account-name half of the verdict is revisited."""
+    store = _legacy_store(
+        tmp_path,
+        [("api-5", "", None)],
+        eligibility="missing_required_field",
+        review_eligible=0,
+        posted_on="",
+    )
+
+    row = _stored(store, "api-5")
+
+    assert row["review_eligible"] == 0
+    assert "missing_required_field" in row["eligibility_reason_codes"]
+
+
+def test_migration_014_keeps_a_user_excluded_row_excluded(tmp_path):
+    """An unnamed account says nothing about the user's own exclusion flag."""
+    store = _legacy_store(
+        tmp_path,
+        [("api-6", "", None)],
+        eligibility="excluded_from_reports,missing_required_field",
+        review_eligible=0,
+        exclusion_flag=1,
+    )
+
+    assert _stored(store, "api-6")["review_eligible"] == 0
+
+
+def test_staleness_does_not_merge_two_unnamed_accounts():
+    """One active unnamed account would hide a stale one completely."""
+    from datetime import date
+
+    from simplifi_runtime import prioritize
+
+    def unnamed(account_id: str, posted_on: str) -> dict:
+        return {
+            "transaction_id": f"{account_id}-{posted_on}",
+            "posted_on": posted_on,
+            "account_name": "",
+            "account_name_known": 0,
+            "account_id": account_id,
+            "amount_minor_units": -1200,
+            "currency": "USD",
+            "txn_state": "CLEARED",
+        }
+
+    staleness = prioritize.activity_staleness(
+        [unnamed("acct-a", "2026-08-01"), unnamed("acct-b", "2026-01-01")],
+        today=date(2026, 8, 5),
+    )
+
+    assert len(staleness) == 2
+    assert {entry["status"] for entry in staleness} == {"ok", "stale"}
+    # Both render under the placeholder; neither is silently absorbed by it.
+    assert {entry["account"] for entry in staleness} == {evidence.UNKNOWN_ACCOUNT}
+
+
+def test_a_recurring_finding_states_its_own_currency():
+    """These read `$1,000.00 -> $1,200.00` whatever the currency was."""
+    from datetime import date
+
+    from simplifi_runtime import subscriptions
+
+    def charge(index: int, minor_units: int) -> dict:
+        return {
+            "transaction_id": f"jpy-{index}",
+            "posted_on": f"2026-{index:02d}-01",
+            "payee_canonical": "streamline_video",
+            "account_name": "Travel Card",
+            "account_name_known": 1,
+            "amount_minor_units": -minor_units,
+            "currency": "JPY",
+            "currency_exponent": 0,
+            "category": "Subscriptions",
+            "kind": "spend",
+            "txn_state": "CLEARED",
+            "exclusion_flag": 0,
+        }
+
+    # 1,000 -> 2,000 in a zero-decimal currency: the same shape as the USD hike
+    # fixtures, with amounts that are minor units rather than cents.
+    amounts = [1000, 1000, 1000, 1000, 2000, 2000]
+    rows = [charge(index + 1, amount) for index, amount in enumerate(amounts)]
+    findings = subscriptions.analyse(rows, today=date(2026, 6, 15))
+    hikes = [f for f in findings if f.kind == "hike"]
+
+    assert hikes, "the series should be detected as a price increase"
+    assert "JPY" in hikes[0].detail
+    assert "$" not in hikes[0].detail
 
 
 def test_migration_014_leaves_a_real_account_name_alone(tmp_path):

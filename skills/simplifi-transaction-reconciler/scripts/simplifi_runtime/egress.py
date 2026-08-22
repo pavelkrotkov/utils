@@ -235,7 +235,7 @@ def minimize(rows: Sequence[Mapping[str, Any]], redact: Iterable[str] = ()) -> M
             if account is not None:
                 record[ACCOUNT] = account
         if AMOUNT not in redacted:
-            record[AMOUNT] = format_amount(row)
+            record[AMOUNT] = sendable_amount(row)
         else:
             record[AMOUNT] = amount_band(row)
         if DATE not in redacted:
@@ -252,8 +252,26 @@ def format_amount(row: Mapping[str, Any], minor_units: int | None = None) -> str
     Took a bare integer and divided by 100. A zero-decimal currency came out a
     hundred times too small, and the model was then asked to categorise by
     magnitude using a figure that was wrong by two orders of magnitude.
+
+    Returns the bare figure. The currency is attached in `minimize`, where the
+    record is assembled — not here, because this is also the value the payload
+    scan refuses when the amount was redacted, and it has to match the figure
+    as it would appear in the text rather than a decorated version of it.
     """
     return money_from_row(row, minor_units=minor_units).formatted()
+
+
+def sendable_amount(row: Mapping[str, Any]) -> str:
+    """The amount as the model should see it: the figure and its currency.
+
+    Correct precision alone is not enough once more than one currency can be
+    ingested. `-1500` is ¥1,500 and $1,500, and those imply very different
+    categories — the model would be asked to reason about magnitude from a
+    number whose scale it cannot know. The code is a property of the account,
+    not of the person, so naming it discloses nothing the policy protects.
+    """
+    money = money_from_row(row)
+    return f"{format_amount(row)} {money.currency}"
 
 
 def sendable_payee(row: Mapping[str, Any]) -> str:
@@ -313,8 +331,8 @@ def amount_band(row: Mapping[str, Any]) -> str:
     for low, high in AMOUNT_BANDS:
         if high is None or magnitude < high:
             ceiling = f"{high // scale}" if high is not None else "inf"
-            return f"{sign} {low // scale}-{ceiling}"
-    return f"{sign} unknown"
+            return f"{sign} {low // scale}-{ceiling} {money.currency}"
+    return f"{sign} unknown {money.currency}"
 
 
 def assert_payload_is_permitted(

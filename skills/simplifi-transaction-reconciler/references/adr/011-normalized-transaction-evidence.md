@@ -111,6 +111,25 @@ Migration 014 adds `account_name_known` and backfills it, clearing any stored
 `account_name` that is really the account ID. The ID itself is left in
 `account_id`; the migration removes the leak, not the provenance.
 
+Anything that groups rows by account groups by the correlation key and
+*displays* the safe name — merchant memory, recurring series, refund matching,
+and account staleness. Grouping by the display name would merge every unnamed
+account into one, and for staleness that is worse than untidy: the merged row
+keeps the newest date, so one active unnamed account hides a stale one in the
+table whose whole job is to notice silence.
+
+Every figure a person or a model reads carries its currency: the model payload,
+the recurring-charge details, and the packet's `annual_impact`. Correct
+precision alone is not enough once more than one currency can be ingested — the
+recurring findings read `$1,000.00 -> $1,200.00` whatever the currency was.
+
+Migration 014 *recomputes* eligibility rather than annotating it. A pre-014 row
+with a genuinely empty account name was stored `review_eligible = 0` with
+`missing_required_field`, because the name was then required; leaving that
+verdict would keep the row out of every `analyze` until something happened to
+re-ingest it. Only the account-name half is revisited — a row missing a date or
+an amount is still incomplete, and a user-excluded row is still excluded.
+
 Merchant-memory keys gain the account's correlation key and the row's currency.
 Two unnamed accounts no longer pool into one memory, and in a mixed-currency
 dataset ¥1,500 and $15.00 no longer share an amount band — they are the same

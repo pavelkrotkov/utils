@@ -320,16 +320,22 @@ def activity_staleness(rows: list[dict], today: date | None = None) -> list[dict
     status and institution errors.
     """
     today = today or date.today()
-    last: dict[str, date] = {}
+    # Grouped by the account's correlation key, displayed by its safe name.
+    # Grouping by the display name merges every unnamed account into one row,
+    # and that row keeps the newest date — so one active unnamed account hides
+    # a stale one completely, in the table whose whole job is to notice
+    # silence.
+    last: dict[tuple[str, str] | None, tuple[date, str]] = {}
     for r in rows:
         if not is_settled(r) or r["posted_on"] > today.isoformat():
             continue
         d = _d(r["posted_on"])
-        name = account_ref(r).display
-        if name not in last or d > last[name]:
-            last[name] = d
+        ref = account_ref(r)
+        seen = last.get(ref.correlation_key)
+        if seen is None or d > seen[0]:
+            last[ref.correlation_key] = (d, ref.display)
     out = []
-    for name, d in sorted(last.items(), key=lambda kv: kv[1]):
+    for d, name in sorted(last.values()):
         days = (today - d).days
         out.append(
             {
