@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   quality:
@@ -42,20 +42,15 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Run ty type check
+        # Exclusions live in [tool.ty.src] in pyproject.toml so this
+        # command and the pre-commit hook stay identical. The search
+        # paths must stay on the CLI: ty drops the implicit project
+        # root once extra paths are configured, and setting "." via
+        # the config file does not restore it.
         run: >
           uv run ty check --output-format=github
           --extra-search-path "."
           --extra-search-path "skills/simplifi-transaction-reconciler/scripts"
-          --exclude "tidal_pipeline"
-          --exclude "tidal_match_from_json.py"
-          --exclude "test_tidal_search_backend.py"
-          --exclude "factor_fund_performance.py"
-          --exclude "audio_transcribe_vibevoice.py"
-          --exclude "audio_transcribe_whisper.py"
-          --exclude "audio_transcript.py"
-          --exclude "pdf_convert_llamaparse.py"
-          --exclude "test_audio_common.py"
-          --exclude "TranscriptionLauncher/Scripts/generate_icon.py"
           .
 
       - name: Run Simplifi reconciler tests

@@ -19,3 +19,14 @@ repos:
       - id: ruff
         args: [ --fix ]
       - id: ruff-format
+
+  # Run through uv so this uses the ty pinned in uv.lock, and keep the
+  # arguments identical to the Python Quality workflow.
+  - repo: local
+    hooks:
+      - id: ty
+        name: ty type check
+        entry: uv run ty check --extra-search-path . --extra-search-path skills/simplifi-transaction-reconciler/scripts .
+        language: system
+        pass_filenames: false
+        always_run: true
