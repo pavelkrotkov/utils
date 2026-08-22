@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..evidence import AccountRef, build_record
-from ..money import parse_amount
+from ..money import parse_amount, parse_currency
 
 EXPECTED_COLUMNS = [
     "Date",
@@ -74,7 +74,9 @@ class SimplifiCsvSource:
     #: figures stay internally consistent all the way to the report.
     def __init__(self, path: Path, currency: str = "USD"):
         self.path = path
-        self.currency = (currency or "USD").upper()
+        # Validated here rather than at first use, so a mistyped code fails
+        # before the file is opened instead of on row one of a long export.
+        self.currency = parse_currency(currency)
 
     def fetch(self) -> list[dict]:
         with self.path.open(encoding="utf-8-sig", newline="") as fh:

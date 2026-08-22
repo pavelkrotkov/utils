@@ -67,6 +67,15 @@ what this dataset is, but a zero-decimal currency has to be *sayable*, and an
 amount with more precision than its currency has is refused rather than
 rounded.
 
+The exponent table lists every currency whose exponent is *not* 2, so the
+default is a statement rather than a guess. A sampled table was survivable only
+while the currency was hard-coded: once an operator could name one, an absent
+BHD (three places) would reject a valid `1.234` and store `1.23` as BHD 0.123 —
+wrong by a factor of ten, internally consistent all the way to the report.
+Reading is lenient and input is strict: a stored row naming an unrecognised
+code stays readable, while `--currency` refuses anything that is not a
+three-letter code, because accepting a typo misscales the entire dataset.
+
 **An unnamed account is a diagnostic, not a disqualification.** Eligibility
 requires `transaction_id`, `posted_on` and `amount_minor_units`. A missing
 account name adds the reason code `account_name_unknown` and the row stays

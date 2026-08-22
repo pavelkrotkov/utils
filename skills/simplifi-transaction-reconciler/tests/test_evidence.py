@@ -425,10 +425,50 @@ def test_a_derived_figure_uses_the_row_s_currency_not_the_row_s_amount():
     }
 
 
-def test_money_from_an_unlisted_currency_defaults_to_two_places():
-    """An unknown code is not a reason to guess zero and misscale by 100."""
+def test_a_three_decimal_currency_is_not_treated_as_two(tmp_path):
+    """BHD has three places. Two would store 1.234 as unrepresentable and
+    1.23 as BHD 0.123 — wrong by a factor of ten, and internally consistent
+    the whole way to the report, so nothing downstream could notice."""
+    rows = SimplifiCsvSource(
+        write_csv(tmp_path / "bhd.csv", [{**SHARED_TRANSACTIONS[0], "amount": "-1.234"}]),
+        currency="BHD",
+    ).fetch()
+    money = evidence.evidence_from_row(rows[0]).money
+
+    assert money.exponent == 3
+    assert money.minor_units == -1234
+    assert money.formatted() == "-1.234"
+
+
+def test_the_exponent_table_covers_every_non_default_currency():
+    """The default is only safe if the exceptions are complete, not sampled."""
+    from simplifi_runtime.money import CURRENCY_EXPONENTS
+
+    zero_decimal = {"JPY", "KRW", "CLP", "ISK", "VND", "XOF", "XAF", "XPF", "RWF", "UGX"}
+    three_decimal = {"BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND"}
+
+    assert all(CURRENCY_EXPONENTS.get(code) == 0 for code in zero_decimal)
+    assert all(CURRENCY_EXPONENTS.get(code) == 3 for code in three_decimal)
+    assert CURRENCY_EXPONENTS.get("CLF") == 4
+    # Everything absent really is exponent 2 by the standard's own default.
+    assert all(exponent != 2 for exponent in CURRENCY_EXPONENTS.values())
+
+
+def test_money_read_back_from_an_unrecognised_currency_stays_readable():
+    """Lenient on the way out of the database, strict on the way in.
+
+    A stored row naming a code this table has never heard of must still be
+    readable — refusing would make an old row unreadable rather than uncertain.
+    """
     assert Money(1234, "XYZ").exponent == 2
     assert Money(1234, "XYZ").formatted() == "12.34"
+
+
+@pytest.mark.parametrize("bad", ["dollars", "USDD", "US", "", "12A"])
+def test_a_currency_that_is_not_a_code_is_refused_at_ingest(tmp_path, bad):
+    """Accepting a typo scales the whole dataset by the wrong power of ten."""
+    with pytest.raises(ValueError, match="ISO 4217"):
+        SimplifiCsvSource(tmp_path / "unused.csv", currency=bad)
 
 
 # --- the migration cleans up what the old fallback left behind ---------------
