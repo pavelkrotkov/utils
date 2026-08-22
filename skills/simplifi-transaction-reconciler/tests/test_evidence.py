@@ -762,8 +762,9 @@ def test_the_packet_and_the_report_state_one_annual_impact(tmp_path):
 
     assert impact["currency"] == "JPY"
     assert impact["currency_exponent"] == 0
-    # The figure a person reads and the figure the packet states are one value.
-    assert (
-        review_packet.series_annual_impact(findings[0], rows).minor_units == (impact["minor_units"])
-    )
+    # The figure a person reads and the figure the packet states are one value,
+    # because both are transcriptions of the same result object rather than two
+    # derivations from the rows.
+    assert findings[0].annual_impact.minor_units == impact["minor_units"]
+    assert findings[0].annual_impact.currency == "JPY"
     assert f"{impact['minor_units']:,} JPY" in rendered

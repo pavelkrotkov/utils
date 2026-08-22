@@ -59,12 +59,29 @@ Each eligible transaction contains:
 
 Each deterministic finding identifies its transaction or merchant-series scope,
 the contributing `transaction_ids`, priority, reason codes, evidence, and
-applicable ADR references. Merchant-series findings use normalized merchant
-names and stable member transaction IDs; internal account identities are never
-serialized. Monetary finding evidence is represented with minor units, currency,
-and exponent. Deterministic findings intentionally set probabilistic
-`confidence` to `null`; their evidence, not a made-up probability, is what the
-agent should evaluate.
+applicable ADR references. Deterministic findings intentionally set
+probabilistic `confidence` to `null`; their evidence, not a made-up
+probability, is what the agent should evaluate.
+
+Merchant-series findings are transcriptions of the recurring-analysis result,
+not a second derivation of it. Their evidence carries:
+
+- `kind` — one of `zombie`, `hike`, `twin`, `renamed`, `ghost`, `lapsed`;
+- `series[]` — one entry per contributing series, each with the normalized
+  `merchant`, the account's display name, its member `transaction_ids`, its
+  `monthly` cost, `interval_days`, and `last_charge`;
+- `annual_impact` — the yearly effect, signed (a lapsed series is a saving);
+- `amounts` — kind-specific money facts, e.g. `previous`/`current` for a hike,
+  `projected_charge` for a ghost;
+- `facts` — kind-specific non-money facts, e.g. `silent_days`, `ratio`,
+  `shared_token`, `charges_after_schedule`;
+- `detail` — the same information as a sentence, for a human reader.
+
+Internal series keys and provider account identities are never serialized: the
+key that separates two people billed by the same merchant is built from the
+provider's account ID, and it exists to join rows, not to be read. Every
+monetary value — in `annual_impact`, in `amounts`, and in each series' `monthly`
+— is minor units, currency, and exponent, in the currency of the series itself.
 Category proposals carry confidence only when deterministic merchant memory
 provided the proposal; unresolved rows carry `null`.
 
@@ -123,7 +140,9 @@ field is in the contract or it is not in the packet.
   descriptor with nothing to strip *is* its own merchant name.
 - **The HTML report renders through `transaction_view`**, the same projection
   the packet uses, so the two artifacts cannot describe one transaction
-  differently.
+  differently. Recurring findings work the same way: both artifacts read the
+  analysis result object, so neither re-derives an annual impact or re-guesses
+  a currency, and they cannot state one figure two ways.
 
 Validation runs before the file boundary, and `write_packet` writes atomically
 — a reader sees the previous packet or the new one, never a partial.

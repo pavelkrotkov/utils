@@ -76,7 +76,23 @@ _EXAMPLE_FORBIDDEN_KEYS = _FORBIDDEN_KEYS | {
     "transaction_id",
     "transaction_ids",
 }
-_MONEY_EVIDENCE_FIELDS = {"amount", "annual_impact", "median", "now", "previous_typical"}
+_MONEY_EVIDENCE_FIELDS = {
+    "amount",
+    "annual_impact",
+    "current",
+    "median",
+    "monthly",
+    "now",
+    "previous",
+    "previous_typical",
+    "projected_charge",
+}
+#: Evidence sub-objects whose every value is a money fact, whatever it is
+#: called. A recurring finding names its own amounts — `previous`, `current`,
+#: `projected_charge` today, something else the next time a check is added —
+#: and a money fact that validation does not recognize as money is a money fact
+#: nothing checks.
+_MONEY_EVIDENCE_CONTAINERS = {"amounts"}
 
 #: Exactly what a packet transaction may carry. Validating *presence* was never
 #: enough: the required-key check passed on a transaction that also carried
@@ -349,53 +365,64 @@ def _prioritized_findings(prioritized: list[Any]) -> list[dict[str, Any]]:
     return findings
 
 
-def series_annual_impact(finding: Any, rows: Sequence[Mapping[str, Any]]) -> Money:
-    """A recurring finding's yearly cost, in the currency of its own series.
+def _money_fact(money: Money) -> dict[str, Any]:
+    """The packet's money shape: minor units, currency, and its exponent."""
+    return {
+        "minor_units": money.minor_units,
+        "currency": money.currency,
+        "currency_exponent": money.exponent,
+    }
 
-    `annual_impact` reaches here as a float in major units — the one figure in
-    the packet whose currency a reader could not determine, in the section that
-    exists to say what a subscription costs per year. The series' own rows
-    supply it, and both the packet and the report render through this, so the
-    two artifacts cannot state the figure differently.
+
+def _subscription_findings(subscription_findings: list[Any]) -> list[dict[str, Any]]:
+    """Render recurring results. No recurring semantics live here.
+
+    Everything below is a transcription of the result object: its kind, its
+    series references, its money facts. The packet used to reconstruct meaning
+    instead — it looked up a member transaction to guess the finding's
+    currency, and anything not in `annual_impact` was only available inside the
+    `detail` sentence. Both artifacts now render the same structure, so they
+    cannot state a figure differently.
     """
-    by_id = {_string(row.get("transaction_id")): row for row in rows}
-    member = next(
-        (by_id[str(txid)] for txid in sorted(finding.transaction_ids) if str(txid) in by_id),
-        None,
-    )
-    currency = (_string(member.get("currency")) if member else "") or "USD"
-    exponent = Money(0, currency).exponent
-    return Money(round(float(finding.annual_impact) * (10**exponent)), currency)
-
-
-def _subscription_findings(
-    subscription_findings: list[Any], rows: Sequence[Mapping[str, Any]]
-) -> list[dict[str, Any]]:
     findings = []
     for finding in subscription_findings:
-        reason = f"subscription:{finding.kind}"
-        transaction_ids = sorted(str(txid) for txid in finding.transaction_ids)
-        impact = series_annual_impact(finding, rows)
+        evidence: dict[str, Any] = {
+            "kind": _string(finding.kind),
+            "merchant": _string(finding.merchant),
+            "detail": _string(finding.detail),
+            "annual_impact": _money_fact(finding.annual_impact),
+            "series": [
+                {
+                    "merchant": _string(ref.merchant),
+                    "account_name": _string(ref.account),
+                    "transaction_ids": sorted(str(txid) for txid in ref.transaction_ids),
+                    "monthly": _money_fact(ref.monthly),
+                    "interval_days": ref.interval_days,
+                    "last_charge": _string(ref.last_charge) if ref.last_charge else None,
+                }
+                for ref in finding.series
+            ],
+        }
+        if finding.amounts:
+            evidence["amounts"] = {
+                str(name): _money_fact(money) for name, money in sorted(finding.amounts.items())
+            }
+        if finding.facts:
+            evidence["facts"] = {
+                str(name): _json_safe(value) for name, value in sorted(finding.facts.items())
+            }
         findings.append(
             {
                 "transaction_id": None,
-                "transaction_ids": transaction_ids,
+                "transaction_ids": sorted(str(txid) for txid in finding.transaction_ids),
                 "scope": "merchant_series",
                 "priority": None,
                 "confidence": None,
                 "confidence_basis": (
                     "Deterministic recurring-series evidence; no probabilistic confidence is assigned."
                 ),
-                "reason_codes": [reason],
-                "evidence": {
-                    "merchant": _string(finding.merchant),
-                    "detail": _string(finding.detail),
-                    "annual_impact": {
-                        "minor_units": impact.minor_units,
-                        "currency": impact.currency,
-                        "currency_exponent": impact.exponent,
-                    },
-                },
+                "reason_codes": [f"subscription:{finding.kind}"],
+                "evidence": evidence,
                 "policy_references": ["ADR-003", "ADR-004"],
             }
         )
@@ -461,7 +488,7 @@ def build_packet(
         raise PacketValidationError(f"unsupported source {source!r}")
 
     findings = _prioritized_findings(prioritized)
-    findings.extend(_subscription_findings(list(subscription_findings or []), rows))
+    findings.extend(_subscription_findings(list(subscription_findings or [])))
     findings.sort(
         key=lambda finding: (
             finding["transaction_id"] is None,
@@ -757,7 +784,10 @@ def _money_facts(value: Any, path: str):
     """Every nested money-shaped fact, so malformed ones cannot hide in evidence."""
     if isinstance(value, Mapping):
         for key, item in value.items():
-            if str(key) in _MONEY_EVIDENCE_FIELDS:
+            if str(key) in _MONEY_EVIDENCE_CONTAINERS and isinstance(item, Mapping):
+                for name, money in item.items():
+                    yield f"{path}.{key}.{name}", money
+            elif str(key) in _MONEY_EVIDENCE_FIELDS:
                 yield f"{path}.{key}", item
             else:
                 yield from _money_facts(item, f"{path}.{key}")
