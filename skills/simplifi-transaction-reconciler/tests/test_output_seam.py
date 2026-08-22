@@ -511,3 +511,17 @@ def test_case_folding_is_asked_of_the_filesystem_not_assumed(tmp_path):
     # The probe cleans up after itself; a stray marker would be an artifact of
     # the check in the user's own data directory.
     assert not list(tmp_path.glob(".simplifi-case-probe-*"))
+
+
+def test_reserving_outputs_creates_nothing(tmp_path):
+    """A pre-flight check that refuses runs must not mutate the filesystem —
+    least of all on the path it is about to reject."""
+    missing = tmp_path / "not" / "yet" / "there"
+    artifacts._CASE_FOLDING.clear()
+
+    artifacts.reserve_outputs(
+        {"--out": missing / "report.html", "--packet-out": missing / "packet.json"}
+    )
+
+    assert not missing.exists()
+    assert list(tmp_path.iterdir()) == []

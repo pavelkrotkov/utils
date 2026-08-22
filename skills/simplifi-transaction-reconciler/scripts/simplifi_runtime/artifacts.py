@@ -574,14 +574,23 @@ def _folds_case(directory: Path) -> bool:
     A probe that cannot run (a read-only or unwritable directory) answers
     "case-sensitive", which is the answer that refuses nothing. The collision
     it then misses is the one this check was already missing.
+
+    Nothing is created to make the probe possible. `reserve_outputs` is a
+    pre-flight check that refuses runs, and a check that creates directories —
+    including on the very path it is about to reject — is doing something its
+    caller did not ask for. When the directory does not exist yet, the nearest
+    existing ancestor answers the question instead: case folding is a property
+    of the filesystem, and a directory sits on the same one as its parent.
     """
     cached = _CASE_FOLDING.get(directory)
     if cached is not None:
         return cached
+    probe_dir = directory
+    while not probe_dir.is_dir() and probe_dir != probe_dir.parent:
+        probe_dir = probe_dir.parent
     folds = False
     try:
-        directory.mkdir(parents=True, mode=DIR_MODE, exist_ok=True)
-        probe = directory / f".simplifi-case-probe-{token_hex(6)}"
+        probe = probe_dir / f".simplifi-case-probe-{token_hex(6)}"
         probe.touch(mode=FILE_MODE)
         try:
             folds = Path(str(probe).upper()).exists()
