@@ -2,8 +2,16 @@
 
 Two keys, most specific first:
 
-    (account_name, canonical, amount_band, sign)
-    (canonical, sign)
+    (account, canonical, currency, amount_band, sign)
+    (canonical, currency, sign)
+
+The account component is the account's correlation key, not its display name:
+an account with no name is its own account, and keying on the empty display
+would pool every unnamed account in the dataset into one memory.
+
+Currency is part of both keys because the bands are minor-unit thresholds. In a
+mixed-currency dataset ¥1,500 and $15.00 are the same integer, and a key that
+omitted the currency would teach one merchant's categories from the other's.
 
 A level matches only with `n >= MIN_OBSERVATIONS` and `>= MIN_PURITY` agreement.
 Below that the level is *ambiguous*, not wrong: we fall through to the next
@@ -20,6 +28,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 
+from .evidence import account_ref
 from .semantics import is_statistics_eligible
 
 MIN_OBSERVATIONS = 3
@@ -64,17 +73,19 @@ class MerchantMemory:
 
     def __init__(self) -> None:
         self._levels: list[tuple[str, dict[tuple, Counter]]] = [
-            ("account+merchant+band+sign", defaultdict(Counter)),
-            ("merchant+sign", defaultdict(Counter)),
+            ("account+merchant+currency+band+sign", defaultdict(Counter)),
+            ("merchant+currency+sign", defaultdict(Counter)),
         ]
 
     @staticmethod
     def _keys(row: dict) -> list[tuple]:
         canon = row["payee_canonical"]
         sign = sign_of(row["amount_minor_units"])
+        currency = str(row.get("currency") or "USD").upper()
+        account = account_ref(row).correlation_key
         return [
-            (row["account_name"], canon, amount_band(row["amount_minor_units"]), sign),
-            (canon, sign),
+            (account, canon, currency, amount_band(row["amount_minor_units"]), sign),
+            (canon, currency, sign),
         ]
 
     def train(self, rows: list[dict]) -> None:

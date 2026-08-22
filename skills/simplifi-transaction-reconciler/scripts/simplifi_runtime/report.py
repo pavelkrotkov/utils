@@ -5,7 +5,10 @@ from __future__ import annotations
 import html
 from datetime import date
 
+from .evidence import evidence_from_row
 from .memory import Proposal
+from .money import Money
+from .review_packet import series_annual_impact
 from .semantics import is_statistics_quarantined
 from .unattended import Funnel, RunIdentity
 
@@ -45,8 +48,14 @@ def _e(v) -> str:
     return html.escape(str(v))
 
 
-def _money(minor: int) -> str:
-    return f"{minor / 100:,.2f}"
+def _money(money: Money) -> str:
+    """Render an amount at its own currency's precision.
+
+    This divided by 100 unconditionally. That is right for USD and wrong by two
+    orders of magnitude for a zero-decimal currency — and the reader has no way
+    to tell, because every figure on the page is wrong the same way.
+    """
+    return f"{money.formatted(grouped=True)} {money.currency}"
 
 
 def _evidence(ev: dict) -> str:
@@ -83,7 +92,7 @@ def render(
     funnel: Funnel | None = None,
 ) -> str:
     total = len(rows)
-    uncat = sum(1 for r in rows if r["is_uncategorized"])
+    uncat = sum(1 for r in rows if evidence_from_row(r).uncategorized)
     excluded = sum(1 for r in rows if is_statistics_quarantined(r))
     stale = [s for s in staleness if s["status"] == "stale"]
 
@@ -178,10 +187,12 @@ def render(
                 for s in item.signals
             )
             ev = "<br>".join(_evidence(s.evidence) for s in item.signals)
+            e = evidence_from_row(r)
             p.append(
-                f"<tr><td>{_e(r['posted_on'])}</td><td>{_e(r['payee_display'])}</td>"
-                f"<td>{_e(r['account_name'])}</td>"
-                f"<td class=num>{_money(r['amount_minor_units'])}</td>"
+                f"<tr><td>{_e(e.posted_on)}</td>"
+                f"<td>{_e(e.merchant.safe_display())}</td>"
+                f"<td>{_e(e.account.display)}</td>"
+                f"<td class=num>{_money(e.money)}</td>"
                 f"<td>{chips}<br>{ev}</td>"
                 f"<td class=num>{item.total_score}</td><td class=ev>{_provenance(r)}</td></tr>"
             )
@@ -205,7 +216,7 @@ def render(
             p.append(
                 f"<tr><td><span class='chip warn'>{_e(finding.kind)}</span></td>"
                 f"<td>{_e(finding.merchant)}</td><td>{_e(finding.detail)}</td>"
-                f"<td class=num>{_money(round(finding.annual_impact * 100))}</td></tr>"
+                f"<td class=num>{_money(series_annual_impact(finding, rows))}</td></tr>"
             )
         p.append("</table>")
 
@@ -225,9 +236,11 @@ def render(
                 else '<span class="ev">no history — needs a model or manual review</span>'
             )
             cat = _e(prop.category) if prop else "—"
+            e = evidence_from_row(r)
             p.append(
-                f"<tr><td>{_e(r['posted_on'])}</td><td>{_e(r['payee_display'])}</td>"
-                f"<td class=num>{_money(r['amount_minor_units'])}</td>"
+                f"<tr><td>{_e(e.posted_on)}</td>"
+                f"<td>{_e(e.merchant.safe_display())}</td>"
+                f"<td class=num>{_money(e.money)}</td>"
                 f"<td>{cat}</td><td>{basis}</td><td class=ev>{_provenance(r)}</td></tr>"
             )
         p.append("</table>")
