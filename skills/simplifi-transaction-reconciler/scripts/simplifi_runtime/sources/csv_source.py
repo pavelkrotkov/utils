@@ -18,9 +18,8 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+from ..evidence import AccountRef, build_record
 from ..money import parse_amount
-from ..normalize import normalize
-from ..semantics import annotate_eligibility, classify
 
 EXPECTED_COLUMNS = [
     "Date",
@@ -68,8 +67,14 @@ def _synthetic_id(posted_on: str, account: str, payee: str, amount: int, seq: in
 class SimplifiCsvSource:
     name = "csv"
 
-    def __init__(self, path: Path):
+    #: The export carries no currency column, so the operator states it. USD is
+    #: the default because that is what this dataset is, but a zero-decimal
+    #: currency has to be *sayable*: parsing a JPY export as USD would multiply
+    #: every amount by 100 and no downstream check would notice, because the
+    #: figures stay internally consistent all the way to the report.
+    def __init__(self, path: Path, currency: str = "USD"):
         self.path = path
+        self.currency = (currency or "USD").upper()
 
     def fetch(self) -> list[dict]:
         with self.path.open(encoding="utf-8-sig", newline="") as fh:
@@ -92,53 +97,31 @@ class SimplifiCsvSource:
             account = (row["Account"] or "").strip()
             payee_raw = (row["Payee"] or "").strip()
             category = (row["Category"] or "").strip()
-            money = parse_amount(row["Amount"])
+            # Currency always comes from the export's declared currency, never
+            # from the payee text. A charge shown as "2.90 Euro ..." was already
+            # converted by the issuer; the Amount column is in the account's
+            # currency. Treating EUR as the transaction currency would make
+            # every sum across these rows wrong.
+            money = parse_amount(row["Amount"], self.currency)
 
             key = (posted_on, account, payee_raw, money.minor_units)
             seen[key] += 1
 
-            desc = normalize(payee_raw)
-            # Currency always comes from the account, never from the payee text.
-            # A charge shown as "2.90 Euro ..." was already converted by the
-            # issuer; the Amount column is USD. Treating EUR as the transaction
-            # currency would make every sum across these rows wrong.
-            currency = money.currency
-
-            sem = classify(
-                category=category,
-                payee_raw=payee_raw,
-                amount_minor_units=money.minor_units,
-                exclusion_flag=_yes(row["Exclusion"]),
-                account_names=account_names,
-            )
-
             records.append(
-                annotate_eligibility(
-                    {
-                        "transaction_id": _synthetic_id(
-                            posted_on, account, payee_raw, money.minor_units, seen[key]
-                        ),
-                        "posted_on": posted_on,
-                        "account_name": account,
-                        "amount_minor_units": money.minor_units,
-                        "currency": currency,
-                        "currency_exponent": money.exponent,
-                        "payee_raw": payee_raw,
-                        "payee_normalized": desc.normalized,
-                        "payee_canonical": desc.canonical,
-                        "payee_display": desc.display,
-                        "norm_rules_applied": ",".join(desc.rules_applied),
-                        "original_currency": desc.original_currency,
-                        "original_amount": desc.original_amount,
-                        "is_foreign_charge": int(desc.original_currency is not None),
-                        "category": category,
-                        "is_uncategorized": int(category.lower() in {"", "uncategorized"}),
-                        "exclusion_flag": int(_yes(row["Exclusion"])),
-                        "recurring_flag": int(_yes(row["Recurring"])),
-                        "kind": sem.kind.value,
-                        "poisons_statistics": int(sem.poisons_statistics),
-                        "semantics_reasons": "; ".join(sem.reasons),
-                    }
+                build_record(
+                    transaction_id=_synthetic_id(
+                        posted_on, account, payee_raw, money.minor_units, seen[key]
+                    ),
+                    posted_on=posted_on,
+                    # The CSV has no account identifier at all, so there is no
+                    # provider ID to carry and none is invented.
+                    account=AccountRef(name=account),
+                    money=money,
+                    payee_raw=payee_raw,
+                    category=category,
+                    account_names=account_names,
+                    exclusion_flag=_yes(row["Exclusion"]),
+                    recurring_flag=_yes(row["Recurring"]),
                 )
             )
         return records

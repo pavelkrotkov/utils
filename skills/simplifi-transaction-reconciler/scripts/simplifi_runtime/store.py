@@ -15,7 +15,13 @@ from pathlib import Path
 from . import artifacts
 
 ALGORITHM_VERSION = "0.1.0"
-RULESET_VERSION = "0.2.0"
+#: 0.3.0: merchant identity, account display and money derivation moved to
+#: `evidence`, so the same source facts can now produce a different normalized
+#: row than they did before. Re-versioned deliberately — `upsert_version`
+#: compares the ruleset version alongside the content hash, so every stored row
+#: is re-derived on the next ingest instead of keeping a value produced by
+#: rules that no longer exist.
+RULESET_VERSION = "0.3.0"
 
 #: Run lifecycle. `started` is written when the row is created and is also what
 #: a run left behind by a killed process keeps forever — we never learned what
@@ -541,6 +547,7 @@ class Store:
             "posted_on",
             "transacted_on",
             "account_name",
+            "account_name_known",
             "account_id",
             "amount_minor_units",
             "currency",
@@ -583,6 +590,7 @@ class Store:
         }
         for column in ("excluded_from_f2s", "is_split", "is_reviewed"):
             values.setdefault(column, 0)
+        values.setdefault("account_name_known", int(bool(record.get("account_name"))))
         values.setdefault("review_eligible", 1)
         values.setdefault("eligibility_reason_codes", "")
         self.conn.execute(

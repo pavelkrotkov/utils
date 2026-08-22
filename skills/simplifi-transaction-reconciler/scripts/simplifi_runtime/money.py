@@ -41,6 +41,60 @@ class Money:
     def __str__(self) -> str:
         return f"{self.as_decimal:.{self.exponent}f} {self.currency}"
 
+    def formatted(self, *, grouped: bool = False) -> str:
+        """The amount alone, at this currency's precision.
+
+        Callers that render money used to divide by 100 inline. That is right
+        for USD and silently wrong for JPY, where 1000 minor units is ¥1000 and
+        not ¥10.00 — an error of two orders of magnitude in a figure a person is
+        being asked to act on.
+        """
+        spec = f",.{self.exponent}f" if grouped else f".{self.exponent}f"
+        return format(self.as_decimal, spec)
+
+    @property
+    def as_float(self) -> float:
+        """Major units as a float, for evidence dictionaries and JSON.
+
+        Lossy by construction; never round-trip a stored amount through this.
+        `minor_units` remains the authority and travels alongside it.
+        """
+        return float(self.as_decimal)
+
+
+def exponent_for(currency: str | None) -> int:
+    """The ISO 4217 minor-unit exponent, defaulting to 2 for anything unlisted."""
+    return CURRENCY_EXPONENTS.get((currency or "USD").upper(), 2)
+
+
+def from_decimal(value: Decimal, currency: str = "USD") -> Money:
+    """Scale a major-unit decimal into minor units for `currency`.
+
+    Raises ValueError rather than rounding: an amount with more precision than
+    the currency has is a mapping bug or a currency mismatch, and rounding it
+    would hide which.
+    """
+    if not value.is_finite():
+        raise ValueError(f"amount {value!r} is not finite")
+    exponent = exponent_for(currency)
+    scaled = value * (10**exponent)
+    if scaled != scaled.to_integral_value():
+        raise ValueError(f"amount {value!r} has sub-minor-unit precision for {currency}")
+    return Money(int(scaled), (currency or "USD").upper())
+
+
+def money_from_row(row, *, minor_units: int | None = None) -> Money:
+    """Rebuild a `Money` from a stored or normalized transaction record.
+
+    Downstream code reads rows, not adapters, so this is the one place that
+    knows a row's amount columns. `minor_units` overrides the row's own amount
+    for derived figures — a median, a baseline — which share the row's currency
+    but not its value.
+    """
+    currency = str(row.get("currency") or "USD").upper()
+    amount = row.get("amount_minor_units") if minor_units is None else minor_units
+    return Money(int(amount or 0), currency)
+
 
 def parse_amount(raw: str | None, currency: str = "USD") -> Money:
     """Parse a Simplifi CSV amount into minor units.
@@ -62,10 +116,9 @@ def parse_amount(raw: str | None, currency: str = "USD") -> Money:
     if not value.is_finite():
         raise ValueError(f"unparseable amount: {raw!r}")
 
-    exponent = CURRENCY_EXPONENTS.get(currency, 2)
-    scaled = value * (10**exponent)
     # Amounts are always exact to the currency's precision in this data; if a
     # fractional minor unit ever appears we want to know rather than round.
-    if scaled != scaled.to_integral_value():
-        raise ValueError(f"amount {raw!r} has sub-minor-unit precision for {currency}")
-    return Money(int(scaled), currency)
+    try:
+        return from_decimal(value, currency)
+    except ValueError as exc:
+        raise ValueError(f"unparseable amount {raw!r}: {exc}") from exc

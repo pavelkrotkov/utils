@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from itertools import pairwise
 
+from .evidence import account_ref
+from .money import money_from_row
 from .semantics import is_projected, is_statistics_eligible
 
 #: A series needs this many cleared charges before we will call it recurring.
@@ -103,7 +105,23 @@ class Series:
 
     @property
     def label(self) -> str:
-        return f"{self.merchant} [{self.identity}]" if self.identity else self.merchant
+        """A human-readable series name that never carries the account key.
+
+        `identity` is a join key and may be the provider's account ID. It
+        separates two people billed by the same merchant; it is not evidence,
+        and a label is exactly the sort of string that ends up in an artifact.
+        """
+        account = self.account_display
+        return f"{self.merchant} [{account}]" if account else self.merchant
+
+    @property
+    def account_display(self) -> str:
+        """The safe account name shared by this series, or nothing."""
+        for row in (*self.charges, *self.projected):
+            ref = account_ref(row)
+            if ref.is_named:
+                return ref.name
+        return ""
 
     @property
     def transaction_ids(self) -> tuple[str, ...]:
@@ -120,7 +138,7 @@ class Series:
 
     @property
     def amounts(self) -> list[float]:
-        return [abs(c["amount_minor_units"]) / 100 for c in self.charges]
+        return [abs(money_from_row(c).as_float) for c in self.charges]
 
     @property
     def dates(self) -> list[date]:
@@ -203,7 +221,8 @@ def _series(rows: list[dict]) -> dict[str, Series]:
         leaf = (r.get("category") or "").split(":")[-1].strip().lower()
         if leaf in BILL_CATEGORIES:
             continue
-        identity = str(r.get("account_id") or r.get("account_name") or "").strip()
+        correlation = account_ref(r).correlation_key
+        identity = "" if correlation is None else ":".join(correlation)
         series_key = f"{key}::{identity}" if identity else key
         s = out[series_key]
         s.merchant = key
@@ -280,7 +299,7 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
         # GHOST — projected but not actually charging.
         future = [p for p in s.projected if p["posted_on"] > today.isoformat()]
         if future and len(s.charges) >= MIN_GHOST_HISTORY and silent > interval * SILENT_INTERVALS:
-            waste = abs(future[0]["amount_minor_units"]) / 100 * (365.25 / interval)
+            waste = abs(money_from_row(future[0]).as_float) * (365.25 / interval)
             findings.append(
                 Finding(
                     "ghost",

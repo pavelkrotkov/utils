@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from itertools import pairwise
 
+from .evidence import account_ref, evidence_from_row
+from .money import money_from_row
 from .semantics import is_settled, is_statistics_eligible
 
 MIN_BASELINE_N = 5
@@ -75,10 +77,12 @@ def _d(iso: str) -> date:
 
 
 def _major_units(row: dict, minor_units: int | float) -> float:
-    exponent = row.get("currency_exponent")
-    if exponent is None:
-        exponent = 2
-    return minor_units / (10 ** int(exponent))
+    """A derived figure in the row's own currency, not in assumed cents.
+
+    Medians and baselines are computed in minor units and reported in major
+    ones. The conversion is the row's, so it goes through the row's money.
+    """
+    return money_from_row(row, minor_units=round(minor_units)).as_float
 
 
 def analyse(rows: list[dict], today: date | None = None) -> list[Prioritized]:
@@ -176,7 +180,9 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Prioritized]:
     amount_freq = Counter((r["payee_canonical"], r["amount_minor_units"]) for r in scored)
     buckets: dict[tuple, list[dict]] = defaultdict(list)
     for r in scored:
-        buckets[(r["payee_canonical"], r["amount_minor_units"], r["account_name"])].append(r)
+        buckets[
+            (r["payee_canonical"], r["amount_minor_units"], account_ref(r).correlation_key)
+        ].append(r)
     for (canon, amt_key, _acct), group in buckets.items():
         if len(group) < 2:
             continue
@@ -205,7 +211,7 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Prioritized]:
                             "amount": _major_units(b, abs(b["amount_minor_units"])),
                             "amount_minor_units": abs(b["amount_minor_units"]),
                             "first_seen_on": a["posted_on"],
-                            "account": b["account_name"],
+                            "account": account_ref(b).display,
                         },
                     ),
                 )
@@ -215,11 +221,10 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Prioritized]:
     # inferred from date spacing instead: >=4 charges, roughly monthly. Keep
     # accounts separate: two monthly charges for the same provider must not be
     # interleaved into a false twice-monthly series.
-    series_by_account: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    series_by_account: dict[tuple[str, tuple[str, str] | None], list[dict]] = defaultdict(list)
     for r in scored:
         if r["kind"] in {"spend", "fee"} and r["amount_minor_units"] < 0 and r["payee_canonical"]:
-            identity = str(r.get("account_id") or r.get("account_name") or "").strip()
-            series_by_account[(r["payee_canonical"], identity)].append(r)
+            series_by_account[(r["payee_canonical"], account_ref(r).correlation_key)].append(r)
 
     for (_canon, _identity), series_rows in series_by_account.items():
         series = sorted(
@@ -245,7 +250,7 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Prioritized]:
                         "subscription_creep",
                         2.0,
                         {
-                            "merchant": series[i]["payee_display"],
+                            "merchant": evidence_from_row(series[i]).merchant.safe_display(),
                             "previous_typical": _major_units(series[i], expected),
                             "previous_typical_minor_units": expected,
                             "now": _major_units(series[i], amounts[i]),
@@ -259,26 +264,19 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Prioritized]:
                 break  # report the first increase per series, not every one
 
     # --- refund_without_original -------------------------------------------
-    def account_key(row: dict) -> tuple[str, str] | None:
-        account_id = str(row.get("account_id") or "").strip()
-        if account_id:
-            return "id", account_id
-        account_name = str(row.get("account_name") or "").strip()
-        return ("name", account_name) if account_name else None
-
     for r in scored:
         if r["kind"] != "refund":
             continue
         amt = abs(r["amount_minor_units"])
         d = _d(r["posted_on"])
-        refund_account = account_key(r)
+        refund_account = account_ref(r).correlation_key
         match = any(
             o["payee_canonical"] == r["payee_canonical"]
             and abs(o["amount_minor_units"]) == amt
             and o["amount_minor_units"] < 0
             and 0 <= (d - _d(o["posted_on"])).days <= 120
             and refund_account is not None
-            and account_key(o) == refund_account
+            and account_ref(o).correlation_key == refund_account
             for o in scored
         )
         if not match:
@@ -288,7 +286,7 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Prioritized]:
                     "refund_without_original",
                     1.5,
                     {
-                        "merchant": r["payee_display"],
+                        "merchant": evidence_from_row(r).merchant.safe_display(),
                         "amount": _major_units(r, amt),
                         "amount_minor_units": amt,
                         "note": "no matching debit within 120 days",
@@ -327,7 +325,7 @@ def activity_staleness(rows: list[dict], today: date | None = None) -> list[dict
         if not is_settled(r) or r["posted_on"] > today.isoformat():
             continue
         d = _d(r["posted_on"])
-        name = r["account_name"]
+        name = account_ref(r).display
         if name not in last or d > last[name]:
             last[name] = d
     out = []

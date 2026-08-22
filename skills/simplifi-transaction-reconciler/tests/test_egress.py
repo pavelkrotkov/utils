@@ -138,8 +138,18 @@ def test_redacting_the_date_leaves_only_the_month():
 
 
 def test_a_band_keeps_the_direction_of_the_transaction():
-    assert egress.amount_band(50_000).startswith("credit")
-    assert egress.amount_band(-50_000).startswith("debit")
+    assert egress.amount_band(row(amount_minor_units=50_000)).startswith("credit")
+    assert egress.amount_band(row(amount_minor_units=-50_000)).startswith("debit")
+
+
+def test_a_band_is_expressed_in_the_row_s_own_currency():
+    """The thresholds are minor units; the label a model reads is major ones."""
+    usd = egress.amount_band(row(amount_minor_units=-50_000, currency="USD"))
+    jpy = egress.amount_band(row(amount_minor_units=-50_000, currency="JPY", currency_exponent=0))
+
+    assert usd == "debit 500-inf"
+    # Same integer, a hundredth of the boundary in a zero-decimal currency.
+    assert jpy == "debit 50000-inf"
 
 
 # --- minimization -----------------------------------------------------------
@@ -410,7 +420,7 @@ def test_a_redacted_amount_is_refused_if_it_reappears():
 
 def test_a_zero_amount_is_not_called_a_debit():
     """Inventing a direction would steer the model toward a purchase."""
-    assert egress.amount_band(0) == "zero"
+    assert egress.amount_band(row(amount_minor_units=0)) == "zero"
     assert egress.minimize([row(amount_minor_units=0)], redact="amount").records[0]["amount"] == (
         "zero"
     )

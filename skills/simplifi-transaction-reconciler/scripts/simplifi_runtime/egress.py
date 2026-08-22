@@ -31,6 +31,9 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from .evidence import account_ref, evidence_from_row
+from .money import money_from_row
+
 #: Where each backend sends. Named here rather than parsed out of the URL in
 #: `llm` so the destination can be stated in a declaration and a document
 #: without importing the request code.
@@ -232,9 +235,9 @@ def minimize(rows: Sequence[Mapping[str, Any]], redact: Iterable[str] = ()) -> M
             if account is not None:
                 record[ACCOUNT] = account
         if AMOUNT not in redacted:
-            record[AMOUNT] = format_amount(int(row["amount_minor_units"]))
+            record[AMOUNT] = format_amount(row)
         else:
-            record[AMOUNT] = amount_band(int(row["amount_minor_units"]))
+            record[AMOUNT] = amount_band(row)
         if DATE not in redacted:
             record[DATE] = str(row["posted_on"])
         else:
@@ -243,71 +246,74 @@ def minimize(rows: Sequence[Mapping[str, Any]], redact: Iterable[str] = ()) -> M
     return Minimized(records=tuple(records), surrogates=surrogates)
 
 
-def format_amount(minor_units: int) -> str:
-    return f"{minor_units / 100:.2f}"
+def format_amount(row: Mapping[str, Any], minor_units: int | None = None) -> str:
+    """The amount as the model should read it, at the row's own precision.
+
+    Took a bare integer and divided by 100. A zero-decimal currency came out a
+    hundred times too small, and the model was then asked to categorise by
+    magnitude using a figure that was wrong by two orders of magnitude.
+    """
+    return money_from_row(row, minor_units=minor_units).formatted()
 
 
 def sendable_payee(row: Mapping[str, Any]) -> str:
     """The merchant name with the descriptor's noise removed.
 
-    `payee_display` cannot be trusted to be normalized. The API adapter sets it
-    to the provider's `payee` field, which for most API rows *is* the raw bank
-    descriptor — "COSTCO WHSE #1166 NORTH PLAINFINJ" where the CSV would say
-    "Costco". Sending that would transmit the store number, the location, and
-    whatever card fragment the descriptor carries, while the policy says the
-    raw descriptor never leaves.
+    This module used to re-derive the safe merchant name itself, because
+    `payee_display` could not be trusted: the API adapter set it to the
+    provider's `payee`, which for most API rows *is* the raw bank descriptor —
+    "COSTCO WHSE #1166 NORTH PLAINFINJ" where the CSV says "Costco".
 
-    So the choice is made here rather than trusted from the row: prefer a
-    display value that differs from the raw string (someone renamed it), then
-    the normalizer's stripped output, and only then the raw text — which is
-    reached exactly when normalization found nothing to strip, meaning the
-    descriptor and the merchant name are the same string and there is nothing
-    left to protect.
+    The adapters now agree on that field at the source seam, so the derivation
+    lives in one place instead of two that could drift. This stays as the
+    single named point where egress asks for a payee, and `payee_display`
+    remains on the forbidden list for the payload scan: the value is sendable
+    through this function, the raw column behind it is not.
     """
-    raw = str(row.get("payee_raw") or "").strip()
-    display = str(row.get("payee_display") or "").strip()
-    if display and display != raw:
-        return display
-    normalized = str(row.get("payee_normalized") or "").strip()
-    if normalized and normalized != raw:
-        return normalized
-    return display or normalized or raw
+    return evidence_from_row(row).merchant.safe_display()
 
 
 def sendable_account(row: Mapping[str, Any]) -> str | None:
     """The account's name, or nothing if all we have is its identifier.
 
-    The API adapter falls back to `accountId` when an account has no name. That
-    fallback is a provider identifier wearing a name's clothes, and sending it
-    would put in the payload exactly what `account_id` is on the forbidden list
-    to keep out. Better to send no account than to send its ID under another
-    label; the field is optional evidence, and its absence is honest.
+    Sending an unnamed account's identifier would put in the payload exactly
+    what `account_id` is on the forbidden list to keep out. Better to send no
+    account than to send its ID under another label; the field is optional
+    evidence, and its absence is honest.
+
+    Note this returns None rather than the "unknown account" placeholder the
+    report and the packet render. A placeholder is informative to a person
+    reading a table of their own transactions; to a model being asked to
+    categorise, it is a token that means nothing and invites the model to treat
+    it as a real account name shared across unrelated rows.
     """
-    name = str(row.get("account_name") or "").strip()
-    if not name:
-        return None
-    account_id = str(row.get("account_id") or "").strip()
-    if account_id and name == account_id:
-        return None
-    return name
+    ref = account_ref(row)
+    return ref.name if ref.is_named else None
 
 
-def amount_band(minor_units: int) -> str:
+def amount_band(row: Mapping[str, Any]) -> str:
     """A redacted amount still says roughly how big, and in which direction.
 
     Zero gets its own label rather than falling into `debit`. A zero-value
     authorization or adjustment has no direction, and calling it a debit would
     invent evidence pointing at a purchase category — a redaction that makes
     the model *more* wrong is worse than one that says less.
+
+    Band edges are declared in minor units and rendered in the row's currency,
+    so a zero-decimal currency is described in its own magnitudes rather than
+    in cents that do not exist there.
     """
+    money = money_from_row(row)
+    minor_units = money.minor_units
     if minor_units == 0:
         return "zero"
     sign = "credit" if minor_units > 0 else "debit"
     magnitude = abs(minor_units)
+    scale = 10**money.exponent
     for low, high in AMOUNT_BANDS:
         if high is None or magnitude < high:
-            ceiling = f"{high // 100}" if high is not None else "inf"
-            return f"{sign} {low // 100}-{ceiling}"
+            ceiling = f"{high // scale}" if high is not None else "inf"
+            return f"{sign} {low // scale}-{ceiling}"
     return f"{sign} unknown"
 
 
@@ -355,7 +361,7 @@ def _permitted_values(row: Mapping[str, Any], redacted: frozenset[str]) -> set[s
         if account is not None:
             permitted.add(account)
     if AMOUNT not in redacted:
-        permitted.add(format_amount(int(row["amount_minor_units"])))
+        permitted.add(format_amount(row))
     if DATE not in redacted:
         permitted.add(str(row["posted_on"]))
     return {value for value in permitted if value}
@@ -380,7 +386,7 @@ def _values_to_refuse(row: Mapping[str, Any], redacted: frozenset[str]):
             if value is not None:
                 yield f"redacted {field}", value
     if AMOUNT in redacted:
-        yield f"redacted {AMOUNT}", format_amount(int(row["amount_minor_units"]))
+        yield f"redacted {AMOUNT}", format_amount(row)
 
 
 def _is_covered(text: str, permitted: set[str]) -> bool:
