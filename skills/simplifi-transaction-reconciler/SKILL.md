@@ -1,6 +1,6 @@
 ---
 name: simplifi-transaction-reconciler
-description: Reconcile and review Quicken Simplifi transactions from CSV exports or the private API while preserving accounting semantics, merchant normalization, recurring-charge checks, and an auditable read-only workflow. Use when analyzing Simplifi transaction data, reviewing category findings, checking subscriptions or card credits, or producing proposals for human review.
+description: Reconcile and review Quicken Simplifi transactions from CSV exports or the private API while preserving accounting semantics, merchant normalization, recurring-charge checks, and an auditable workflow whose analysis and scheduled paths are read-only. Use when analyzing Simplifi transaction data, reviewing category findings, checking subscriptions or card credits, producing proposals for human review, or applying an accepted category decision under an explicit named authorization.
 ---
 
 # Simplifi Transaction Reconciler
@@ -9,10 +9,21 @@ description: Reconcile and review Quicken Simplifi transactions from CSV exports
 
 Reconcile transactions into an auditable report and explicit proposals. Preserve
 raw evidence, source capability, accounting meaning, provenance, and uncertainty.
-This skill is strictly read-only: proposals are terminal artifacts for review,
-not instructions or authorization to change a live account. Never turn a
-forecast into a fact, a display name into identity evidence, or a proposal into
-a live account change.
+Never turn a forecast into a fact, or a display name into identity evidence.
+
+**Analysis is read-only; writing is a separate, named act.** Ingest, analyze,
+classify, decide, subs, probe, schema and status never change a live account,
+and neither does any scheduled run. Proposals and decision records are terminal
+artifacts for review: they are not instructions, and recording a decision never
+authorizes acting on it. Never turn a proposal into a live account change on
+your own initiative.
+
+One command, `mutate`, can apply an already-accepted category decision. It is
+dry-run by default, refuses to run unattended, and requires a person to name
+themselves and say why — recorded in an append-only audit trail. Use it only
+when the person you are working with has explicitly asked for that write, in
+this session, having seen the dry run. If you are unsure whether that has
+happened, it has not.
 
 Keep deployment-specific categories, merchant mappings, rules, credentials,
 databases, logs, and undo files outside this skill. Load only the reference

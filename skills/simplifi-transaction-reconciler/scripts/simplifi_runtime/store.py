@@ -738,12 +738,13 @@ class Store:
     def undo_of(self, attempt_id: str) -> dict | None:
         """The attempt that reversed this one, if any — settled or not.
 
-        Deliberately not filtered by outcome. An undo that left and never
-        settled may have landed, and offering to undo again on that basis would
-        risk writing the same restore twice.
+        The newest one, and deliberately not filtered by outcome: an undo that
+        left and never settled may have landed, so the caller decides. Newest
+        rather than first because a rejected undo may be followed by a
+        successful retry, and it is the retry that must block a third.
         """
         row = self.conn.execute(
-            "SELECT * FROM mutation_attempt WHERE undoes_attempt_id = ? ORDER BY id LIMIT 1",
+            "SELECT * FROM mutation_attempt WHERE undoes_attempt_id = ? ORDER BY id DESC LIMIT 1",
             (attempt_id,),
         ).fetchone()
         return dict(row) if row is not None else None

@@ -32,26 +32,53 @@ class FixtureWriter(mutations.TransactionWriter):
     or never settle at all.
     """
 
-    def __init__(self, documents, *, job_sequence=("success",), fail_write=None):
+    def __init__(
+        self,
+        documents,
+        *,
+        job_sequence=("success",),
+        fail_write=None,
+        categories=None,
+    ):
         self.documents = {doc["id"]: doc for doc in documents}
         self.job_sequence = list(job_sequence)
         self.fail_write = fail_write
+        #: Display name -> provider ID, as `GET /categories` would resolve them.
+        self.categories = {"Groceries": "coa-groceries", "Dining Out": "coa-dining"}
+        if categories is not None:
+            self.categories = dict(categories)
         self.writes: list[dict] = []
         self.fetches: list[str] = []
+        #: Job ID -> the document that job would apply, once it settles.
+        self.pending: dict[str, dict] = {}
+
+    def category_id(self, name):
+        return self.categories.get(name)
 
     def fetch(self, transaction_id):
         self.fetches.append(transaction_id)
         return json.loads(json.dumps(self.documents[transaction_id]))
 
     def write(self, document):
+        """Accept the write and return a job envelope — nothing is applied yet.
+
+        A `PUT` that returns a job has not done the work. Applying the document
+        here would have made a *failed* job still change the fixture's state,
+        which is the one behaviour these tests most need to get right.
+        """
         if self.fail_write:
             raise self.fail_write
         self.writes.append(json.loads(json.dumps(dict(document))))
-        self.documents[document["id"]] = json.loads(json.dumps(dict(document)))
-        return {"id": f"job-{len(self.writes)}", "status": "pending"}
+        job_id = f"job-{len(self.writes)}"
+        self.pending[job_id] = json.loads(json.dumps(dict(document)))
+        return {"id": job_id, "status": "pending"}
 
     def job_status(self, job_id):
         status = self.job_sequence.pop(0) if self.job_sequence else "pending"
+        if status in {"success", "succeeded", "complete", "completed", "done"}:
+            document = self.pending.pop(job_id, None)
+            if document is not None:
+                self.documents[document["id"]] = document
         return {"id": job_id, "status": status}
 
 
@@ -70,13 +97,18 @@ def _document(transaction_id="txn-1", category="Uncategorized", **extra):
     }
 
 
-def _row(transaction_id="txn-1", category="Uncategorized"):
+def _row(transaction_id="txn-1", category="Uncategorized", **overrides):
+    """A stored row whose reviewed facts match `_document()`."""
     return {
         "transaction_id": transaction_id,
         "category": category,
         "source_hash": "hash-1",
         "payee_display": "Aurora Bakery",
+        "payee_raw": "SQ *AURORA BAKERY",
         "posted_on": "2026-06-01",
+        "amount_minor_units": -1240,
+        "txn_state": "CLEARED",
+        **overrides,
     }
 
 
@@ -259,7 +291,10 @@ def test_a_successful_write_sends_the_whole_document_with_one_field_changed(stor
     assert sent["dbVersion"] == 7
     assert sent["accountId"] == "account-9"
     assert sent["coa"]["name"] == "Groceries"
-    assert sent["coa"]["id"] == "coa-3", "the category object keeps its other fields"
+    # The whole reference is replaced: keeping the old ID beside the new name
+    # would identify the previous category under the target's label.
+    assert sent["coa"]["id"] == "coa-groceries"
+    assert sent["coa"]["type"] == "CATEGORY"
 
 
 def test_the_audit_preserves_the_document_as_it_was_before_the_write(store):
@@ -583,3 +618,86 @@ def test_the_capability_register_is_printable_without_a_database(capsys):
     assert "transaction_category  [available]" in printed
     assert "transaction_rule  [UNAVAILABLE]" in printed
     assert "refused" in printed
+
+
+def test_a_category_the_provider_does_not_have_is_refused(store):
+    """This runtime cannot create a category, so it must not pretend to."""
+    plan, _ = _plan()
+    writer = FixtureWriter([_document()], categories={})
+
+    results = mutations.apply_plan(store, plan, writer, AUTH, sleep=lambda _: None)
+
+    assert results[0].outcome == "failed"
+    assert "no category named" in results[0].error_message
+    assert writer.writes == [], "nothing may be sent when the target cannot be resolved"
+
+
+def test_a_transaction_whose_amount_settled_is_refused(store):
+    """A pending charge that settles keeps its ID and category, and changes."""
+    plan, _ = _plan()
+    writer = FixtureWriter([_document(amount=-1395)])
+
+    results = mutations.apply_plan(store, plan, writer, AUTH, sleep=lambda _: None)
+
+    assert results[0].outcome == "failed"
+    assert "changed since it was reviewed" in results[0].error_message
+    assert "amount" in results[0].error_message
+    assert writer.writes == []
+
+
+def test_only_the_newest_decision_for_a_transaction_is_planned():
+    """Decision records are append-only, so a re-review appends beside the first."""
+    first = _decision()
+    second = {**_decision(), "decision_id": "decision-txn-1-revised", "category": "Dining Out"}
+
+    plan, skipped = _plan([first, second], [_row()])
+
+    assert [item.after_value for item in plan] == ["Dining Out"]
+    assert any("superseded by" in reason for reason in skipped)
+
+
+def test_an_undo_the_provider_rejected_can_be_retried(store):
+    """A rejected undo changed nothing, so the original still needs a way back."""
+    plan, _ = _plan()
+    writer = FixtureWriter([_document()], job_sequence=["success", "failed", "success"])
+    results = mutations.apply_plan(store, plan, writer, AUTH, sleep=lambda _: None)
+    store.commit()
+
+    first = mutations.undo(store, results[0].attempt_id, writer, AUTH, sleep=lambda _: None)
+    assert first.outcome == "failed"
+
+    retry = mutations.undo(store, results[0].attempt_id, writer, AUTH, sleep=lambda _: None)
+
+    assert retry.succeeded
+    assert writer.documents["txn-1"]["coa"]["name"] == "Uncategorized"
+
+
+def test_a_definitive_rejection_is_failed_not_unknown(store):
+    """A 4xx changed nothing, so the decision must stay retryable."""
+    from simplifi_runtime.sources.api_source import ApiError
+
+    plan, _ = _plan()
+    writer = FixtureWriter([_document()], fail_write=ApiError("rejected", status_code=422))
+
+    results = mutations.apply_plan(store, plan, writer, AUTH, sleep=lambda _: None)
+    store.commit()
+
+    assert results[0].outcome == "failed"
+    assert store.applied_decision_ids() == set(), "a rejected write may be retried"
+
+
+def test_a_poll_failure_keeps_the_job_id(store):
+    """The job is still running somewhere, and the ID is the only handle."""
+
+    class PollFails(FixtureWriter):
+        def job_status(self, job_id):
+            raise OSError("connection reset")
+
+    plan, _ = _plan()
+    writer = PollFails([_document()])
+
+    results = mutations.apply_plan(store, plan, writer, AUTH, sleep=lambda _: None)
+
+    assert results[0].outcome == "unknown"
+    assert results[0].job_id == "job-1"
+    assert store.mutation_outcome(results[0].attempt_id)["job_id"] == "job-1"

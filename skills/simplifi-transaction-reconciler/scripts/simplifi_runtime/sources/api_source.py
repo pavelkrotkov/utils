@@ -54,7 +54,25 @@ EXPIRY_WARN_SECONDS = 6 * 3600
 
 
 class ApiError(RuntimeError):
-    pass
+    """A request reached the provider and came back with an HTTP status.
+
+    `status_code` carries that status where one exists. A write needs it: a
+    definitive 4xx means the provider rejected the request and changed nothing,
+    while a request that never got an answer may or may not have landed. Those
+    are different facts about a financial account and must not share a label.
+    """
+
+    def __init__(self, message: str, *, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class TransportError(ApiError):
+    """The request never produced an HTTP response at all.
+
+    DNS, TLS, a dropped connection, a timeout. Distinct from `ApiError` because
+    the provider's state is unknown afterwards rather than known-unchanged.
+    """
 
 
 class AuthError(ApiError):
@@ -168,10 +186,13 @@ class SimplifiApiClient:
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode(errors="replace")[:300]
             if exc.code in (401, 403):
-                raise AuthError(f"{path} returned {exc.code} — token expired or revoked") from exc
-            raise ApiError(f"{path} returned {exc.code}: {detail}") from exc
+                raise AuthError(
+                    f"{path} returned {exc.code} — token expired or revoked",
+                    status_code=exc.code,
+                ) from exc
+            raise ApiError(f"{path} returned {exc.code}: {detail}", status_code=exc.code) from exc
         except urllib.error.URLError as exc:
-            raise ApiError(f"{path} could not be reached: {exc.reason}") from exc
+            raise TransportError(f"{path} could not be reached: {exc.reason}") from exc
 
     def get(self, path: str, **params) -> dict:
         query = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
@@ -193,17 +214,18 @@ class SimplifiApiClient:
             if exc.code == 500:
                 raise ApiError(
                     f"{path} returned 500. Usually a missing required header, not a "
-                    f"server fault — all seven are required. Body: {body}"
+                    f"server fault — all seven are required. Body: {body}",
+                    status_code=exc.code,
                 ) from exc
-            raise ApiError(f"{path} returned {exc.code}: {body}") from exc
+            raise ApiError(f"{path} returned {exc.code}: {body}", status_code=exc.code) from exc
         except urllib.error.URLError as exc:
             # Network-level: DNS, TLS, no route, blocked egress. Distinct from an
             # HTTP error and worth reporting cleanly rather than tracebacking —
             # on Hermes this is the difference between a readable degraded run
             # and a wall of stack.
-            raise ApiError(f"{path} unreachable: {exc.reason}") from exc
+            raise TransportError(f"{path} unreachable: {exc.reason}") from exc
         except TimeoutError as exc:
-            raise ApiError(f"{path} timed out after {TIMEOUT}s") from exc
+            raise TransportError(f"{path} timed out after {TIMEOUT}s") from exc
 
     @staticmethod
     def _page_as_of(metadata: dict) -> str | None:

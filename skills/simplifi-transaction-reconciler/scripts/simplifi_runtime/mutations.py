@@ -250,6 +250,9 @@ class PlannedMutation:
     #: actually written is built from the provider's live copy.
     payee_display: str = ""
     posted_on: str = ""
+    #: The decision-relevant facts as the reviewer saw them, keyed by the
+    #: provider's own field names so the live document compares directly.
+    reviewed_facts: Mapping[str, str] = field(default_factory=dict)
 
     def describe(self) -> str:
         """Exactly what would be sent, in one paragraph."""
@@ -285,9 +288,26 @@ def plan_category_writes(
     applied = {str(decision_id) for decision_id in already_applied}
     cap = capability("transaction_category")
 
-    plan: list[PlannedMutation] = []
-    skipped: list[str] = []
+    # Decision records are append-only, so a transaction reviewed twice has two
+    # of them and the later one is the reviewer's current judgment. Evaluating
+    # each independently planned a superseded acceptance alongside its
+    # replacement — writing a category the reviewer had already changed their
+    # mind about, or two conflicting writes in sequence.
+    newest: dict[str, Mapping[str, Any]] = {}
+    superseded: list[str] = []
     for record in decisions:
+        transaction_id = str(record.get("transaction_id") or "")
+        previous = newest.get(transaction_id)
+        if previous is not None:
+            superseded.append(
+                f"{previous.get('decision_id')}: superseded by "
+                f"{record.get('decision_id')} for {transaction_id}"
+            )
+        newest[transaction_id] = record
+
+    plan: list[PlannedMutation] = []
+    skipped: list[str] = list(superseded)
+    for record in newest.values():
         decision_id = str(record.get("decision_id") or "")
         transaction_id = str(record.get("transaction_id") or "")
         target = str(record.get("category") or "")
@@ -339,6 +359,7 @@ def plan_category_writes(
                 source_hash=str(row.get("source_hash") or stored_hash),
                 payee_display=str(row.get("payee_display") or ""),
                 posted_on=str(row.get("posted_on") or ""),
+                reviewed_facts=_facts_from_row(row),
             )
         )
     return plan, skipped
@@ -379,6 +400,10 @@ class TransactionWriter:
     def fetch(self, transaction_id: str) -> dict:  # pragma: no cover - interface
         raise NotImplementedError
 
+    def category_id(self, name: str) -> str | None:  # pragma: no cover - interface
+        """The provider's ID for a category display name, when resolvable."""
+        return None
+
     def write(self, document: Mapping[str, Any]) -> dict:  # pragma: no cover - interface
         raise NotImplementedError
 
@@ -401,6 +426,20 @@ class ApiTransactionWriter(TransactionWriter):
     def job_status(self, job_id: str) -> dict:
         return dict(self.client.get(f"/job-statuses/{job_id}"))
 
+    def category_id(self, name: str) -> str | None:
+        """Resolve a category display name to the provider's ID.
+
+        `GET /categories` is a verified read. Category resources carry `name`
+        and `parentId` and no full path, so display paths are built by walking
+        parents; matching here is on the leaf name, which is what a decision
+        record carries.
+        """
+        wanted = name.split(":")[-1].strip().casefold()
+        for resource in self.client.paged("/categories"):
+            if str(resource.get("name", "")).strip().casefold() == wanted:
+                return str(resource.get("id"))
+        return None
+
 
 def _category_of(document: Mapping[str, Any]) -> str:
     coa = document.get("coa")
@@ -409,20 +448,33 @@ def _category_of(document: Mapping[str, Any]) -> str:
     return ""
 
 
-def apply_category(document: Mapping[str, Any], category: str) -> dict:
-    """A deep copy of the live document with one field changed.
+def apply_category(
+    document: Mapping[str, Any], category: str, category_id: str | None = None
+) -> dict:
+    """A deep copy of the live document with the category reference replaced.
 
     Deep, because `coa` is a nested object: a shallow copy would hand the same
     dictionary to both documents and the "before" payload written to the audit
     would silently acquire the new value — the audit would record that nothing
     changed, on the one write where knowing what changed is the entire point.
+
+    The whole reference is replaced, not just its name. Spreading the existing
+    `coa` and setting `name` kept the *old* `id` alongside the new label, and
+    `coa.id` is what the read path resolves — so the document would have
+    identified the old category under the new category's display name, and the
+    provider could reasonably keep the old one or reject the object outright.
     """
     updated = copy.deepcopy(dict(document))
     coa = updated.get("coa")
-    if isinstance(coa, Mapping):
-        updated["coa"] = {**dict(coa), "name": category, "type": "CATEGORY"}
-    else:
-        updated["coa"] = {"name": category, "type": "CATEGORY"}
+    replacement: dict[str, Any] = {"name": category, "type": "CATEGORY"}
+    if category_id is not None:
+        replacement["id"] = category_id
+    elif isinstance(coa, Mapping) and "id" in coa:
+        # No resolved ID: drop the stale one rather than carry it. A document
+        # naming the target category with the previous category's ID is a
+        # contradiction; one with no ID is merely incomplete.
+        pass
+    updated["coa"] = replacement
     return updated
 
 
@@ -455,7 +507,38 @@ def _settle(
         if time.monotonic() >= deadline:
             return OUTCOME_UNKNOWN, job_id, status
         sleep(JOB_POLL_SECONDS)
-        status = str(writer.job_status(job_id).get("status") or "")
+        try:
+            status = str(writer.job_status(job_id).get("status") or "")
+        except Exception:
+            # A poll that fails says nothing about the job, which is still
+            # running somewhere with an ID we know. Losing that ID would leave
+            # the audit describing an unknown write the operator cannot look
+            # up — and the decision is deliberately not retryable afterwards,
+            # so the ID is the only handle left.
+            return OUTCOME_UNKNOWN, job_id, status
+
+
+def _classify_write_failure(exc: BaseException) -> str:
+    """`failed` when the provider rejected it, `unknown` when nobody knows.
+
+    `applied_decision_ids` treats anything that is not `failed` as applied and
+    refuses to retry it, which is right for an ambiguous write and wrong for a
+    rejected one: a token that expired mid-batch, or a payload the provider
+    validated and refused, changed nothing, and the operator must be able to
+    fix it and run again.
+
+    A 5xx stays `unknown`. The request reached the provider, and a server error
+    is not a statement that the work was not done.
+    """
+    from .sources.api_source import ApiError, TransportError
+
+    if isinstance(exc, TransportError):
+        return OUTCOME_UNKNOWN
+    if isinstance(exc, ApiError):
+        status = getattr(exc, "status_code", None)
+        if isinstance(status, int) and 400 <= status < 500:
+            return OUTCOME_FAILED
+    return OUTCOME_UNKNOWN
 
 
 @dataclass
@@ -475,8 +558,62 @@ class MutationResult:
         return self.outcome == OUTCOME_SUCCEEDED
 
 
-def _check_live_document(planned: PlannedMutation, live: Mapping[str, Any]) -> None:
+#: Fields a reviewer's judgment rests on, under the provider's own names. A
+#: pending charge that settles at a different amount is the ordinary case, and
+#: it keeps its ID and its category throughout — so the category check alone
+#: cannot see it.
+REVIEWED_FACTS = ("amount", "payee", "postedOn", "state")
+
+#: How a stored row spells the same facts.
+_ROW_FIELD_FOR = {
+    "amount": "amount_minor_units",
+    "payee": "payee_raw",
+    "postedOn": "posted_on",
+    "state": "txn_state",
+}
+
+
+def _facts_from_document(document: Mapping[str, Any]) -> dict[str, str]:
+    return {name: str(document.get(name, "")) for name in REVIEWED_FACTS}
+
+
+def _facts_from_row(row: Mapping[str, Any]) -> dict[str, str]:
+    """The reviewed facts as the local row records them.
+
+    Compared as strings against the live document. If the provider's amount
+    scaling ever differs from the stored minor units this refuses the write
+    rather than performing it — the fail-safe direction, and a refusal is
+    visible immediately where a wrong write is not.
+
+    A fact the row never recorded is omitted rather than compared as empty: a
+    CSV export carries no settlement state at all, and refusing every write
+    over a column the source does not populate would be a check that only ever
+    fires on the wrong thing.
+    """
+    facts = {}
+    for name, column in _ROW_FIELD_FOR.items():
+        value = row.get(column)
+        if value is not None and str(value) != "":
+            facts[name] = str(value)
+    return facts
+
+
+def _check_live_document(
+    planned: PlannedMutation, live: Mapping[str, Any], reviewed: Mapping[str, str] | None = None
+) -> None:
     """Refuse a write whose target moved since the plan was made."""
+    if reviewed:
+        moved = [
+            name
+            for name, value in _facts_from_document(live).items()
+            if str(reviewed.get(name, value)) != value
+        ]
+        if moved:
+            raise PreconditionError(
+                f"{planned.transaction_id} changed since it was reviewed "
+                f"({', '.join(moved)}); the reviewer approved a different transaction. "
+                "Re-run `analyze` and review again"
+            )
     live_category = _category_of(live)
     if live_category == planned.after_value:
         raise PreconditionError(
@@ -520,7 +657,7 @@ def apply_plan(
 
         try:
             live = writer.fetch(planned.transaction_id)
-            _check_live_document(planned, live)
+            _check_live_document(planned, live, planned.reviewed_facts)
         except PreconditionError as exc:
             # Nothing was sent, so there is no attempt to record — but the
             # refusal is the operator's answer, so it comes back as a result.
@@ -546,7 +683,34 @@ def apply_plan(
             )
             continue
 
-        after = apply_category(live, planned.after_value)
+        try:
+            resolved_id = writer.category_id(planned.after_value)
+        except Exception as exc:
+            results.append(
+                MutationResult(
+                    attempt_id=attempt_id,
+                    planned=planned,
+                    outcome=OUTCOME_FAILED,
+                    error_class=type(exc).__name__,
+                    error_message=f"could not resolve category {planned.after_value!r}: {exc}",
+                )
+            )
+            continue
+        if resolved_id is None:
+            results.append(
+                MutationResult(
+                    attempt_id=attempt_id,
+                    planned=planned,
+                    outcome=OUTCOME_FAILED,
+                    error_class="PreconditionError",
+                    error_message=(
+                        f"the provider has no category named {planned.after_value!r}; "
+                        "this runtime cannot create one"
+                    ),
+                )
+            )
+            continue
+        after = apply_category(live, planned.after_value, resolved_id)
         store.record_mutation_attempt(
             attempt_id=attempt_id,
             capability=planned.capability.name,
@@ -570,7 +734,7 @@ def apply_plan(
             outcome, job_id, status = _settle(writer, response, sleep=sleep)
             error_class = error_message = ""
         except Exception as exc:
-            outcome, job_id, status = OUTCOME_UNKNOWN, "", ""
+            outcome, job_id, status = _classify_write_failure(exc), "", ""
             error_class, error_message = type(exc).__name__, str(exc)
 
         store.record_mutation_outcome(
@@ -633,8 +797,16 @@ def undo(
             f"mutation {attempt_id} {state}; only a settled successful write can be undone. "
             "Check the provider directly before writing again."
         )
-    if store.undo_of(attempt_id) is not None:
-        raise MutationError(f"mutation {attempt_id} has already been undone")
+    existing = store.undo_of(attempt_id)
+    if existing is not None:
+        # An undo the provider definitively rejected changed nothing, so the
+        # original still stands and still needs a way back. Only a settled
+        # success, or an undo whose fate is unknown, blocks a retry — retrying
+        # over an ambiguous one risks restoring twice.
+        existing_outcome = store.mutation_outcome(str(existing["attempt_id"]))
+        blocking = existing_outcome is None or str(existing_outcome["outcome"]) != OUTCOME_FAILED
+        if blocking:
+            raise MutationError(f"mutation {attempt_id} has already been undone")
 
     before = json.loads(str(original["before_document"]))
     after = json.loads(str(original["after_document"]))
@@ -649,7 +821,11 @@ def undo(
         )
 
     undo_attempt_id = uuid.uuid4().hex
-    restored = apply_category(live, _category_of(before))
+    restored = apply_category(
+        live,
+        _category_of(before),
+        (before.get("coa") or {}).get("id") if isinstance(before.get("coa"), Mapping) else None,
+    )
     store.record_mutation_attempt(
         attempt_id=undo_attempt_id,
         capability=str(original["capability"]),
@@ -671,7 +847,7 @@ def undo(
         result_outcome, job_id, status = _settle(writer, response, sleep=sleep)
         error_class = error_message = ""
     except Exception as exc:
-        result_outcome, job_id, status = OUTCOME_UNKNOWN, "", ""
+        result_outcome, job_id, status = _classify_write_failure(exc), "", ""
         error_class, error_message = type(exc).__name__, str(exc)
 
     store.record_mutation_outcome(

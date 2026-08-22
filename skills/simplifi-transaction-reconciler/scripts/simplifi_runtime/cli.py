@@ -39,6 +39,7 @@ from .semantics import (
     is_statistics_eligible,
     is_statistics_quarantined,
 )
+from .sources.api_source import ApiError
 from .sources.csv_source import SchemaError, SimplifiCsvSource
 from .store import RUN_ABORTED, RUN_FAILED, RUN_STARTED, RUN_SUCCEEDED, Store
 from .sync_scope import SyncScope, api_scope, scope_from_profile
@@ -1139,7 +1140,7 @@ def cmd_mutate(args: argparse.Namespace) -> int:
         try:
             writer = _transaction_writer(args)
             result = mutations.undo(store, args.undo, writer, authorization)
-        except mutations.MutationError as exc:
+        except (mutations.MutationError, SecretsError, ApiError) as exc:
             print(f"ERROR {exc}", file=sys.stderr)
             return 1
         finally:
@@ -1152,6 +1153,20 @@ def cmd_mutate(args: argparse.Namespace) -> int:
         latest_run_id, latest_source = store.latest_successful_run()
         if not latest_run_id:
             print(f"ERROR {_no_successful_run_error(db)}", file=sys.stderr)
+            return 1
+        # A CSV export has no provider transaction IDs — the adapter hashes a
+        # synthetic `csv_...` key precisely because none exists. Planning
+        # against those and then fetching `/transactions/csv_ab12…` fails once
+        # per mutation, after authorization, which reads as a provider outage
+        # rather than as the category error it is.
+        if latest_source != "api":
+            print(
+                f"ERROR the latest successful run used source {latest_source!r}, whose "
+                "transaction IDs are local synthetic hashes rather than provider IDs, so "
+                "nothing here can address a provider record. Re-run `ingest --source api` "
+                "and review that packet before mutating.",
+                file=sys.stderr,
+            )
             return 1
         records = store.decision_records()
         retired = store.retired_transaction_ids(latest_source)
@@ -1189,8 +1204,18 @@ def cmd_mutate(args: argparse.Namespace) -> int:
     store = Store(db)
     try:
         writer = _transaction_writer(args)
+        # Re-read what has already been applied under the write lock, now that
+        # nothing else can slip in between the check and the first attempt. Two
+        # overlapping `mutate --apply` runs would otherwise both plan the same
+        # decision and both send it.
+        store.begin_immediate()
+        reserved = store.applied_decision_ids()
+        plan = [item for item in plan if item.decision_id not in reserved]
+        if not plan:
+            print("INFO another run applied these decisions first; nothing left to do")
+            return 0
         results = mutations.apply_plan(store, plan, writer, authorization)
-    except mutations.MutationError as exc:
+    except (mutations.MutationError, SecretsError, ApiError) as exc:
         print(f"ERROR {exc}", file=sys.stderr)
         return 1
     finally:
