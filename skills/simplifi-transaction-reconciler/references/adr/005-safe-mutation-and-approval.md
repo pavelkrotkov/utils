@@ -6,6 +6,9 @@
 
 - Status: Accepted; implemented for `transaction_category`
 - Scope: category edits, native rules, and undo
+- Evidence: [Simplifi API reference](../simplifi-api.md), including its
+  [transaction rules and renaming](../simplifi-api.md#transaction-rules-and-renaming)
+  section and [evidence status legend](../simplifi-api.md#evidence-status-legend)
 - Implementation: `scripts/simplifi_runtime/mutations.py`, the `mutate`
   command, and the [mutation register](../mutations.md)
 
@@ -34,7 +37,25 @@ Before each write:
 - preserve the exact pre-write document before sending.
 
 Use narrow rule terms, check expected match counts and collisions across all
-rows, skip existing equivalent rules, and make reruns idempotent. Poll
+rows, skip existing equivalent rules, and make reruns idempotent.
+
+Native rule mutation is additionally gated on evidence that does not yet exist.
+The [Simplifi API reference](../simplifi-api.md#transaction-rules-and-renaming)
+records that no rule-management endpoint was ever captured and that the matching
+semantics of a contains-style operator are unverified. Both are preconditions
+for this ADR's own requirements: a narrow term cannot be chosen, and an expected
+match count cannot be predicted, against unknown matching semantics.
+
+Completing that capture is necessary and not sufficient. It is deliberately
+read-only — it lists rules and opens one for editing, and forbids saving,
+creating or deleting — so it can settle matching semantics and the read shape
+while establishing nothing about the write: no method, no payload, no response
+contract. Rule mutation therefore stays out of scope until a *separately
+authorized write capture* verifies those as well; a dated read-only capture
+alone must not be read as unblocking it, or an implementation would end up
+guessing a payload against a live financial account. Category edits on
+`PUT /transactions/{id}`, whose read and write shapes are both verified, are not
+blocked by any of this. Poll
 asynchronous write jobs before recording success. Store before/after payloads,
 responses, decisions, and resolved job IDs; rate-limit writes. Undo restores
 the saved prior document where the provider still permits it, without claiming
