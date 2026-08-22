@@ -30,10 +30,6 @@ show_missing = true
 
 [dependency-groups]
 dev = [
-    # Declared so Dependabot tracks it; pip is otherwise only a
-    # transitive dependency (pip-api <- pip-audit) and would not be
-    # proposed for security bumps such as PYSEC-2026-3721.
-    "pip>=26.2.1",
     # Declared so Dependabot tracks it. pip is otherwise only a
     # transitive dependency (pip-api <- pip-audit), and version
     # updates cover declared dependencies, so advisories like
