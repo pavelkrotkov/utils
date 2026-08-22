@@ -22,7 +22,11 @@ UNVERIFIED_SUBJECTS = ("/transaction-rules", "/memorized-rules", "CONTAINS")
 
 def section(text: str, heading: str) -> str:
     """The body of a `##` section, up to the next `##` heading."""
-    match = re.search(rf"^## {re.escape(heading)}$(.*?)(?=^## )", text, re.MULTILINE | re.DOTALL)
+    match = re.search(
+        rf"^## {re.escape(heading)}$(.*?)(?=^## )",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
     assert match, f"missing section: {heading}"
     return match.group(1)
 
