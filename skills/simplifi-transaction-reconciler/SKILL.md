@@ -27,6 +27,9 @@ material needed for the current decision:
   this skill's capabilities.
 - For payee identity or rule matching, read
   [ADR-002](references/adr/002-merchant-identity-and-normalization.md).
+- For what an adapter produces, what a consumer may read, and which facts are
+  allowed to differ between the CSV and the API, read
+  [ADR-011](references/adr/011-normalized-transaction-evidence.md).
 - For spending, transfers, refunds, credits, or projections, read
   [ADR-003](references/adr/003-accounting-semantics-and-projections.md).
 - For deterministic review, memory, or model residue, read
@@ -133,15 +136,16 @@ therefore always fails once — that is the two-step confirmation working.
 `--dry-run` is retained for existing scripts but is now the default behaviour;
 passing it together with `--send` is an error.
 
-**What is sent:** the normalized payee name, the amount, the account name, the
-posted date, and a per-request surrogate ID (`t1`, `t2`, …). The category
+**What is sent:** the normalized payee name, the amount *with its currency
+code*, the account name, the posted date, and a per-request surrogate ID (`t1`, `t2`, …). The category
 taxonomy goes too, since the model must choose from it. The *raw* bank
 descriptor is never sent — it can carry card fragments, terminal IDs, and store
-locations that normalization removes. Note that the API adapter stores that raw
-descriptor in `payee_display` for most rows, so the payee is re-derived at the
-egress boundary rather than trusted from the row; an account name that is only
-the provider's `accountId` fallback is withheld entirely rather than sent under
-a friendlier label. Neither the provider's transaction or account IDs, the
+locations that normalization removes. Both adapters now agree on the safe
+merchant name at the source seam (ADR-011), and egress asks for it there rather
+than re-deriving its own; a stored display value identical to the raw
+descriptor is still refused, because rows written before that agreement can
+hold one. An account the source could not name is withheld entirely rather than
+sent under the provider's `accountId`. Neither the provider's transaction or account IDs, the
 source hash, nor the pre-conversion foreign amounts are sent. Payloads are
 assembled from an allowlist and then re-checked against the rows they came
 from — including the fields this run redacted — so a value cannot arrive
@@ -244,7 +248,16 @@ because CSV exports do not expose settlement or projection state.
    lowercase `canonical`, and human-facing `display` values. Record rules that
    fired. Group merchants, history, recurring series, and collisions by
    `canonical`, never by `display`; use raw statement names only as read-side
-   evidence.
+   evidence. Derive all of it once, in `evidence.build_record`, so both
+   adapters mean the same thing by the same field and no consumer re-derives
+   it differently.
+   **Amounts are the currency's, not the dollar's.** Every conversion goes
+   through `Money`, whose exponent comes from ISO 4217. The CSV export carries
+   no currency column, so `ingest --currency` states it; the default is USD.
+   **A display name is never an identifier.** An account the source could not
+   name renders as `unknown account` everywhere and carries the reason code
+   `account_name_unknown`; the provider's `accountId` stays in its own column
+   and never reaches an agent-facing path.
 5. **Resolve semantics before statistics.** Classify each row using provider
    fields first and transparent local evidence second. Keep transfers, card
    payments, investments, and balance adjustments out of spending statistics
