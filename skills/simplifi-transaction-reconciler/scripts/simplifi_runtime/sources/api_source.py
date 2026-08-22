@@ -27,15 +27,16 @@ import urllib.parse
 import urllib.request
 import uuid
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
 from typing import NamedTuple
 
-from ..money import Money
-from ..normalize import normalize
-from ..semantics import annotate_eligibility, classify
+from ..evidence import AccountRef, EvidenceError, build_record, parse_amount_value
 
 BASE = "https://services.quicken.com"
 TIMEOUT = 60
+#: Every account observed in this dataset settles in USD, and the read
+#: endpoints carry no currency field to check that against. Named so a non-USD
+#: dataset has one place to correct rather than an arithmetic constant to find.
+API_CURRENCY = "USD"
 PAGE_LIMIT = 500
 MAX_PAGES = 200  # circuit breaker against a pagination bug becoming an infinite loop
 
@@ -452,7 +453,6 @@ class SimplifiApiSource:
         self._validate_transaction(t)
         cp = t.get("cpData") or {}
         account = accounts.get(t.get("accountId"), {})
-        account_name = account.get("name", "") or t.get("accountId", "")
 
         # `cpData` does not exist on any read endpoint (probed five ways), so
         # this always falls through to `t["payee"]` — and that turns out to be
@@ -468,17 +468,15 @@ class SimplifiApiSource:
         # API feed vs 104 on the CSV, because there is actually something to
         # strip. Chasing `cpData` was chasing a field that duplicates `payee`.
         payee_raw = (cp.get("payee") or t.get("payee") or "").strip()
-        payee_display_api = (t.get("payee") or "").strip()
+        provider_payee = (t.get("payee") or "").strip()
 
+        # The API reports amounts in the dataset's currency and does not label
+        # them; every account observed so far is USD. Stated once here rather
+        # than by a bare `* 100` further down, so the assumption is visible to
+        # anyone auditing a non-USD dataset.
         try:
-            amount = Decimal(str(t.get("amount", 0)))
-            if not amount.is_finite():
-                raise ValueError("amount is not finite")
-            scaled = amount * 100
-            if scaled != scaled.to_integral_value():
-                raise ValueError("amount has sub-cent precision")
-            money = Money(int(scaled), "USD")
-        except (InvalidOperation, OverflowError, ValueError) as exc:
+            money = parse_amount_value(t.get("amount", 0), API_CURRENCY)
+        except EvidenceError as exc:
             raise ApiError(f"transaction {t.get('id', '?')} has invalid amount") from exc
         # `coa.type` states the kind outright — CATEGORY / ACCOUNT /
         # UNCATEGORIZED / BALANCE_ADJUSTMENT. Use it rather than inferring from
@@ -513,68 +511,52 @@ class SimplifiApiSource:
         else:
             category = self._category_name(coa, categories)
         inferred_category = self._category_name(cp.get("inferredCoa"), categories)
-        is_uncategorized = not category or category.lower() == "uncategorized"
 
-        desc = normalize(payee_raw)
         report_exclusion = t.get("isExcludedFromReports")
-        sem = classify(
-            category=category,
+        return build_record(
+            transaction_id=t["id"],
+            posted_on=(t.get("postedOn") or "")[:10],
+            # An account with no name is recorded as unnamed. This used to fall
+            # back to `accountId`, which put a provider identifier in front of
+            # every downstream reader wearing a display name's label.
+            account=AccountRef(
+                name=str(account.get("name") or "").strip(),
+                provider_id=t.get("accountId"),
+            ),
+            money=money,
             payee_raw=payee_raw,
-            amount_minor_units=money.minor_units,
-            exclusion_flag=(None if report_exclusion is None else bool(report_exclusion)),
+            # Simplifi's own `payee`. `build_record` treats it as a rename only
+            # when it differs from the descriptor — for 58% of rows it *is* the
+            # descriptor, and using it as a display name would publish the store
+            # number and the terminal location.
+            provider_payee=provider_payee,
+            category=category,
             account_names=account_names,
-        )
-
-        return annotate_eligibility(
-            {
-                "transaction_id": t["id"],
-                "modified_at": t.get("modifiedAt") or None,
-                "posted_on": (t.get("postedOn") or "")[:10],
-                # cpData.txnOn is the *transaction* date; postedOn is settlement.
-                # Keeping both preserves the transaction and settlement dates for
-                # date-based signals.
-                "transacted_on": (cp.get("txnOn") or "")[:10] or None,
-                "account_name": account_name,
-                "account_id": t.get("accountId"),
-                "amount_minor_units": money.minor_units,
-                "currency": "USD",
-                "currency_exponent": 2,
-                "payee_raw": payee_raw,
-                "payee_normalized": desc.normalized,
-                "payee_canonical": desc.canonical,
-                "payee_display": payee_display_api or desc.display,
-                "norm_rules_applied": ",".join(desc.rules_applied),
-                "original_currency": desc.original_currency,
-                "original_amount": desc.original_amount,
-                "is_foreign_charge": int(desc.original_currency is not None),
-                "category": category,
-                "inferred_category": inferred_category,
-                "is_uncategorized": int(is_uncategorized),
-                # 2 means unknown: GET /transactions does not expose this flag.
-                "exclusion_flag": 2 if report_exclusion is None else int(bool(report_exclusion)),
-                "excluded_from_f2s": int(bool(t.get("isExcludedFromF2S"))),
-                "recurring_flag": int(bool(t.get("isSubscription") or t.get("isBill"))),
-                # PENDING vs CLEARED. The CSV has no equivalent, and without it the
-                # duplicate detector cannot tell a real double-charge from a pending
-                # row sitting alongside its posted twin. 156 of 400 sampled rows are
-                # PENDING, so this is the common case, not an edge case.
-                # (These were already extracted here but never made it into the
-                # store's column list, so they were silently discarded on write.
-                # Named `txn_state` because `state` is too generic to grep for.)
-                "txn_state": t.get("state") or None,
-                "match_state": t.get("matchState") or None,
-                # The discriminator between a real pending transaction and a
-                # PROJECTED one. Both carry state=PENDING; only projections carry a
-                # scheduled-model id. Reading a projection as a charge is how a
-                # confusing a cancelled recurring item with active billing.
-                "scheduled_model_id": t.get("stModelId") or None,
-                "scheduled_due_on": t.get("stDueOn") or None,
-                "is_split": int(bool(t.get("split"))),
-                "is_reviewed": int(bool(t.get("isReviewed"))),
-                "kind": sem.kind.value,
-                "poisons_statistics": int(sem.poisons_statistics),
-                "semantics_reasons": "; ".join(sem.reasons),
-            }
+            exclusion_flag=(None if report_exclusion is None else bool(report_exclusion)),
+            recurring_flag=bool(t.get("isSubscription") or t.get("isBill")),
+            modified_at=t.get("modifiedAt") or None,
+            # cpData.txnOn is the *transaction* date; postedOn is settlement.
+            # Keeping both preserves the transaction and settlement dates for
+            # date-based signals.
+            transacted_on=(cp.get("txnOn") or "")[:10] or None,
+            inferred_category=inferred_category,
+            excluded_from_f2s=bool(t.get("isExcludedFromF2S")),
+            # PENDING vs CLEARED. The CSV has no equivalent, and without it the
+            # duplicate detector cannot tell a real double-charge from a pending
+            # row sitting alongside its posted twin. 156 of 400 sampled rows are
+            # PENDING, so this is the common case, not an edge case.
+            # (Named `txn_state` in the record because `state` is too generic
+            # to grep for.)
+            txn_state=t.get("state") or None,
+            match_state=t.get("matchState") or None,
+            # The discriminator between a real pending transaction and a
+            # PROJECTED one. Both carry state=PENDING; only projections carry a
+            # scheduled-model id. Reading a projection as a charge is how a
+            # cancelled recurring item gets confused with active billing.
+            scheduled_model_id=t.get("stModelId") or None,
+            scheduled_due_on=t.get("stDueOn") or None,
+            is_split=bool(t.get("split")),
+            is_reviewed=bool(t.get("isReviewed")),
         )
 
 

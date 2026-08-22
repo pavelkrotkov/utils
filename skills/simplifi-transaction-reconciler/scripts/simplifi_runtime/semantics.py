@@ -106,9 +106,18 @@ class Eligibility:
 def assess_eligibility(row: dict) -> Eligibility:
     """Evaluate review eligibility without guessing missing source fields."""
     reasons: list[str] = []
-    required = ("transaction_id", "posted_on", "amount_minor_units", "account_name")
+    required = ("transaction_id", "posted_on", "amount_minor_units")
     if any(row.get(field) in (None, "") for field in required):
         reasons.append("missing_required_field")
+
+    # An unnamed account is a diagnostic, not a disqualification. It used to be
+    # required, and the API path only ever satisfied it by substituting the
+    # provider's `accountId` for the missing name — so the check was passing on
+    # the strength of the very leak it looked like it was guarding against.
+    # With that substitution removed, treating the name as required would newly
+    # discard real transactions whose facts are all present, over a label.
+    if not str(row.get("account_name") or "").strip():
+        reasons.append("account_name_unknown")
 
     exclusion_flag = row.get("exclusion_flag")
     if exclusion_flag is True or exclusion_flag == 1:

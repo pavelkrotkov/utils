@@ -36,11 +36,11 @@ dev = [
     # PYSEC-2026-3721 required a manual relock.
     "pip>=26.2.1",
     "pip-audit>=2.10.1",
-    "pre-commit>=4.6.1",
+    "pre-commit>=4.6.2",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
-    "ruff>=0.16.0",
-    "ty>=0.0.63",
+    "ruff>=0.16.2",
+    "ty>=0.0.70",
 ]
 
 [tool.ty.src]

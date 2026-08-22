@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from itertools import pairwise
 
+from .evidence import account_ref
+from .money import Money, money_from_row
 from .semantics import is_projected, is_statistics_eligible
 
 #: A series needs this many cleared charges before we will call it recurring.
@@ -94,6 +96,17 @@ BILL_CATEGORIES = {
 MIN_GHOST_HISTORY = 1
 
 
+def _amount(series: Series, major_units: float) -> str:
+    """A derived figure rendered as money, in the series' own currency.
+
+    These read `$1,000.00 -> $1,200.00` regardless of currency, so a ¥1,000 to
+    ¥1,200 increase was reported in dollars — a number a reader would act on,
+    with a symbol that was simply wrong.
+    """
+    money = series.money(major_units)
+    return f"{money.formatted(grouped=True)} {money.currency}"
+
+
 @dataclass
 class Series:
     merchant: str
@@ -103,7 +116,23 @@ class Series:
 
     @property
     def label(self) -> str:
-        return f"{self.merchant} [{self.identity}]" if self.identity else self.merchant
+        """A human-readable series name that never carries the account key.
+
+        `identity` is a join key and may be the provider's account ID. It
+        separates two people billed by the same merchant; it is not evidence,
+        and a label is exactly the sort of string that ends up in an artifact.
+        """
+        account = self.account_display
+        return f"{self.merchant} [{account}]" if account else self.merchant
+
+    @property
+    def account_display(self) -> str:
+        """The safe account name shared by this series, or nothing."""
+        for row in (*self.charges, *self.projected):
+            ref = account_ref(row)
+            if ref.is_named:
+                return ref.name
+        return ""
 
     @property
     def transaction_ids(self) -> tuple[str, ...]:
@@ -119,8 +148,28 @@ class Series:
         )
 
     @property
+    def currency(self) -> str:
+        """The series' currency, taken from its own rows.
+
+        A series is per-merchant and per-account, so its charges share an
+        account and therefore a currency. Reported so that every figure derived
+        from `amounts` can be rendered as money rather than as a bare number
+        that a reader has to assume is dollars.
+        """
+        for row in (*self.charges, *self.projected):
+            code = str(row.get("currency") or "").strip()
+            if code:
+                return code.upper()
+        return "USD"
+
+    def money(self, major_units: float) -> Money:
+        """A derived figure carried back into this series' own currency."""
+        exponent = Money(0, self.currency).exponent
+        return Money(round(major_units * (10**exponent)), self.currency)
+
+    @property
     def amounts(self) -> list[float]:
-        return [abs(c["amount_minor_units"]) / 100 for c in self.charges]
+        return [abs(money_from_row(c).as_float) for c in self.charges]
 
     @property
     def dates(self) -> list[date]:
@@ -203,7 +252,8 @@ def _series(rows: list[dict]) -> dict[str, Series]:
         leaf = (r.get("category") or "").split(":")[-1].strip().lower()
         if leaf in BILL_CATEGORIES:
             continue
-        identity = str(r.get("account_id") or r.get("account_name") or "").strip()
+        correlation = account_ref(r).correlation_key
+        identity = "" if correlation is None else ":".join(correlation)
         series_key = f"{key}::{identity}" if identity else key
         s = out[series_key]
         s.merchant = key
@@ -246,7 +296,7 @@ def _hike(s: Series, interval: float) -> Finding | None:
     return Finding(
         "hike",
         s.merchant,
-        f"${old:,.2f} -> ${new:,.2f} per charge ({new / old:.1f}x)",
+        f"{_amount(s, old)} -> {_amount(s, new)} per charge ({new / old:.1f}x)",
         (new - old) * (30.44 / interval) * 12,
         transaction_ids=s.transaction_ids,
     )
@@ -280,7 +330,7 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
         # GHOST — projected but not actually charging.
         future = [p for p in s.projected if p["posted_on"] > today.isoformat()]
         if future and len(s.charges) >= MIN_GHOST_HISTORY and silent > interval * SILENT_INTERVALS:
-            waste = abs(future[0]["amount_minor_units"]) / 100 * (365.25 / interval)
+            waste = abs(money_from_row(future[0]).as_float) * (365.25 / interval)
             findings.append(
                 Finding(
                     "ghost",
@@ -457,7 +507,8 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
                         "renamed",
                         f"{old.merchant} -> {cand.merchant}",
                         f"stopped {old.last_charge}; {cand.merchant} started {started} at "
-                        f"${cand.monthly:,.2f} (was ${old.monthly:,.2f}) and shares "
+                        f"{_amount(cand, cand.monthly)} (was {_amount(old, old.monthly)}) "
+                        f"and shares "
                         f"'{sorted(shared)[0]}'. Same service, new name — not a "
                         f"cancellation.",
                         0.0,
@@ -473,7 +524,7 @@ def analyse(rows: list[dict], today: date | None = None) -> list[Finding]:
             key, started, cand = best
             f.detail += (
                 f" Possibly replaced by {cand.merchant} (started {started}, "
-                f"${cand.monthly:,.2f}/mo) — similar price and timing "
+                f"{_amount(cand, cand.monthly)}/mo) — similar price and timing "
                 f"only, names unrelated, so treat as a guess."
             )
 
@@ -486,13 +537,13 @@ def summary(rows: list[dict], today: date | None = None) -> str:
     live = {k: s for k, s in _series(rows).items() if _is_live(s, today)}
     lines = [
         f"{len(live)} live subscriptions, "
-        f"${sum(s.monthly for s in live.values()):,.2f}/mo "
-        f"(${sum(s.monthly for s in live.values()) * 12:,.2f}/yr)",
+        f"{sum(s.monthly for s in live.values()):,.2f}/mo "
+        f"({sum(s.monthly for s in live.values()) * 12:,.2f}/yr)",
         "",
     ]
     for _key, s in sorted(live.items(), key=lambda kv: -kv[1].monthly):
         lines.append(
-            f"  ${s.monthly:>8,.2f}/mo  {s.merchant[:34]:34} "
+            f"  {_amount(s, s.monthly):>12}/mo  {s.merchant[:34]:34} "
             f"every ~{s.interval_days:.0f}d, last {s.last_charge}"
         )
     findings = analyse(rows, today)

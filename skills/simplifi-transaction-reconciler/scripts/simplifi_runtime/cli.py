@@ -28,6 +28,7 @@ from . import (
     subscriptions,
     unattended,
 )
+from .evidence import account_ref, evidence_from_row
 from .memory import MerchantMemory, Proposal
 from .secrets import SecretsError
 from .semantics import (
@@ -464,7 +465,7 @@ def _ingest_within_run(args: argparse.Namespace, store: Store, run_id: int, mode
             return 1
         artifacts.warn_if_exposed(path)
         try:
-            records = SimplifiCsvSource(path).fetch()
+            records = SimplifiCsvSource(path, currency=args.currency).fetch()
         except (OSError, SchemaError, ValueError) as exc:
             print(f"ERROR {exc}", file=sys.stderr)
             _finalize_failed_run(store, run_id, RUN_FAILED, exc)
@@ -553,9 +554,7 @@ def _ingest_within_run(args: argparse.Namespace, store: Store, run_id: int, mode
         retired_absent = store.retire_absent_snapshot(
             run_id, {r["transaction_id"] for r in records}
         )
-    store.record_accounts(
-        {r["account_name"] for r in records if not r.get("is_deleted") and r["account_name"]}
-    )
+    store.record_accounts(_account_names([r for r in records if not r.get("is_deleted")]))
     store.finish_run(
         run_id,
         RUN_SUCCEEDED,
@@ -713,7 +712,7 @@ def _known_categories(rows: list[dict]) -> set[str]:
     names are removed so a proposal cannot relabel a transfer as its
     destination account.
     """
-    accounts = {row["account_name"] for row in rows}
+    accounts = _account_names(rows)
     return {
         (row["category"] or "").strip()
         for row in rows
@@ -721,8 +720,19 @@ def _known_categories(rows: list[dict]) -> set[str]:
     } - accounts
 
 
+def _account_names(rows: list[dict]) -> set[str]:
+    """Every account name in the dataset, with unnamed accounts left out.
+
+    Category taxonomies subtract this set, because Simplifi encodes a transfer
+    by naming the destination account in the category. The placeholder for an
+    unnamed account is not a category anyone could propose, so including it
+    would only risk subtracting a real category that happened to match it.
+    """
+    return {ref.name for ref in (account_ref(row) for row in rows) if ref.is_named}
+
+
 def _model_taxonomy(rows: list[dict]) -> list[str]:
-    accounts = {row["account_name"] for row in rows}
+    accounts = _account_names(rows)
     return sorted(
         {
             (row["category"] or "").strip()
@@ -1215,8 +1225,8 @@ def cmd_classify(args: argparse.Namespace) -> int:
                 [
                     proposal.transaction_id,
                     row["posted_on"],
-                    _csv_safe_text(row["payee_display"]),
-                    f"{row['amount_minor_units'] / 100:.2f}",
+                    _csv_safe_text(evidence_from_row(row).merchant.safe_display()),
+                    evidence_from_row(row).money.formatted(),
                     _csv_safe_text(proposal.category or ""),
                     f"{proposal.confidence:.2f}",
                     _csv_safe_text(proposal.rationale),
@@ -1416,6 +1426,16 @@ def build_parser() -> argparse.ArgumentParser:
     ingest = sub.add_parser("ingest", help="load CSV or API transactions into SQLite")
     ingest.add_argument("path", nargs="?", help="CSV path when --source csv")
     ingest.add_argument("--source", choices=("csv", "api"), default="csv")
+    ingest.add_argument(
+        "--currency",
+        default="USD",
+        help=(
+            "ISO 4217 code the CSV export's Amount column is denominated in. "
+            "The export carries no currency, so this is stated rather than "
+            "detected; getting it wrong misscales every amount by the "
+            "difference in minor-unit exponents."
+        ),
+    )
     ingest.add_argument("--since", help="API dateOnAfter value, YYYY-MM-DD")
     cursor_group = ingest.add_mutually_exclusive_group()
     cursor_group.add_argument("--modified-after", help="API modifiedAfter cursor/value")
