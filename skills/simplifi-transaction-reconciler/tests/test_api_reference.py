@@ -83,6 +83,16 @@ def test_adr_005_references_the_evidence_gap():
 
 
 def test_skill_still_forbids_rule_writes():
-    """Unwrapped, because the boundary sentence is wrapped across lines."""
+    """The capability boundary refuses rule writes, however it is worded.
+
+    Asserted on the property rather than one phrasing. The original checked for
+    the exact string `transaction/category/rule writes`, which #154 rewrote when
+    it added the category-write capability — the boundary still forbade rule
+    writes, but the test failed on the wording rather than the meaning.
+    Unwrapped, because the sentence spans lines.
+    """
     skill = " ".join(SKILL_MD.read_text(encoding="utf-8").split())
-    assert "transaction/category/rule writes" in skill
+    boundary = skill[skill.index("The following are explicitly unavailable") :]
+    boundary = boundary[: boundary.index("Do not invent an endpoint")]
+
+    assert "rule writes" in boundary, boundary
