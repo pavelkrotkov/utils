@@ -37,9 +37,11 @@ material needed for the current decision:
   [ADR-003](references/adr/003-accounting-semantics-and-projections.md).
 - For deterministic review, memory, or model residue, read
   [ADR-004](references/adr/004-deterministic-first-escalation.md).
-- For the non-executable future mutation design, read
-  [ADR-005](references/adr/005-safe-mutation-and-approval.md). Do not execute
-  or improvise that design in the current skill.
+- Before any provider write, read
+  [ADR-005](references/adr/005-safe-mutation-and-approval.md) and the
+  [mutation register](references/mutations.md), which record what is callable,
+  what is refused and why, how authorization works, and what undo does and does
+  not restore. Do not improvise beyond the register's available capabilities.
 - For storage, incremental sync, or reproducibility, read
   [ADR-006](references/adr/006-provenance-and-incremental-storage.md).
 - For the deterministic agent boundary and its safe field allowlist, read the
@@ -67,15 +69,24 @@ The packaged runtime supports only these operations:
 - inspect API read schemas and connection health;
 - optionally, and only on an explicit `--send`, ask a model to classify
   unresolved rows and write proposal files;
-- validate structured agent proposals and append local decision records.
+- validate structured agent proposals and append local decision records;
+- on an explicit, named human authorization, apply an accepted category
+  decision to one transaction, and undo it.
 
 The following are explicitly unavailable: login or access-token refresh, bank or
-institution refresh, notifications, account writes, transaction/category/rule
-writes, proposal approval or application, and undo/rollback. If any of these is
-requested, report that it is unavailable and stop. Do not invent an endpoint or
-call an observed endpoint from the reference material merely because it exists.
+institution refresh, notifications, transaction deletion or splitting, and rule
+writes of any kind. If any of these is requested, report that it is unavailable
+and stop. Do not invent an endpoint or call an observed endpoint from the
+reference material merely because it exists.
+
 Recording a decision is not approving one: a decision record documents a
-judgment for human review and never authorizes a provider write.
+judgment for human review and never authorizes a provider write. Applying one
+is a separate step, in a separate command, that requires a person to name
+themselves and say why — and that authorization is written to an append-only
+audit trail. Analysis, classification and scheduled execution remain read-only;
+`mutate --apply` is refused under `--unattended`. Never run it on your own
+initiative, and never treat a proposal, a finding, or a decision record as
+authority to run it.
 
 ## Packaged read/analyze runtime
 
@@ -99,6 +110,9 @@ uv run ./scripts/simplifi_transaction_reconciler.py classify \
 uv run ./scripts/simplifi_transaction_reconciler.py decide \
   --db /path/to/review.sqlite --packet /path/to/review-packet.json \
   --proposals /path/to/proposals.json --out /path/to/decisions.json
+uv run ./scripts/simplifi_transaction_reconciler.py mutate --db /path/to/review.sqlite
+uv run ./scripts/simplifi_transaction_reconciler.py mutate --db /path/to/review.sqlite \
+  --apply --authorized-by "name" --authorization-note "why these writes"
 ```
 
 `analyze` also emits `review-packet.json` beside the HTML report by default.
@@ -120,11 +134,26 @@ malformed decision, request an unsupported or mutating action, propose a
 category the dataset does not use, omit a rationale, or reference a run that a
 later ingest has superseded. Every rejection reports its JSON path and code.
 
+`mutate` is the only command that can change a live account, and only for one
+capability: setting a transaction's category through the verified
+`PUT /transactions/{id}`. It is dry-run by default; the preview names the
+endpoint, the transaction, the field, and both values, and is rendered from the
+same plan the apply path executes. `--apply` additionally requires
+`--authorized-by` and `--authorization-note`, both written to an append-only
+audit trail, and is refused under `--unattended`. The plan is built from stored
+decision records, never from a proposal file, and each write re-fetches the
+live document and refuses if it moved since the review. `mutate --capabilities`
+prints the capability and risk register; `--history` prints the audit trail;
+`--undo ATTEMPT_ID` restores the document preserved before a write. See the
+[mutation register](references/mutations.md).
+
 ### Model data egress
 
 Every command declares its position on sending data off the machine, on every
 run. Only `classify` can disclose anything to a third party, and only when
-asked. The declaration distinguishes two claims: `analyze`, `decide`, `subs`,
+asked. `mutate --apply` declares that it *writes* to the provider rather than
+that it reads — the two are different claims, and one line covering both would
+describe a write as a read. The declaration distinguishes two claims: `analyze`, `decide`, `subs`,
 and `ingest --source csv` make no network calls at all, while `probe`,
 `schema`, and `ingest --source api` read the provider — your own data from the
 system it already lives in — and say so rather than claiming to be offline.

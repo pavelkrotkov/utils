@@ -152,6 +152,27 @@ class SimplifiApiClient:
 
     # --- plumbing -----------------------------------------------------------
 
+    def put(self, path: str, document: dict) -> dict:
+        """A full-document write. Returns the provider's job envelope.
+
+        Separate from `get` rather than a `method=` parameter on it, so that a
+        read path can never acquire a write by passing an argument. Every
+        caller of this is in `mutations`, behind an explicit authorization.
+        """
+        body = json.dumps(document).encode("utf-8")
+        headers = {**_headers(self.token, self.dataset_id), "Content-Type": "application/json"}
+        req = urllib.request.Request(f"{BASE}{path}", data=body, headers=headers, method="PUT")
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode(errors="replace")[:300]
+            if exc.code in (401, 403):
+                raise AuthError(f"{path} returned {exc.code} — token expired or revoked") from exc
+            raise ApiError(f"{path} returned {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise ApiError(f"{path} could not be reached: {exc.reason}") from exc
+
     def get(self, path: str, **params) -> dict:
         query = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
         url = f"{BASE}{path}" + (f"?{query}" if query else "")

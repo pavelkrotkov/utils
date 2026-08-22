@@ -22,6 +22,7 @@ from . import (
     egress,
     judgment_examples,
     llm,
+    mutations,
     prioritize,
     report,
     review_packet,
@@ -1052,6 +1053,164 @@ def cmd_decide(args: argparse.Namespace) -> int:
     return 0
 
 
+def _authorization(args: argparse.Namespace) -> mutations.Authorization:
+    """Build the authorization, or explain exactly what is missing.
+
+    Two separate arguments rather than one `--yes`, because the audit trail has
+    to answer "who, and why" months later, and a boolean answers neither.
+    """
+    if not args.authorized_by or not args.authorization_note:
+        raise mutations.AuthorizationError(
+            "--apply requires --authorized-by NAME and --authorization-note 'why'. "
+            "These are written to the append-only audit trail; a flag alone cannot "
+            "tell an intentional approval from one left in a shell history"
+        )
+    return mutations.Authorization(
+        authorized_by=str(args.authorized_by), note=str(args.authorization_note)
+    )
+
+
+def cmd_mutate(args: argparse.Namespace) -> int:
+    """Plan, preview, apply, or undo provider writes.
+
+    Dry run is the default and the preview is rendered from the same plan
+    `apply_plan` executes. Writing needs `--apply` plus a named authorization.
+    """
+    if args.capabilities:
+        print(mutations.describe_capabilities())
+        return 0
+    # A scheduled run has nobody to answer for a write. ADR-010 keeps periodic
+    # execution read-only, and the check is here rather than in the docs so that
+    # putting `mutate --apply` in a cron line fails at the first firing.
+    if args.apply and args.unattended:
+        print(
+            "ERROR --apply is refused under --unattended: an authorization names a "
+            "person, and a scheduled run has none. Run it interactively.",
+            file=sys.stderr,
+        )
+        return 2
+    # Checked before anything else reads the database: an `--apply` with no
+    # authorization is misconfigured whether or not today's plan is empty, and
+    # discovering that on the first run that *does* have something to write is
+    # the worst moment to discover it.
+    authorization = None
+    if args.apply:
+        try:
+            authorization = _authorization(args)
+        except mutations.AuthorizationError as exc:
+            print(f"ERROR {exc}", file=sys.stderr)
+            return 2
+    try:
+        _prepare_paths(args)
+    except (artifacts.ArtifactError, unattended.UnattendedError) as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
+    db = Path(args.db)
+    if not db.exists():
+        print(f"ERROR no database at {db}; run `ingest` first", file=sys.stderr)
+        return 1
+    artifacts.harden_existing(db)
+
+    if args.history:
+        store = Store(db)
+        try:
+            for row in store.mutation_history():
+                print(
+                    f"{row['attempt_id']} {row['attempted_at']} {row['capability']} "
+                    f"{row['transaction_id']} {row['change_summary']} "
+                    f"outcome={row['outcome'] or 'never settled'} "
+                    f"by={row['authorized_by']}"
+                )
+        finally:
+            store.close()
+        return 0
+
+    print(f"INFO {egress.mutation_declaration('mutate', applying=bool(args.apply)).describe()}")
+
+    if args.undo:
+        if authorization is None:
+            print(
+                "ERROR an undo writes to the provider, so it requires --apply "
+                "together with --authorized-by and --authorization-note",
+                file=sys.stderr,
+            )
+            return 2
+        store = Store(db)
+        try:
+            writer = _transaction_writer(args)
+            result = mutations.undo(store, args.undo, writer, authorization)
+        except mutations.MutationError as exc:
+            print(f"ERROR {exc}", file=sys.stderr)
+            return 1
+        finally:
+            store.close()
+        print(f"INFO undo {result.attempt_id}: {result.outcome}")
+        return 0 if result.succeeded else 1
+
+    store = Store(db)
+    try:
+        latest_run_id, latest_source = store.latest_successful_run()
+        if not latest_run_id:
+            print(f"ERROR {_no_successful_run_error(db)}", file=sys.stderr)
+            return 1
+        records = store.decision_records()
+        retired = store.retired_transaction_ids(latest_source)
+        applied = store.applied_decision_ids()
+    finally:
+        store.close()
+
+    rows = _rows(db, latest_source)
+    try:
+        plan, skipped = mutations.plan_category_writes(
+            records,
+            rows,
+            latest_run_id=latest_run_id,
+            retired_transaction_ids=retired,
+            already_applied=applied,
+        )
+    except mutations.MutationError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
+
+    print(mutations.render_plan(plan, skipped))
+    if not args.apply:
+        return 0
+    if not plan:
+        print("INFO nothing to apply")
+        return 0
+
+    store = Store(db)
+    try:
+        writer = _transaction_writer(args)
+        results = mutations.apply_plan(store, plan, writer, authorization)
+    except mutations.MutationError as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 1
+    finally:
+        store.close()
+
+    for result in results:
+        line = f"{result.outcome:9} {result.planned.transaction_id} {result.attempt_id}"
+        if result.error_message:
+            line += f" — {result.error_class}: {result.error_message}"
+        print(f"INFO {line}")
+    failures = [r for r in results if not r.succeeded]
+    if failures:
+        print(
+            f"ERROR {len(failures)} of {len(results)} mutation(s) did not succeed; "
+            "see `mutate --history` for the audit trail",
+            file=sys.stderr,
+        )
+    return 1 if failures else 0
+
+
+def _transaction_writer(args: argparse.Namespace) -> mutations.TransactionWriter:
+    """The live writer. Separate so tests drive the path without a socket."""
+    from .sources.api_source import client_from_env_or_age
+
+    return mutations.ApiTransactionWriter(client_from_env_or_age(verbose=args.verbose))
+
+
 def cmd_subs(args: argparse.Namespace) -> int:
     try:
         _prepare_paths(args)
@@ -1511,6 +1670,39 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_storage_args(decide)
     decide.set_defaults(func=cmd_decide)
+
+    mutate = sub.add_parser(
+        "mutate",
+        help="apply accepted category decisions to the provider (dry-run by default)",
+    )
+    mutate.add_argument("--db", default="simplifi.sqlite")
+    mutate.add_argument(
+        "--capabilities",
+        action="store_true",
+        help="print the capability and risk register, and do nothing else",
+    )
+    mutate.add_argument(
+        "--apply",
+        action="store_true",
+        help="actually write. Without this, the plan is printed and nothing is sent.",
+    )
+    mutate.add_argument(
+        "--authorized-by",
+        help="who is authorizing these writes; required with --apply",
+    )
+    mutate.add_argument(
+        "--authorization-note",
+        help="why, in a sentence; required with --apply",
+    )
+    mutate.add_argument(
+        "--undo",
+        metavar="ATTEMPT_ID",
+        help="restore the document preserved before this mutation",
+    )
+    mutate.add_argument("--history", action="store_true", help="print recent mutation attempts")
+    mutate.add_argument("--verbose", action="store_true")
+    _add_storage_args(mutate)
+    mutate.set_defaults(func=cmd_mutate)
 
     subs = sub.add_parser("subs", help="review recurring charges")
     subs.add_argument("--db", default="simplifi.sqlite")

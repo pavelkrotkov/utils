@@ -43,6 +43,7 @@ Run scripts (examples):
 - `uv run ./skills/simplifi-transaction-reconciler/scripts/simplifi_transaction_reconciler.py ingest --source csv /path/to/Simplifi-Transactions.csv --db /path/to/review.sqlite`
 - `uv run ./skills/simplifi-transaction-reconciler/scripts/simplifi_transaction_reconciler.py analyze --db /path/to/review.sqlite --out /path/to/review.html`
 - `uv run ./skills/simplifi-transaction-reconciler/scripts/simplifi_transaction_reconciler.py decide --db /path/to/review.sqlite --packet /path/to/review-packet.json --proposals /path/to/proposals.json`
+- `uv run ./skills/simplifi-transaction-reconciler/scripts/simplifi_transaction_reconciler.py mutate --db /path/to/review.sqlite` (dry run; `--apply` additionally needs `--authorized-by` and `--authorization-note`)
 - `uv run pytest skills/simplifi-transaction-reconciler/tests`
 
 Single-test guidance:

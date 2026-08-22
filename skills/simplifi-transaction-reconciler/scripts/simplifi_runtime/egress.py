@@ -107,6 +107,11 @@ class EgressDeclaration:
     #: but it is still a network call, and a declaration that denied it would
     #: be false to anyone auditing outbound traffic.
     reads_provider: bool = False
+    #: True when the command writes to the provider. Reported separately from
+    #: `reads_provider` because they are different claims: a read is the user's
+    #: own data coming back, a write changes their account, and one line
+    #: covering both would describe a write as a read.
+    writes_provider: bool = False
 
     @property
     def sends(self) -> bool:
@@ -131,6 +136,11 @@ class EgressDeclaration:
             if self.redacted:
                 line += f"; withheld: {', '.join(self.redacted)}"
             return line
+        if self.writes_provider:
+            return (
+                f"egress: no third-party disclosure — {self.command} WRITES to your "
+                f"Simplifi account; nothing is sent to a model"
+            )
         if self.reads_provider:
             return (
                 f"egress: no third-party disclosure — {self.command} reads your own "
@@ -154,6 +164,16 @@ def local_declaration(command: str, *, reads_provider: bool = False) -> EgressDe
         command=command,
         reads_provider=reads_provider or command in PROVIDER_READING_COMMANDS,
     )
+
+
+def mutation_declaration(command: str, *, applying: bool) -> EgressDeclaration:
+    """`mutate`'s position for this particular invocation.
+
+    A dry run touches nothing; `--apply` reads the live document and then
+    changes the account. Declaring the second as a read would be false to
+    exactly the person most entitled to an accurate answer.
+    """
+    return EgressDeclaration(command=command, reads_provider=applying, writes_provider=applying)
 
 
 def classify_declaration(
