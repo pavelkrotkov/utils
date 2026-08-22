@@ -17,7 +17,9 @@ from pathlib import Path
 from typing import Any
 
 from . import artifacts
-from .semantics import SOURCE_CAPABILITIES, assess_eligibility, is_projected
+from .evidence import UNKNOWN_ACCOUNT, UNKNOWN_MERCHANT, evidence_from_row
+from .money import Money
+from .semantics import SOURCE_CAPABILITIES, assess_eligibility
 from .store import ALGORITHM_VERSION, RULESET_VERSION
 
 PACKET_TYPE = "simplifi.transaction.review"
@@ -74,7 +76,7 @@ _EXAMPLE_FORBIDDEN_KEYS = _FORBIDDEN_KEYS | {
     "transaction_id",
     "transaction_ids",
 }
-_MONEY_EVIDENCE_FIELDS = {"amount", "median", "now", "previous_typical"}
+_MONEY_EVIDENCE_FIELDS = {"amount", "annual_impact", "median", "now", "previous_typical"}
 
 
 class PacketValidationError(ValueError):
@@ -133,56 +135,67 @@ def _eligible(row: Mapping[str, Any]) -> bool:
     return bool(row.get("review_eligible", assess_eligibility(dict(row)).eligible))
 
 
+def _state(state: str) -> str:
+    """`unknown` in lowercase, everything the source told us in its own case.
+
+    The placeholder is deliberately distinguishable from a real provider state:
+    a reader who sees `unknown` should not have to check whether Simplifi has a
+    state by that name.
+    """
+    return "unknown" if state == "UNKNOWN" else state
+
+
 def _merchant(row: Mapping[str, Any]) -> dict[str, str]:
-    normalized = _string(row.get("payee_normalized"))
-    canonical = _string(row.get("payee_canonical"))
+    merchant = evidence_from_row(row).merchant
     return {
-        "canonical": canonical,
-        "display": normalized or canonical or "unknown merchant",
-        "normalized": normalized,
+        "canonical": merchant.canonical,
+        "display": merchant.safe_display() or UNKNOWN_MERCHANT,
+        "normalized": merchant.normalized,
     }
 
 
 def _transaction(row: Mapping[str, Any]) -> dict[str, Any]:
-    """Map a stored row to the packet's deliberately small transaction shape."""
-    currency_exponent = row.get("currency_exponent")
-    if currency_exponent is None:
-        currency_exponent = 2
-    account_name = _string(row.get("account_name"))
-    account_id = _string(row.get("account_id"))
-    if not account_name or account_name == account_id:
-        account_name = "unknown account"
+    """Map a stored row to the packet's deliberately small transaction shape.
+
+    Every field here comes from `evidence`, so the packet, the report and the
+    model payload describe the same transaction the same way. This function
+    previously re-derived the merchant display, the safe account name and the
+    currency exponent itself, and the report derived all three differently.
+    """
+    evidence = evidence_from_row(row)
     return {
-        "transaction_id": _string(row.get("transaction_id")),
-        "posted_on": _string(row.get("posted_on")),
-        "transacted_on": _json_safe(row.get("transacted_on")),
-        "account_name": account_name,
+        "transaction_id": evidence.transaction_id,
+        "posted_on": evidence.posted_on,
+        "transacted_on": _json_safe(evidence.transacted_on),
+        # `AccountRef.display` is the "unknown account" placeholder when the
+        # source could not name it, and is never the provider's ID.
+        "account_name": evidence.account.display or UNKNOWN_ACCOUNT,
         "merchant": _merchant(row),
         "amount": {
-            "minor_units": int(row.get("amount_minor_units") or 0),
-            "currency": _string(row.get("currency")) or "unknown",
-            "currency_exponent": int(currency_exponent),
+            "minor_units": evidence.money.minor_units,
+            "currency": evidence.money.currency or "unknown",
+            "currency_exponent": evidence.money.exponent,
         },
-        "category": _string(row.get("category")) or None,
-        "inferred_category": _string(row.get("inferred_category")) or None,
-        "kind": _string(row.get("kind")) or "unknown",
-        "transaction_state": _string(row.get("txn_state")) or "unknown",
-        "match_state": _string(row.get("match_state")) or "unknown",
+        "category": evidence.category or None,
+        "inferred_category": evidence.inferred_category,
+        "kind": evidence.kind,
+        "transaction_state": _state(evidence.transaction_state),
+        "match_state": evidence.match_state,
         "flags": {
-            "uncategorized": bool(row.get("is_uncategorized")),
-            "recurring": bool(row.get("recurring_flag")),
-            "split": bool(row.get("is_split")),
-            "reviewed": bool(row.get("is_reviewed")),
-            "foreign_charge": bool(row.get("is_foreign_charge")),
-            "projected": is_projected(dict(row)),
+            "uncategorized": evidence.uncategorized,
+            "recurring": evidence.recurring,
+            "split": evidence.split,
+            "reviewed": evidence.reviewed,
+            "foreign_charge": evidence.foreign_charge,
+            "projected": evidence.projected,
         },
         "reason_codes": _reason_codes(row),
         "provenance": {
-            "transaction_version_id": row.get("id"),
-            "run_id": row.get("run_id"),
-            "source_hash": _string(row.get("source_hash")),
-            "algorithm_version": _string(row.get("algorithm_version")) or ALGORITHM_VERSION,
-            "ruleset_version": _string(row.get("ruleset_version")) or RULESET_VERSION,
+            "transaction_version_id": evidence.provenance.transaction_version_id,
+            "run_id": evidence.provenance.run_id,
+            "source_hash": evidence.provenance.source_hash,
+            "algorithm_version": evidence.provenance.algorithm_version or ALGORITHM_VERSION,
+            "ruleset_version": evidence.provenance.ruleset_version or RULESET_VERSION,
         },
     }
 
@@ -202,10 +215,7 @@ def dataset_hash(rows: Sequence[Mapping[str, Any]]) -> str:
 
 def _safe_evidence(evidence: Mapping[str, Any], row: Mapping[str, Any]) -> dict[str, Any]:
     """Keep rule facts while retaining monetary units and safe identity fields."""
-    currency = _string(row.get("currency")) or "unknown"
-    exponent = row.get("currency_exponent")
-    if exponent is None:
-        exponent = 2
+    money = evidence_from_row(row).money
     result: dict[str, Any] = {}
     for key, value in sorted(evidence.items()):
         name = str(key)
@@ -217,10 +227,11 @@ def _safe_evidence(evidence: Mapping[str, Any], row: Mapping[str, Any]) -> dict[
         if lower_name.endswith("_minor_units"):
             base_name = lower_name.removesuffix("_minor_units")
             if base_name in _MONEY_EVIDENCE_FIELDS:
+                fact = Money(int(value), money.currency)
                 result[base_name] = {
-                    "minor_units": int(value),
-                    "currency": currency,
-                    "currency_exponent": int(exponent),
+                    "minor_units": fact.minor_units,
+                    "currency": fact.currency,
+                    "currency_exponent": fact.exponent,
                 }
                 continue
         result[name] = _json_safe(value)
@@ -264,10 +275,32 @@ def _prioritized_findings(prioritized: list[Any]) -> list[dict[str, Any]]:
     return findings
 
 
-def _subscription_findings(subscription_findings: list[Any]) -> list[dict[str, Any]]:
+def series_annual_impact(finding: Any, rows: Sequence[Mapping[str, Any]]) -> Money:
+    """A recurring finding's yearly cost, in the currency of its own series.
+
+    `annual_impact` reaches here as a float in major units — the one figure in
+    the packet whose currency a reader could not determine, in the section that
+    exists to say what a subscription costs per year. The series' own rows
+    supply it, and both the packet and the report render through this, so the
+    two artifacts cannot state the figure differently.
+    """
+    by_id = {_string(row.get("transaction_id")): row for row in rows}
+    member = next(
+        (by_id[str(txid)] for txid in sorted(finding.transaction_ids) if str(txid) in by_id),
+        None,
+    )
+    currency = (_string(member.get("currency")) if member else "") or "USD"
+    exponent = Money(0, currency).exponent
+    return Money(round(float(finding.annual_impact) * (10**exponent)), currency)
+
+
+def _subscription_findings(
+    subscription_findings: list[Any], rows: Sequence[Mapping[str, Any]]
+) -> list[dict[str, Any]]:
     findings = []
     for finding in subscription_findings:
         reason = f"subscription:{finding.kind}"
+        impact = series_annual_impact(finding, rows)
         findings.append(
             {
                 "transaction_id": None,
@@ -282,7 +315,11 @@ def _subscription_findings(subscription_findings: list[Any]) -> list[dict[str, A
                 "evidence": {
                     "merchant": _string(finding.merchant),
                     "detail": _string(finding.detail),
-                    "annual_impact": round(float(finding.annual_impact), 2),
+                    "annual_impact": {
+                        "minor_units": impact.minor_units,
+                        "currency": impact.currency,
+                        "currency_exponent": impact.exponent,
+                    },
                 },
                 "policy_references": ["ADR-003", "ADR-004"],
             }
@@ -349,7 +386,7 @@ def build_packet(
         raise PacketValidationError(f"unsupported source {source!r}")
 
     findings = _prioritized_findings(prioritized)
-    findings.extend(_subscription_findings(list(subscription_findings or [])))
+    findings.extend(_subscription_findings(list(subscription_findings or []), rows))
     findings.sort(
         key=lambda finding: (
             finding["transaction_id"] is None,
