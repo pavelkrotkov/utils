@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from typing import cast
 
 import pytest
 from simplifi_runtime import mutations
@@ -153,9 +154,20 @@ def test_an_authorization_must_name_a_person_and_a_reason():
 
 
 def test_applying_without_an_authorization_object_is_refused(store):
+    """Deliberately the wrong type: the runtime check is the last line of defence.
+
+    `cast` because the type checker is right — this is not an `Authorization` —
+    and the point of the test is that passing one anyway is refused rather than
+    treated as consent.
+    """
     plan, _ = _plan()
     with pytest.raises(mutations.AuthorizationError):
-        mutations.apply_plan(store, plan, FixtureWriter([_document()]), authorization=True)
+        mutations.apply_plan(
+            store,
+            plan,
+            FixtureWriter([_document()]),
+            authorization=cast(mutations.Authorization, True),
+        )
 
 
 # --- planning ---------------------------------------------------------------
@@ -428,7 +440,11 @@ def test_undo_requires_its_own_authorization(store):
 
     with pytest.raises(mutations.AuthorizationError):
         mutations.undo(
-            store, results[0].attempt_id, writer, authorization=None, sleep=lambda _: None
+            store,
+            results[0].attempt_id,
+            writer,
+            authorization=cast(mutations.Authorization, None),
+            sleep=lambda _: None,
         )
 
 

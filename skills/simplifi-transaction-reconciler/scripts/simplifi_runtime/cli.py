@@ -1178,6 +1178,13 @@ def cmd_mutate(args: argparse.Namespace) -> int:
     if not plan:
         print("INFO nothing to apply")
         return 0
+    if authorization is None:
+        # Unreachable while the `--apply` guard above is the only thing that
+        # builds one, which is exactly why it is restated here: if that guard
+        # ever moves, this is what stops an unauthorized write instead of a
+        # traceback halfway through a batch.
+        print("ERROR --apply requires an authorization", file=sys.stderr)
+        return 2
 
     store = Store(db)
     try:
