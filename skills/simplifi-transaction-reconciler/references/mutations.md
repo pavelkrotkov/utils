@@ -15,6 +15,7 @@ cannot drift.
 - [Authorization](#authorization)
 - [Preconditions](#preconditions)
 - [Audit trail](#audit-trail)
+- [The stale-write race](#the-stale-write-race)
 - [Undo](#undo)
 
 ## What is available
@@ -44,10 +45,29 @@ runs: planning, preconditions, the live re-fetch, the dry run, the audit schema
 and undo are all exercised end to end against fixtures. The plan the dry run
 prints is exactly what would be sent once the payload is known.
 
-**What unblocks it:** a capture of one real category change made in the web app,
-recording which fields the request body carries and what the provider does with
-those it omits. That is a write capture, so it needs its own authorization —
-it is not part of the read-only rule-capture procedure.
+**What unblocks it:** a capture of one real category change made in the web app.
+That is a write capture, so it needs its own authorization — it is not part of
+the read-only rule-capture procedure.
+
+Record all four of these, because each settles something the runtime currently
+has to assume:
+
+1. **Which fields the request body carries**, and whether the app sends fields
+   no GET route returns. This is what gates the write today.
+2. **What the provider does with omitted fields** — clears them, or leaves them
+   alone. A full-document endpoint that preserves omissions is a different
+   contract from one that does not, and the difference decides whether a
+   GET-shaped body is safe after all.
+3. **Whether the `PUT` response echoes a changed `dbVersion`**, or any etag or
+   version field. That is the tell that the server tracks writes rather than
+   merely exposing a number on reads.
+4. **Whether a `PUT` carrying a stale `dbVersion` is refused** — a 409 or 412
+   rather than a 200. If the server silently accepts a stale value, no
+   precondition is enforceable whatever the schema suggests.
+
+Items 3 and 4 decide whether the stale-write race below is closable at all.
+Answering them is the difference between a known limitation and a permanent
+open question.
 
 ## What is refused, and why
 
@@ -122,6 +142,21 @@ An attempt with no outcome row is a write that left and never settled. That
 state is recorded by construction rather than by a dying process remembering to
 write it down — which is exactly the moment a single-row design would record
 nothing at all.
+
+## The stale-write race
+
+The live re-fetch and the write are not atomic. Another client can change the
+transaction in between, and a full-document write would overwrite that change.
+
+Only a provider-enforced precondition closes this; a local check cannot. Nothing
+in the API reference records the provider supporting one — no observed etag, no
+`If-Match`, and no evidence that `dbVersion` is validated on write rather than
+merely returned on read. Sending a precondition on that basis would be its own
+defect: silently ignored it manufactures confidence that is not there, and
+rejected it breaks every write.
+
+So it is recorded here as an open risk rather than resolved quietly. Items 3 and
+4 of the capture above are what would settle it.
 
 ## Undo
 
