@@ -742,7 +742,10 @@ def test_two_datasets_keep_independent_current_rows(tmp_path: Path, monkeypatch,
     store = Store(db)
     try:
         assert store.retired_transaction_ids("api", scope_one) == set()
-        assert sorted(store.current_scopes("api")) == sorted([scope_one, scope_two])
+        # A set: the claim is that both scopes hold rows, not what order they
+        # come back in. `current_scopes` can also contain the legacy None, which
+        # is not orderable against a string.
+        assert set(store.current_scopes("api")) == {scope_one, scope_two}
     finally:
         store.close()
 
