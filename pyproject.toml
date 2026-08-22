@@ -30,10 +30,29 @@ show_missing = true
 
 [dependency-groups]
 dev = [
+    # Declared so Dependabot tracks it. pip is otherwise only a
+    # transitive dependency (pip-api <- pip-audit), and version
+    # updates cover declared dependencies, so advisories like
+    # PYSEC-2026-3721 required a manual relock.
+    "pip>=26.2.1",
     "pip-audit>=2.10.1",
     "pre-commit>=4.6.2",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
     "ruff>=0.16.2",
     "ty>=0.0.70",
+]
+
+[tool.ty.src]
+exclude = [
+    "tidal_pipeline",
+    "tidal_match_from_json.py",
+    "test_tidal_search_backend.py",
+    "factor_fund_performance.py",
+    "audio_transcribe_vibevoice.py",
+    "audio_transcribe_whisper.py",
+    "audio_transcript.py",
+    "pdf_convert_llamaparse.py",
+    "test_audio_common.py",
+    "TranscriptionLauncher/Scripts/generate_icon.py",
 ]
