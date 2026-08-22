@@ -42,10 +42,18 @@ The [Simplifi API reference](../simplifi-api.md#transaction-rules-and-renaming)
 records that no rule-management endpoint was ever captured and that the matching
 semantics of a contains-style operator are unverified. Both are preconditions
 for this ADR's own requirements: a narrow term cannot be chosen, and an expected
-match count cannot be predicted, against unknown matching semantics. Rule
-mutation stays out of scope until that section is replaced by a dated capture;
-category edits on `PUT /transactions/{id}`, whose read and write shapes are
-verified, are not blocked by it. Poll
+match count cannot be predicted, against unknown matching semantics.
+
+Completing that capture is necessary and not sufficient. It is deliberately
+read-only — it lists rules and opens one for editing, and forbids saving,
+creating or deleting — so it can settle matching semantics and the read shape
+while establishing nothing about the write: no method, no payload, no response
+contract. Rule mutation therefore stays out of scope until a *separately
+authorized write capture* verifies those as well; a dated read-only capture
+alone must not be read as unblocking it, or an implementation would end up
+guessing a payload against a live financial account. Category edits on
+`PUT /transactions/{id}`, whose read and write shapes are both verified, are not
+blocked by any of this. Poll
 asynchronous write jobs before recording success. Store before/after payloads,
 responses, decisions, and resolved job IDs; rate-limit writes. Undo restores
 the saved prior document where the provider still permits it, without claiming

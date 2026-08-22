@@ -259,13 +259,21 @@ that the endpoints do not exist.
 
 ### Why the `CONTAINS` question is not cosmetic
 
-Whole-token and substring matching diverge on the payees this reconciler
-actually sees. A rule term `AMZN` matches the descriptor `AMZN MKTP US*1A2B3C`
-under either reading, because `AMZN` is a whole token there. A term `MTG`
-matches `CARRINGTON MTGMTG PYMT` under substring matching and does not under
-whole-token matching, because the descriptor's token is `MTGMTG`. Store-number
-and state suffixes (`COSTCO WHSE #1166 NORTH PLAINFINJ`) put a further class of
-terms on the same fault line.
+Whole-token and substring matching diverge on descriptors shaped like the
+ones this reconciler actually sees. The examples below are synthetic — a real
+descriptor names a real merchant, a real store and often a real location, and
+this file travels with the packaged skill.
+
+A rule term `ACME` matches the descriptor `ACME SUPPLY CO 4471` under either
+reading, because `ACME` is a whole token there. A term `SUP` matches it under
+substring matching and does not under whole-token matching, because the
+descriptor's token is `SUPPLY`. Store-number and state suffixes
+(`ACME SUPPLY CO #0042 RIVERTON ST`) put a further class of terms on the same
+fault line.
+
+The live sample behind the [transaction read schema](#transaction-read-schema)
+figures — 904 of 1,565 rows differing — shows exactly this shape, but stays in
+the internal notes rather than here.
 
 [ADR-002](adr/002-merchant-identity-and-normalization.md) requires narrow rule
 terms, and [ADR-005](adr/005-safe-mutation-and-approval.md) requires a mutation
@@ -293,11 +301,22 @@ skill's capability surface, and the skill must not call these paths; see
    the client's assembled payload rather than the API, which is the exact error
    this reference records three times under
    [Superseded hypotheses](#superseded-hypotheses).
-5. Determine matching semantics from provider behavior, not from the operator's
-   name: compare an existing rule's term against the descriptors of the
-   transactions it has actually renamed, using the local store. A term that has
-   renamed a transaction whose descriptor contains it only as a substring
-   settles the question against whole-token matching.
+5. Determine matching semantics from provider behavior, not from the
+   operator's name: compare an existing rule's term against the descriptors of
+   the transactions that rule renamed, using the local store.
+
+   The experiment only settles anything once rule-to-transaction attribution is
+   established. A renamed transaction whose descriptor contains the term as a
+   substring is evidence about *this* rule only if this rule is what renamed it
+   — and the table above records that whether renaming comes from user rules at
+   all is itself unverified. Another rule, or a provider-wide mapping, produces
+   an identical result. So rule out the competing mechanisms first: confirm the
+   term appears in no other rule, and confirm the rename disappears when the
+   rule is disabled, or otherwise tie the rename to the rule directly.
+
+   Without that, the correlation is not a finding, and accepting it would
+   replace an honest `Unverified` with a false `Verified` — the one outcome
+   this whole section exists to prevent.
 
 Record the result here with its date and method, replacing the table rows above.
 Keep live rule terms, institution names, account identifiers, and payees out of

@@ -32,20 +32,32 @@ def reference() -> str:
     return API_REFERENCE.read_text(encoding="utf-8")
 
 
-def test_rules_section_documents_all_three_subjects(reference):
+def claim_rows(reference: str) -> list[str]:
+    """The claim table's data rows, without its header or divider."""
     rules = section(reference, "Transaction rules and renaming")
+    return [
+        line
+        for line in rules.splitlines()
+        if line.startswith("|") and "Status" not in line and "---" not in line
+    ]
+
+
+def test_every_rule_subject_has_a_row_marked_unverified(reference):
+    """A row per subject, and that row carries the status.
+
+    Deliberately one assertion over the parsed rows rather than two passes.
+    Splitting it — "the subject appears in the section" plus "any row
+    mentioning it is marked" — let a deleted row pass both: the term survived
+    in the introductory prose, and a status check that iterates over the rows
+    that still exist has nothing left to object to. The hole was in the test
+    whose entire purpose is to stop a claim losing its marker.
+    """
+    rows = claim_rows(reference)
     for subject in UNVERIFIED_SUBJECTS:
-        assert subject in rules, f"{subject} is undocumented"
-
-
-def test_every_rule_subject_is_marked_unverified(reference):
-    """Each subject's table row must carry the status, not just the section."""
-    rules = section(reference, "Transaction rules and renaming")
-    for line in rules.splitlines():
-        if not line.startswith("|") or "Status" in line or "---" in line:
-            continue
-        if any(subject in line for subject in UNVERIFIED_SUBJECTS):
-            assert "**Unverified**" in line, f"unmarked claim: {line.strip()}"
+        matching = [row for row in rows if subject in row]
+        assert matching, f"{subject} has no claim row"
+        for row in matching:
+            assert "**Unverified**" in row, f"unmarked claim: {row.strip()}"
 
 
 def test_legend_defines_the_three_statuses(reference):
