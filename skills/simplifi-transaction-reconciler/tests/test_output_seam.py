@@ -409,3 +409,105 @@ def test_the_packet_written_to_disk_is_the_packet_that_was_validated(tmp_path):
 
     assert json.loads(target.read_text(encoding="utf-8")) == packet
     assert target.stat().st_mode & 0o077 == 0
+
+
+def test_an_account_id_embedded_in_its_own_name_is_still_refused():
+    """The substring exemption exists for amounts, not for identifiers.
+
+    An account genuinely named `Checking acct-99887766` makes its own provider
+    ID a substring of a publishable value. Exempting that would let the ID
+    travel inside `account_name` with the check reporting success.
+    """
+    embedded = row(account_name="Checking acct-99887766")
+
+    with pytest.raises(PacketValidationError, match="account_id"):
+        packet_for([embedded])
+
+
+def test_a_foreign_charge_keeps_its_substring_exemption():
+    """`2.90` sits inside the issuer-converted `-2.90` the packet publishes.
+
+    Refusing it would fail every foreign transaction over a value that is
+    present only because the amount is.
+    """
+    foreign = row(
+        amount_minor_units=-290,
+        original_amount="2.90",
+        original_currency="EUR",
+        is_foreign_charge=1,
+    )
+
+    packet = packet_for([foreign])
+
+    assert packet["transactions"][0]["amount"]["minor_units"] == -290
+
+
+def test_a_descriptor_shorter_than_its_display_name_is_still_refused():
+    """Equality is the whole of the real case; anything else is a leak."""
+    leaking = row(payee_raw="AURORA BAKERY 4029")
+    packet = packet_for([leaking])
+    packet["transactions"][0]["merchant"]["display"] = "SQ *AURORA BAKERY 4029 SAN JOSE"
+
+    with pytest.raises(PacketValidationError, match="payee_raw"):
+        review_packet.assert_no_sensitive_values(packet, [leaking])
+
+
+def test_a_failure_during_publication_leaves_no_temporary_behind(tmp_path):
+    """The fully-written temporary is the one a naive cleanup misses.
+
+    `harden_existing` and `os.replace` run after the caller's last write, so a
+    target that turns out to be a directory leaves a complete hidden artifact
+    on disk unless the whole body is covered.
+    """
+    target = tmp_path / "report.html"
+    target.mkdir()  # the rename cannot succeed onto a directory
+
+    with (
+        pytest.raises(artifacts.ArtifactError),
+        artifacts.atomic_open(target, encoding="utf-8") as handle,
+    ):
+        handle.write("<h1>complete</h1>")
+
+    assert [entry.name for entry in tmp_path.iterdir()] == ["report.html"]
+
+
+def test_two_writes_from_one_process_do_not_collide_on_a_stale_temporary(tmp_path):
+    """A deterministic temporary name plus O_EXCL turns one leaked file into a
+    permanent refusal for every later process that reuses that PID."""
+    target = tmp_path / "report.html"
+    import os
+
+    stale = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    stale.write_text("left over from a crash", encoding="utf-8")
+
+    artifacts.secure_write_text(target, "<h1>today</h1>")
+
+    assert target.read_text(encoding="utf-8") == "<h1>today</h1>"
+
+
+def test_a_case_only_collision_is_refused_on_a_case_folding_filesystem(tmp_path):
+    """`report.html` and `REPORT.HTML` are two paths and one directory entry.
+
+    Skipped where the filesystem really is case-sensitive, because there the
+    two are genuinely different files and refusing them would block a valid
+    run.
+    """
+    if not artifacts._folds_case(tmp_path):
+        pytest.skip("this filesystem is case-sensitive; there is no collision to detect")
+
+    with pytest.raises(artifacts.ArtifactError, match="both name"):
+        artifacts.reserve_outputs(
+            {"--out": tmp_path / "report.html", "--packet-out": tmp_path / "REPORT.HTML"}
+        )
+
+
+def test_case_folding_is_asked_of_the_filesystem_not_assumed(tmp_path):
+    """Answered by a probe, so a case-sensitive volume is not over-refused."""
+    artifacts._CASE_FOLDING.pop(tmp_path, None)
+
+    folds = artifacts._folds_case(tmp_path)
+
+    assert isinstance(folds, bool)
+    # The probe cleans up after itself; a stray marker would be an artifact of
+    # the check in the user's own data directory.
+    assert not list(tmp_path.glob(".simplifi-case-probe-*"))

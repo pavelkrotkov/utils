@@ -72,7 +72,15 @@ a real charge.
 **Values are checked against the rows they came from.**
 `assert_no_sensitive_values` scans the finished packet for each row's raw
 descriptor, provider IDs, and pre-conversion amounts, and refuses a match that
-is not covered by something the row is entitled to publish. Modelled on
+is not covered by something the row is entitled to publish. "Covered" means
+equality, except for `original_amount` — a foreign charge's `2.90` sits inside
+the issuer-converted `-2.90` the packet states, and refusing that would fail
+every foreign transaction over a value present only because the amount is.
+Widening the exemption to the identifiers is how one escapes: an account
+genuinely named `Checking acct-99887766` would make its own provider ID a
+substring of a publishable value. Equality is all the real case needs, since a
+descriptor with nothing to strip *equals* its merchant name and a stripped name
+is shorter than its descriptor, never longer. Modelled on
 `egress.assert_payload_is_permitted` deliberately: the packet and the payload
 are two agent-facing artifacts, and a packet that refused less than the payload
 would be the softer of two doors into the same room.
@@ -85,7 +93,20 @@ over all of them, rather than the pairs somebody remembered.
 **Artifacts are written whole or not at all.** `atomic_open` writes to a
 temporary file in the target's own directory, fsyncs, and renames. A reader
 sees the previous artifact or the new one, never a partial. The temporary
-carries owner-only permissions from creation and is removed if the write fails.
+carries owner-only permissions from creation and is removed if *anything*
+fails, the final hardening and rename included — those run after the caller's
+last write, so a target that turns out to be a directory is exactly the case
+that leaves a fully-written temporary behind. Its name carries random bytes as
+well as the PID, so one leaked temporary cannot become a permanent refusal for
+every later process that reuses that PID against that target.
+
+**Case is decided by the filesystem, not assumed.** On a case-insensitive
+volume — a default macOS install — `report.html` and `REPORT.HTML` are two
+`PosixPath` values and one directory entry, so `analyze` would write the packet,
+replace it with the report, exit zero, and claim it had produced both. A probe
+per directory answers the question; a probe that cannot run answers
+"case-sensitive", which refuses nothing, because guessing the strict way would
+block a valid run on a volume where the two really are different files.
 
 ## Consequences
 

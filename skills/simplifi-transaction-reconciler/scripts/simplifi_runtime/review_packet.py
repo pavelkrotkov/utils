@@ -526,6 +526,23 @@ def build_packet(
 #: sits under a permitted key and passes every structural check.
 _SENSITIVE_COLUMNS = ("account_id", "payee_raw", "source_path", "original_amount")
 
+#: The only column whose value may be *contained in* something we publish.
+#:
+#: A foreign charge's `original_amount` of `2.90` sits inside the
+#: issuer-converted `-2.90` the packet legitimately states, and refusing that
+#: would fail every foreign transaction over a value present only because the
+#: amount is. Nothing else earns the exemption, and extending it to the
+#: identifiers is how one escapes: an account genuinely named
+#: `Checking acct-99887766` would make its own provider ID a substring of a
+#: publishable value, and the ID would then travel inside `account_name` with
+#: the check reporting success.
+#:
+#: For every other column the exemption is exact equality, which is all the
+#: real case needs — a descriptor that normalization found nothing to strip
+#: *equals* its merchant name rather than sitting inside it, and a stripped
+#: name is shorter than the descriptor it came from, never longer.
+_SUBSTRING_EXEMPT = ("original_amount",)
+
 #: Below this a value is not identifying and collides with ordinary prose. The
 #: same threshold `egress` uses, for the same reason: a three-character token
 #: proves nothing and would fail every packet.
@@ -552,6 +569,8 @@ def assert_no_sensitive_values(
     A forbidden value that IS a value we are entitled to publish is not a
     finding — a descriptor that normalization found nothing to strip equals its
     own merchant name, and refusing that would fail the simplest merchants.
+    That exemption is equality for every column but `original_amount`; see
+    `_SUBSTRING_EXEMPT` for why widening it would open the door it closes.
     """
     document = json.dumps(packet, ensure_ascii=False, sort_keys=True)
     for row in rows:
@@ -563,13 +582,22 @@ def assert_no_sensitive_values(
             text = str(value).strip()
             if len(text) < _MIN_SENSITIVE_LENGTH:
                 continue
-            if any(text == item or text in item for item in permitted):
+            if _is_publishable(text, column, permitted):
                 continue
             if text in document:
                 raise PacketValidationError(
                     f"packet contains {column}, which is not publishable "
                     f"(transaction {row.get('transaction_id', 'unknown')})"
                 )
+
+
+def _is_publishable(text: str, column: str, permitted: set[str]) -> bool:
+    """Whether a forbidden value is accounted for by one we may publish."""
+    if text in permitted:
+        return True
+    if column in _SUBSTRING_EXEMPT:
+        return any(text in value for value in permitted)
+    return False
 
 
 def _publishable_values(row: Mapping[str, Any]) -> set[str]:

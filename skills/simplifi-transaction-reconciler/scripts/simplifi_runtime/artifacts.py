@@ -32,6 +32,7 @@ import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from secrets import token_hex
 from typing import IO, Any
 
 #: Never follow a symbolic link at the final component. Absent on non-POSIX
@@ -462,10 +463,18 @@ def atomic_open(path: str | Path, **kwargs: Any) -> Iterator[IO[Any]]:
     reader either sees the previous artifact or the new one, never a partial.
 
     The temporary carries the same owner-only mode from creation, and is
-    removed if anything goes wrong.
+    removed if anything goes wrong — *including* during the final hardening and
+    rename. Those are the failures that leave a fully-written temporary behind:
+    a target that turns out to be a directory, or a permission the run does not
+    have. The whole body is therefore covered, not merely the caller's writes.
+
+    Its name carries random bytes rather than only the PID. A deterministic
+    name plus `O_EXCL` turns one leaked temporary into a permanent refusal for
+    every later process that happens to reuse that PID against that target —
+    trading a stale file for a command that cannot write at all.
     """
     target = ensure_parent(path)
-    temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.{token_hex(6)}.tmp")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW
     descriptor = os.open(temporary, flags, FILE_MODE)
     try:
@@ -475,19 +484,21 @@ def atomic_open(path: str | Path, **kwargs: Any) -> Iterator[IO[Any]]:
         os.close(descriptor)
         temporary.unlink(missing_ok=True)
         raise
+    published = False
     try:
         with handle:
             yield handle
             handle.flush()
             os.fsync(handle.fileno())
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
-    # `harden_existing` on the target, not the temporary: replacing a
-    # world-readable artifact is the ordinary way a stale mode would survive,
-    # and after the rename there is nothing left to tighten.
-    harden_existing(target)
-    os.replace(temporary, target)
+        # `harden_existing` on the target, not the temporary: replacing a
+        # world-readable artifact is the ordinary way a stale mode would
+        # survive, and after the rename there is nothing left to tighten.
+        harden_existing(target)
+        os.replace(temporary, target)
+        published = True
+    finally:
+        if not published:
+            temporary.unlink(missing_ok=True)
 
 
 def secure_write_text(path: str | Path, text: str, *, encoding: str = "utf-8") -> Path:
@@ -515,6 +526,12 @@ def reserve_outputs(
     kernel. And they were pairwise: `analyze` compared the report against the
     packet and the packet against the database, but never the report against
     the database, which is the pair that loses the ledger.
+
+    Case is decided by the filesystem, not assumed. On a case-insensitive
+    volume — which a default macOS install is — `report.html` and `REPORT.HTML`
+    are distinct `PosixPath` values and one directory entry, so `analyze` would
+    write the packet, replace it with the report, exit zero, and report that it
+    had produced both.
     """
     resolved: dict[str, Path] = {
         label: _resolve_without_requiring_existence(Path(str(value)).expanduser())
@@ -522,12 +539,13 @@ def reserve_outputs(
         if str(value).strip()
     }
     writable = set(outputs)
-    seen: dict[Path, str] = {}
+    seen: dict[str, str] = {}
     for label in sorted(resolved):
         target = resolved[label]
-        previous = seen.get(target)
+        key = _identity_key(target)
+        previous = seen.get(key)
         if previous is None:
-            seen[target] = label
+            seen[key] = label
             continue
         if label not in writable and previous not in writable:
             continue  # two reads of one file are fine
@@ -536,6 +554,48 @@ def reserve_outputs(
             f"{first} and {second} both name {target}; one would overwrite the "
             f"other, so nothing was written. Give them different paths."
         )
+
+
+#: Whether a directory's filesystem folds case, once per directory. Probing is
+#: a real filesystem operation, and every artifact path in a run usually shares
+#: one parent.
+_CASE_FOLDING: dict[Path, bool] = {}
+
+
+def _folds_case(directory: Path) -> bool:
+    """Whether this directory's filesystem treats two spellings as one entry.
+
+    Asked of the filesystem rather than assumed from the platform: macOS ships
+    case-insensitive by default but case-sensitive volumes are ordinary, and a
+    Linux host can mount either. Guessing in the strict direction would refuse
+    `a.html` and `A.html` as a collision where they really are two files —
+    blocking a valid run to prevent a problem that volume does not have.
+
+    A probe that cannot run (a read-only or unwritable directory) answers
+    "case-sensitive", which is the answer that refuses nothing. The collision
+    it then misses is the one this check was already missing.
+    """
+    cached = _CASE_FOLDING.get(directory)
+    if cached is not None:
+        return cached
+    folds = False
+    try:
+        directory.mkdir(parents=True, mode=DIR_MODE, exist_ok=True)
+        probe = directory / f".simplifi-case-probe-{token_hex(6)}"
+        probe.touch(mode=FILE_MODE)
+        try:
+            folds = Path(str(probe).upper()).exists()
+        finally:
+            probe.unlink(missing_ok=True)
+    except OSError:
+        folds = False
+    _CASE_FOLDING[directory] = folds
+    return folds
+
+
+def _identity_key(path: Path) -> str:
+    """A string two paths share exactly when they name one directory entry."""
+    return str(path).casefold() if _folds_case(path.parent) else str(path)
 
 
 def describe_policy(data_dir: Path) -> str:
