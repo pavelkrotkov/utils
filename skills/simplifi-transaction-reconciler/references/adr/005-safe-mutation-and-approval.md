@@ -6,6 +6,9 @@
 
 - Status: Accepted as future design; not implemented
 - Scope: category edits, native rules, and undo
+- Evidence: [Simplifi API reference](../simplifi-api.md), including its
+  [transaction rules and renaming](../simplifi-api.md#transaction-rules-and-renaming)
+  section and [evidence status legend](../simplifi-api.md#evidence-status-legend)
 
 ## Context
 
@@ -32,7 +35,17 @@ Before each write:
 - preserve the exact pre-write document before sending.
 
 Use narrow rule terms, check expected match counts and collisions across all
-rows, skip existing equivalent rules, and make reruns idempotent. Poll
+rows, skip existing equivalent rules, and make reruns idempotent.
+
+Native rule mutation is additionally gated on evidence that does not yet exist.
+The [Simplifi API reference](../simplifi-api.md#transaction-rules-and-renaming)
+records that no rule-management endpoint was ever captured and that the matching
+semantics of a contains-style operator are unverified. Both are preconditions
+for this ADR's own requirements: a narrow term cannot be chosen, and an expected
+match count cannot be predicted, against unknown matching semantics. Rule
+mutation stays out of scope until that section is replaced by a dated capture;
+category edits on `PUT /transactions/{id}`, whose read and write shapes are
+verified, are not blocked by it. Poll
 asynchronous write jobs before recording success. Store before/after payloads,
 responses, decisions, and resolved job IDs; rate-limit writes. Undo restores
 the saved prior document where the provider still permits it, without claiming

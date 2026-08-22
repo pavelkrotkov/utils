@@ -26,7 +26,11 @@ material needed for the current decision:
   observed write and refresh material is reference-only and does not expand
   this skill's capabilities.
 - For payee identity or rule matching, read
-  [ADR-002](references/adr/002-merchant-identity-and-normalization.md).
+  [ADR-002](references/adr/002-merchant-identity-and-normalization.md). For what
+  is and is not known about the provider's own rule endpoints and match
+  operators, read
+  [transaction rules and renaming](references/simplifi-api.md#transaction-rules-and-renaming);
+  its claims are unverified and must not be treated as a contract.
 - For what an adapter produces, what a consumer may read, and which facts are
   allowed to differ between the CSV and the API, read
   [ADR-011](references/adr/011-normalized-transaction-evidence.md).

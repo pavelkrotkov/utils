@@ -18,6 +18,8 @@ tokens were retained. This is a private web-app API, not a portable contract.
 - [Incremental and date-bounded reads](#incremental-and-date-bounded-reads)
 - [Writes and refresh jobs](#writes-and-refresh-jobs)
 - [Connection health](#connection-health)
+- [Transaction rules and renaming](#transaction-rules-and-renaming)
+- [Evidence status legend](#evidence-status-legend)
 - [Superseded hypotheses](#superseded-hypotheses)
 
 ## Client and authentication
@@ -229,6 +231,102 @@ rate limit. `/institutions/fi-issues` is a supplement, not a replacement. Keep
 live institution names, identifiers, statuses, and timestamps out of this
 portable reference; monitor transitions and per-connection cadence, not
 transaction dates alone.
+
+## Transaction rules and renaming
+
+Simplifi has two user-facing rule mechanisms — renaming rules and categorization
+rules — and the CSV/API payee divergence recorded above shows that at least the
+renaming layer runs somewhere between the raw bank descriptor and the exported
+`payee`. Mutation design (issue #122, [ADR-005](adr/005-safe-mutation-and-approval.md))
+would need to address rules directly, so this section states what is actually
+known about them.
+
+**Nothing about rule endpoints or rule matching is verified.** The 2026-08-04/05
+instrumentation recorded 48 calls from the transactions view of a single page
+load. No `/transaction-rules`, `/memorized-rules`, or other rule-management path
+appeared in that capture, and the rule editor was never opened while the
+instrumentation was installed. The absence is a gap in the capture, not evidence
+that the endpoints do not exist.
+
+| Claim | Status | Evidence |
+|---|---|---|
+| A `/transaction-rules` path exists | **Unverified** | Never observed; name is from the issue text, not from a capture |
+| A `/memorized-rules` path exists | **Unverified** | Never observed; name is from the issue text, not from a capture |
+| Rule matching offers a `CONTAINS` operator | **Unverified** | The web UI exposes contains-style matching; the wire representation was never captured |
+| `CONTAINS` matches whole tokens rather than substrings | **Unverified** | No capture, and no local experiment; the two readings disagree on ordinary payees (see below) |
+| Renaming is applied outside the transaction record | **Inferred** | 904 of 1,565 cross-source matches differ, with the API serving the raw descriptor and the CSV the renamed payee ([Transaction read schema](#transaction-read-schema)) |
+| Renaming is applied by user rules rather than a provider-wide table | **Unverified** | The divergence proves renaming happens, not who configured it |
+
+### Why the `CONTAINS` question is not cosmetic
+
+Whole-token and substring matching diverge on the payees this reconciler
+actually sees. A rule term `AMZN` matches the descriptor `AMZN MKTP US*1A2B3C`
+under either reading, because `AMZN` is a whole token there. A term `MTG`
+matches `CARRINGTON MTGMTG PYMT` under substring matching and does not under
+whole-token matching, because the descriptor's token is `MTGMTG`. Store-number
+and state suffixes (`COSTCO WHSE #1166 NORTH PLAINFINJ`) put a further class of
+terms on the same fault line.
+
+[ADR-002](adr/002-merchant-identity-and-normalization.md) requires narrow rule
+terms, and [ADR-005](adr/005-safe-mutation-and-approval.md) requires a mutation
+to predict its own match count before writing. Neither requirement can be
+honored while the matching semantics are a guess: a term chosen for one reading
+silently over-matches or under-matches under the other, and a predicted match
+count computed locally would not describe what the provider will do.
+
+### Resolving the gap, read-only
+
+Everything below is a read-only capture procedure. It is not part of this
+skill's capability surface, and the skill must not call these paths; see
+[Capability boundary](../SKILL.md).
+
+1. Re-install the structure-only instrumentation from the original capture
+   method — record endpoint paths, query-parameter names, and JSON key names,
+   substituting `typeof` for every value before it leaves the page.
+2. Open the rule editor and list existing rules. Record the request path, its
+   query parameters, and the response envelope shape.
+3. Open a single rule for editing without saving. Record the field names that
+   carry the match term and the match operator, and the operator's exact
+   spelling on the wire.
+4. Do not save, create, or delete a rule during the capture. A write would leave
+   the read-only boundary and would also make the observation a statement about
+   the client's assembled payload rather than the API, which is the exact error
+   this reference records three times under
+   [Superseded hypotheses](#superseded-hypotheses).
+5. Determine matching semantics from provider behavior, not from the operator's
+   name: compare an existing rule's term against the descriptors of the
+   transactions it has actually renamed, using the local store. A term that has
+   renamed a transaction whose descriptor contains it only as a substring
+   settles the question against whole-token matching.
+
+Record the result here with its date and method, replacing the table rows above.
+Keep live rule terms, institution names, account identifiers, and payees out of
+this file; a captured term is account-specific data, and only the schema and the
+matching semantics are portable.
+
+### What this section does not authorize
+
+No rule endpoint may be called by the packaged runtime, and no mutation may be
+designed against the unverified rows above. Mutation work that needs rules is
+blocked on the capture, not on implementation effort.
+
+## Evidence status legend
+
+Claims in this reference carry one of three statuses. Sections written before
+this legend describe live captures dated in the header; anything added later
+states its status explicitly.
+
+- **Verified** — observed directly in a dated capture against the live app, or
+  measured locally from data the capture returned. The observation is described
+  alongside the claim.
+- **Inferred** — derived from verified observations by an argument stated with
+  the claim. Sound only as far as that argument holds.
+- **Unverified** — assumption, recollection, or provider documentation with no
+  capture behind it. Never treat an unverified claim as a contract, and never
+  build a mutation on one.
+
+Retracted claims move to [Superseded hypotheses](#superseded-hypotheses) rather
+than being deleted, so a reversed conclusion cannot quietly return.
 
 ## Superseded hypotheses
 
