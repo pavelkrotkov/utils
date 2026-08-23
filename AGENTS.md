@@ -8,7 +8,6 @@ Project focus areas:
 - PDF to Markdown conversion for scientific papers (Mathpix SDK).
 - Audio transcription (OpenAI API, local whisper-cpp with optional pyannote diarization, or MLX VibeVoice-ASR on Apple Silicon).
 - TIDAL playlist import from classical music review pages (Gramophone-style MHTML/MD).
-- Simplifi transaction reconciliation via the packaged skill at `skills/simplifi-transaction-reconciler/`.
 
 If you need broader project context, read `GEMINI.md`.
 
@@ -40,14 +39,8 @@ Run scripts (examples):
 - `uv run ./audio_transcribe_whisper.py interview.m4a`
 - `uv run ./audio_transcribe_whisper.py interview.m4a --diarization --num-speakers 2`
 - `uv run ./audio_transcribe_vibevoice.py interview.m4a`
-- `uv run ./skills/simplifi-transaction-reconciler/scripts/simplifi_transaction_reconciler.py ingest --source csv /path/to/Simplifi-Transactions.csv --db /path/to/review.sqlite`
-- `uv run ./skills/simplifi-transaction-reconciler/scripts/simplifi_transaction_reconciler.py analyze --db /path/to/review.sqlite --out /path/to/review.html`
-- `uv run ./skills/simplifi-transaction-reconciler/scripts/simplifi_transaction_reconciler.py decide --db /path/to/review.sqlite --packet /path/to/review-packet.json --proposals /path/to/proposals.json`
-- `uv run ./skills/simplifi-transaction-reconciler/scripts/simplifi_transaction_reconciler.py mutate --db /path/to/review.sqlite` (dry run; `--apply` additionally needs `--authorized-by` and `--authorization-note`)
-- `uv run pytest skills/simplifi-transaction-reconciler/tests`
 
 Single-test guidance:
-- There is no repository-wide test harness; run `uv run pytest skills/simplifi-transaction-reconciler/tests` for the packaged Simplifi skill.
 - Use a small fixture file to validate behavior, e.g.
   `./audio_transcribe_openai.sh sample.m4a sample.txt`
 - For quick syntax checks on Python scripts: run via `uv run` with `--help` or a small fixture input.
@@ -79,7 +72,6 @@ Repository scripts:
 - `audio_transcribe_vibevoice.py` uses `mlx-audio` with VibeVoice-ASR on Apple Silicon, defaults to `mlx-community/VibeVoice-ASR-4bit`, and writes native structured JSON by default.
 - `tidal_import_page_to_playlist.py` imports classical albums from MHTML/MD files to TIDAL playlists using API v2.
 - `test_matching.py` helper for testing TIDAL matching (see below).
-- `skills/simplifi-transaction-reconciler/` contains the reusable Simplifi reconciliation runtime, references, examples, and tests.
 
 Repository layout:
 - Each script is standalone and intended to be run directly.
