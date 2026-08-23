@@ -15,7 +15,7 @@ If you need broader project context, read `GEMINI.md`.
 Build / Lint / Test Commands
 -------------------------------------------------------------------------------
 
-There is no formal build step or repository-wide test suite. Scripts are executed directly; run Python scripts via `uv run` (avoid `python3` for normal runs). The Simplifi skill has focused tests under its `tests/` directory.
+There is no formal build step or repository-wide test suite. Scripts are executed directly; run Python scripts via `uv run` (avoid `python3` for normal runs).
 
 Linting (optional):
 - `ruff check .`
