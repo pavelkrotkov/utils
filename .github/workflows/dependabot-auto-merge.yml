@@ -10,8 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}
@@ -20,6 +19,9 @@ concurrency:
 jobs:
   merge-passing-dependabot-prs:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # squash-merge Dependabot PRs and delete their branches
+      pull-requests: write # read check status on PRs
     steps:
       - name: Merge passing Dependabot PRs
         env:
