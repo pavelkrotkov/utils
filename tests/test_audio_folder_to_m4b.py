@@ -60,7 +60,8 @@ def _m4b_chapters(m4b: Path) -> list[str]:
         capture_output=True,
         text=True,
     )
-    return [chapter["tags"]["title"] for chapter in json.loads(result.stdout)["chapters"]]
+    chapters = json.loads(result.stdout).get("chapters", [])
+    return [chapter.get("tags", {}).get("title", "") for chapter in chapters]
 
 
 def _process(book_dir: Path, output_dir: Path, *, overwrite: bool = False) -> bool:
@@ -133,7 +134,7 @@ def test_probe_track_single_ffprobe_call(tmp_path: Path, monkeypatch: pytest.Mon
     real_run = subprocess.run
 
     def counting_run(cmd, **kwargs):
-        if cmd[0] == "ffprobe":
+        if cmd and cmd[0] == "ffprobe":
             ffprobe_calls.append(cmd)
         return real_run(cmd, **kwargs)
 
