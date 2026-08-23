@@ -4,10 +4,13 @@
 # ///
 """Convert folders of audio files into M4B audiobooks with chapter markers.
 
-Each book is one folder of audio tracks (``.mp3``, ``.m4a``, ``.mp4``, ...).
+Each book is one folder of audio tracks (``.mp3``, ``.m4a``, ``.flac``, ...).
 Tracks are ordered with a natural sort (so ``01, 02, ... 10`` sort correctly),
 concatenated, re-encoded to AAC, and tagged with one chapter per track plus the
 folder's cover image (if any) as embedded art.
+
+The produced ``.m4b`` is output-only: it is never scanned back in as an input
+track, so generated books can't be re-ingested by a rerun.
 
 Two modes:
   - Collection (default): every immediate subfolder of INPUT is its own book.
@@ -32,6 +35,7 @@ Requires ffmpeg/ffprobe on PATH (``brew install ffmpeg``).
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -40,9 +44,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-from audio_common import probe_media_duration
-
-AUDIO_EXTS = {".mp3", ".m4a", ".mp4", ".m4b", ".aac", ".wav", ".flac"}
+# Input track formats. Deliberately excludes .m4b: that is this tool's OUTPUT
+# format, so accepting it would re-ingest generated books (see #92).
+AUDIO_EXTS = {".mp3", ".m4a", ".mp4", ".aac", ".wav", ".flac"}
 COVER_EXTS = {".jpg", ".jpeg", ".png"}
 
 
@@ -171,8 +175,14 @@ def write_ffmetadata(
     return meta_file
 
 
-def probe_audio_stream(path: Path, ffprobe_bin: str) -> str | None:
-    """Return 'codec,sample_rate,channels' for the first audio stream, or None."""
+def probe_track(path: Path, ffprobe_bin: str) -> tuple[float, str] | None:
+    """Probe duration and audio-stream identity with a single ffprobe call.
+
+    Returns ``(duration_seconds, "codec,sample_rate,channels")`` for the first
+    audio stream, or ``None`` when ffprobe fails or the file has no usable
+    audio stream. This one call feeds all three track checks: skip-unreadable,
+    skip-no-audio-stream, and refuse-mismatched-streams.
+    """
     cmd = [
         ffprobe_bin,
         "-v",
@@ -180,17 +190,37 @@ def probe_audio_stream(path: Path, ffprobe_bin: str) -> str | None:
         "-select_streams",
         "a:0",
         "-show_entries",
-        "stream=codec_name,sample_rate,channels",
+        "format=duration:stream=codec_name,sample_rate,channels",
         "-of",
-        "csv=p=0",
+        "json",
         str(path),
     ]
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
     except (FileNotFoundError, subprocess.CalledProcessError):
         return None
-    lines = result.stdout.strip().splitlines()
-    return lines[0] if lines else None
+    try:
+        info = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+
+    # -select_streams only filters stream sections, so format.duration is still
+    # reported; requiring a stream here is what rejects video-only files.
+    streams = info.get("streams") or []
+    if not streams:
+        return None
+    try:
+        duration = float(info["format"]["duration"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if duration <= 0:
+        return None
+
+    stream = streams[0]
+    identity = ",".join(
+        str(stream.get(key) or "") for key in ("codec_name", "sample_rate", "channels")
+    )
+    return duration, identity
 
 
 def process_book(
@@ -211,9 +241,9 @@ def process_book(
         log("INFO", f"skip (already exists): {output_file.name}")
         return True
 
-    # Drop the output .m4b itself if it lives in the input folder (.m4b is in
-    # AUDIO_EXTS), so an --overwrite rerun can't fold the old book back in.
-    audio_files = [f for f in find_audio_files(book_dir) if f.resolve() != output_file.resolve()]
+    # .m4b is not in AUDIO_EXTS, so even with --overwrite the previous output
+    # can never be scanned back in as a source track.
+    audio_files = find_audio_files(book_dir)
     if not audio_files:
         log("WARNING", f"no audio files found in {book_dir.name}")
         return False
@@ -225,16 +255,11 @@ def process_book(
     durations: list[float] = []
     stream_params: set[str] = set()
     for af in audio_files:
-        duration = probe_media_duration(af, ffprobe_bin, verbose=True)
-        if duration is None:
-            log("WARNING", f"skipping unreadable/zero-length track: {af.name}")
+        probed = probe_track(af, ffprobe_bin)
+        if probed is None:
+            log("WARNING", f"skipping unreadable or audio-less track: {af.name}")
             continue
-        # Duration is format-level, so a video-only file (e.g. a stray .mp4)
-        # passes it; require an actual audio stream or the -map 0:a encode fails.
-        params = probe_audio_stream(af, ffprobe_bin)
-        if params is None:
-            log("WARNING", f"skipping track with no audio stream: {af.name}")
-            continue
+        duration, params = probed
         usable_files.append(af)
         durations.append(duration)
         stream_params.add(params)
@@ -305,9 +330,7 @@ def process_book(
     return True
 
 
-def collect_books(
-    input_dir: Path, single: bool, book_filter: str | None, output_dir: Path
-) -> list[Path]:
+def collect_books(input_dir: Path, single: bool, book_filter: str | None) -> list[Path]:
     """Return the list of book folders to process."""
     if single:
         return [input_dir]
@@ -317,11 +340,10 @@ def collect_books(
     except OSError as e:
         log("ERROR", f"cannot read collection directory {input_dir}: {e}")
         return []
-    # Skip the output dir itself: when it sits inside the collection its prior
-    # .m4b outputs match AUDIO_EXTS, so it would otherwise scan as a "book".
-    out_resolved = output_dir.resolve()
+    # An output dir inside the collection contains only .m4b files, which are
+    # not in AUDIO_EXTS, so it cannot scan as a "book" anymore.
     book_dirs = sorted(
-        (d for d in entries if d.is_dir() and d.resolve() != out_resolved and find_audio_files(d)),
+        (d for d in entries if d.is_dir() and find_audio_files(d)),
         key=natural_key,
     )
     if book_filter:
@@ -388,7 +410,7 @@ def main() -> None:
 
     output_dir = args.output_dir or default_output_dir(args.input, args.single)
 
-    book_dirs = collect_books(args.input, args.single, args.book, output_dir)
+    book_dirs = collect_books(args.input, args.single, args.book)
     if not book_dirs:
         log(
             "ERROR",
