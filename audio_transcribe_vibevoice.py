@@ -15,6 +15,18 @@ Usage:
     uv run ./audio_transcribe_vibevoice.py interview.m4a
     uv run ./audio_transcribe_vibevoice.py interview.m4a --context "Pavel, Mathpix, pyannote"
     uv run ./audio_transcribe_vibevoice.py interview.m4a --format srt -o interview.srt
+
+Long files on memory-constrained Macs (16 GB can OOM during prefill):
+    uv run ./audio_transcribe_vibevoice.py long_interview.m4a --chunk-seconds 300
+
+Chunking splits the input near natural silences into pieces of at most
+--chunk-seconds, transcribes each through the same single-pass model call, and
+splices the per-chunk segments back onto one absolute timeline. Windows with no
+usable silence are hard-cut with a small overlap whose double-transcribed span
+is deduped at splice time. Known limitation: speaker labels reset at chunk
+boundaries ("Speaker 1" in chunk 2 is not necessarily "Speaker 1" in chunk 1).
+Chunking trades VibeVoice's cross-file speaker consistency for the ability to
+run at all on low memory; use it when you need *what* was said, not *who*.
 """
 
 from __future__ import annotations
@@ -24,8 +36,11 @@ import contextlib
 import json
 import os
 import platform
+import re
+import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +58,21 @@ DEFAULT_MODEL = "mlx-community/VibeVoice-ASR-4bit"
 REALTIME_FACTOR = 4.0
 SUPPORTED_FORMATS = ("json", "txt", "srt", "vtt", "diarized-txt", "diarized-breaks")
 _DIARIZED_FORMATS = frozenset({"diarized-txt", "diarized-breaks"})
+DEFAULT_CHUNK_SECONDS = 300.0
+DEFAULT_SILENCE_DB = -30.0
+DEFAULT_SILENCE_MIN = 0.5
+DEFAULT_CHUNK_OVERLAP = 2.5
+
+
+@dataclass
+class Chunk:
+    """A half-open [start, end) piece of the input, in seconds."""
+
+    start: float
+    end: float
+    # True when the boundary had no usable silence, so this chunk rewound by
+    # --chunk-overlap and its double-transcribed span must be deduped at splice.
+    overlaps_previous: bool = False
 
 
 def _format_file_ext(output_format: str) -> str:
@@ -94,7 +124,42 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Convert input to mono 16 kHz WAV before VibeVoice "
-            "(also enabled by VIBEVOICE_PRECONVERT_PCM16K=1)"
+            "(also enabled by VIBEVOICE_PRECONVERT_PCM16K=1); "
+            "chunked runs always convert as part of extraction"
+        ),
+    )
+    parser.add_argument(
+        "--chunk-seconds",
+        type=float,
+        default=0.0,
+        metavar="N",
+        help=(
+            "Split the input into pieces of at most N seconds, transcribe each, "
+            "and splice results with corrected absolute timestamps (0 = single "
+            "pass, the default; single pass keeps VibeVoice's global speaker "
+            "consistency). Use for long files on low-memory Macs. Boundaries "
+            "snap to silence when available; speaker labels reset per chunk."
+        ),
+    )
+    parser.add_argument(
+        "--silence-db",
+        type=float,
+        default=DEFAULT_SILENCE_DB,
+        help="Silence threshold in dB for chunk boundary detection (default: -30)",
+    )
+    parser.add_argument(
+        "--silence-min",
+        type=float,
+        default=DEFAULT_SILENCE_MIN,
+        help="Minimum silence duration in seconds for a chunk boundary (default: 0.5)",
+    )
+    parser.add_argument(
+        "--chunk-overlap",
+        type=float,
+        default=DEFAULT_CHUNK_OVERLAP,
+        help=(
+            "Overlap in seconds for hard-cut boundaries with no usable silence "
+            "(default: 2.5); the double-transcribed span is deduped at splice"
         ),
     )
     parser.add_argument("--no-progress", action="store_true", help="Disable progress reports")
@@ -334,6 +399,254 @@ def _warn_if_speakers_ignored(segments: list[TranscriptSegment], output_format: 
         )
 
 
+def detect_silences(
+    path: Path,
+    *,
+    noise_db: float,
+    min_silence: float,
+    ffmpeg_bin: str = "ffmpeg",
+) -> list[tuple[float, float]]:
+    """Return (start, end) silence intervals via ffmpeg silencedetect."""
+    cmd = [
+        ffmpeg_bin,
+        "-hide_banner",
+        "-nostats",
+        "-i",
+        str(path),
+        "-af",
+        f"silencedetect=noise={noise_db}dB:d={min_silence}",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    except OSError as exc:
+        print(f"WARNING: silencedetect failed to run: {exc}", file=sys.stderr)
+        return []
+
+    silences: list[tuple[float, float]] = []
+    pending_start: float | None = None
+    for line in (result.stderr or "").splitlines():
+        if match := re.search(r"silence_start:\s*(-?[0-9.]+)", line):
+            pending_start = float(match.group(1))
+            continue
+        if match := re.search(r"silence_end:\s*([0-9.]+)", line):
+            if pending_start is not None:
+                silences.append((pending_start, float(match.group(1))))
+            pending_start = None
+    if pending_start is not None:
+        # Silence ran to EOF without an explicit end event.
+        duration = probe_media_duration(path, "ffprobe")
+        silences.append((pending_start, duration if duration else pending_start))
+    return silences
+
+
+def plan_chunks(
+    duration: float,
+    chunk_seconds: float,
+    silences: list[tuple[float, float]],
+    overlap: float,
+) -> list[Chunk]:
+    """Split [0, duration] into chunks of at most ~chunk_seconds.
+
+    Boundaries snap to the midpoint of a detected silence inside a search band
+    around each target cut, so chunks butt-join cleanly with no overlap. A
+    window with no usable silence hard-cuts at the target and the next chunk
+    rewinds by `overlap` seconds (flagged overlaps_previous). A remainder of at
+    most 25% of chunk_seconds folds into the previous chunk instead of forming
+    a sliver tail.
+    """
+    search = chunk_seconds / 3.0
+    midpoints = [(start + end) / 2.0 for start, end in silences]
+    chunks: list[Chunk] = []
+    start = 0.0
+    overlapped = False
+    while True:
+        remaining = duration - start
+        if remaining <= chunk_seconds * 1.25:
+            chunks.append(Chunk(start=start, end=duration, overlaps_previous=overlapped))
+            break
+        target = start + chunk_seconds
+        band = [m for m in midpoints if target - search <= m <= target + search]
+        cut = min(band, key=lambda m: abs(m - target)) if band else target
+        chunks.append(Chunk(start=start, end=cut, overlaps_previous=overlapped))
+        if band:
+            start = cut
+            overlapped = False
+        else:
+            start = max(cut - overlap, 0.0)
+            overlapped = True
+    return chunks
+
+
+def extract_chunk(
+    input_path: Path,
+    dest_wav: Path,
+    chunk: Chunk,
+    ffmpeg_bin: str = "ffmpeg",
+) -> None:
+    """Cut one chunk out of the input as mono 16 kHz WAV."""
+    cmd = [
+        ffmpeg_bin,
+        "-v",
+        "error",
+        "-y",
+        "-ss",
+        f"{chunk.start:.3f}",
+        "-to",
+        f"{chunk.end:.3f}",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        str(dest_wav),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+
+def merge_chunk_segments(
+    chunk_segments: list[list[TranscriptSegment]],
+    chunks: list[Chunk],
+) -> list[TranscriptSegment]:
+    """Splice per-chunk segments onto one absolute timeline.
+
+    Each chunk's local times are shifted by its start offset. Overlapping
+    (hard-cut) seams are deduped by coverage: leading segments of the later
+    chunk that end at or before the latest time already covered by earlier
+    chunks are dropped, so the double-transcribed span appears exactly once.
+    Text is not compared — VibeVoice's rendering of an overlap region differs
+    between passes, so dedupe is time-based.
+    """
+    merged: list[TranscriptSegment] = []
+    for segments, chunk in zip(chunk_segments, chunks, strict=True):
+        shifted = [
+            TranscriptSegment(
+                start=segment.start + chunk.start,
+                end=segment.end + chunk.start,
+                text=segment.text,
+                speaker=segment.speaker,
+            )
+            for segment in segments
+        ]
+        if chunk.overlaps_previous and merged:
+            covered_until = max(segment.end for segment in merged)
+            shifted = [s for s in shifted if s.end > covered_until + 1e-6]
+        merged.extend(shifted)
+    merged.sort(key=lambda s: (s.start, s.end))
+    return merged
+
+
+def _dump_segments_json(segments: list[TranscriptSegment]) -> str:
+    payload = []
+    for segment in segments:
+        item: dict[str, Any] = {
+            "start": round(segment.start, 3),
+            "end": round(segment.end, 3),
+            "text": segment.text,
+        }
+        if segment.speaker is not None:
+            item["speaker"] = segment.speaker
+        payload.append(item)
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def run_chunked(args: argparse.Namespace, generate: Any, progress: ProgressReporter | None) -> None:
+    """Chunked transcription path: split -> per-chunk ASR -> splice -> emit."""
+    input_path: Path = args.input
+    duration = probe_media_duration(input_path, "ffprobe", args.verbose)
+    if not duration or duration <= 0:
+        print("ERROR: cannot determine audio duration; cannot plan chunks", file=sys.stderr)
+        sys.exit(1)
+
+    final_path, _, generated_path = resolve_output_paths(input_path, args.output, args.format)
+
+    if progress:
+        progress.info(
+            f"Audio duration {format_duration(duration)}; chunking at <= {args.chunk_seconds:g}s"
+        )
+    with tempfile.TemporaryDirectory(prefix="vibevoice_chunks_") as temp_dir_str:
+        temp_dir = Path(temp_dir_str)
+        silences = detect_silences(
+            input_path,
+            noise_db=args.silence_db,
+            min_silence=args.silence_min,
+        )
+        chunks = plan_chunks(duration, args.chunk_seconds, silences, args.chunk_overlap)
+        plan_summary = ", ".join(
+            f"{chunk.start:.1f}-{chunk.end:.1f}" + ("*" if chunk.overlaps_previous else "")
+            for chunk in chunks
+        )
+        message = f"{len(chunks)} chunk(s) [{plan_summary}] (* = overlapped seam)"
+        if progress:
+            progress.info(message)
+        else:
+            print(f"INFO: {message}", file=sys.stderr)
+
+        chunk_segments: list[list[TranscriptSegment]] = []
+        total = len(chunks)
+
+        def transcribe_chunk(wav_path: Path, stem: Path) -> None:
+            generate(
+                model=args.model,
+                audio=str(wav_path),
+                output_path=str(stem),
+                format="json",
+                verbose=args.verbose,
+                context=args.context,
+            )
+
+        for index, chunk in enumerate(chunks, 1):
+            wav_path = temp_dir / f"chunk_{index:03d}.wav"
+            stem = temp_dir / f"chunk_{index:03d}"
+            extract_chunk(input_path, wav_path, chunk)
+
+            label = f"VibeVoice ASR chunk {index}/{total}"
+            try:
+                if progress:
+                    run_threaded_with_periodic_progress(
+                        lambda w=wav_path, s=stem: transcribe_chunk(w, s),
+                        reporter=progress,
+                        label=label,
+                        interval=args.progress_interval,
+                        expected_seconds=(chunk.end - chunk.start) * REALTIME_FACTOR,
+                    )
+                else:
+                    transcribe_chunk(wav_path, stem)
+            except Exception as exc:
+                print(f"ERROR: VibeVoice transcription failed ({label}): {exc}", file=sys.stderr)
+                sys.exit(1)
+
+            generated_json = Path(f"{stem}.json")
+            validate_output(generated_json)
+            chunk_segments.append(load_vibevoice_segments(generated_json))
+
+        merged = merge_chunk_segments(chunk_segments, chunks)
+        if not merged:
+            print("ERROR: chunked transcription produced no transcript text", file=sys.stderr)
+            sys.exit(1)
+        _warn_if_speakers_ignored(merged, args.format)
+        if len(chunks) > 1 and any(segment.speaker is not None for segment in merged):
+            print(
+                "NOTE: speaker labels reset at chunk boundaries; 'Speaker N' may"
+                " refer to different people in different chunks.",
+                file=sys.stderr,
+            )
+
+        if args.format == "json":
+            generated_path.write_text(_dump_segments_json(merged), encoding="utf-8")
+            if generated_path != final_path:
+                generated_path.replace(final_path)
+        else:
+            final_path.write_text(emit_transcript(merged, args.format) + "\n", encoding="utf-8")
+
+    validate_output(final_path)
+    print(f"Transcript written to: {final_path}")
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
@@ -342,6 +655,19 @@ def main() -> None:
         parser.error("--from-json and input are mutually exclusive")
     if not args.from_json and not args.input:
         parser.error("input is required unless --from-json is used")
+
+    if args.chunk_seconds < 0:
+        parser.error("--chunk-seconds must be >= 0 (0 disables chunking)")
+    if args.chunk_seconds and args.chunk_seconds < 10:
+        parser.error("--chunk-seconds must be at least 10 seconds")
+    if args.chunk_overlap < 0:
+        parser.error("--chunk-overlap must be >= 0")
+    if args.chunk_seconds and args.chunk_overlap >= args.chunk_seconds / 2:
+        parser.error("--chunk-overlap must be smaller than half of --chunk-seconds")
+    if not -100 <= args.silence_db <= 0:
+        parser.error("--silence-db must be between -100 and 0")
+    if args.silence_min <= 0:
+        parser.error("--silence-min must be > 0")
 
     if args.from_json:
         if args.format == "json":
@@ -381,6 +707,11 @@ def main() -> None:
         print(f"ERROR: Missing required Python package: {exc}", file=sys.stderr)
         print("Run with: uv run ./audio_transcribe_vibevoice.py ...", file=sys.stderr)
         sys.exit(1)
+
+    progress = None if args.no_progress else ProgressReporter(interval=args.progress_interval)
+    if args.chunk_seconds:
+        run_chunked(args, generate_transcription, progress)
+        return
 
     final_path, mlx_stem, generated_path = resolve_output_paths(
         args.input,
