@@ -69,7 +69,7 @@ Repository scripts:
 - `audio_folder_to_m4b.py` converts folders of audio tracks into chaptered M4B audiobooks via ffmpeg (one chapter per track, natural-sorted, with embedded cover art); probes each track once for duration plus audio-stream identity and skips unreadable or audio-less tracks; `.m4b` is output-only, never an accepted input.
 - `audio_transcribe_openai.sh` uses OpenAI's `/v1/audio/transcriptions` API and can downsample large files.
 - `audio_transcribe_whisper.py` runs a local whisper-cpp pipeline (mono 16kHz conversion + plain transcript by default). Use `--diarization` to add pyannote speaker diarization and merge speaker labels.
-- `audio_transcribe_vibevoice.py` uses `mlx-audio` with VibeVoice-ASR on Apple Silicon, defaults to `mlx-community/VibeVoice-ASR-4bit`, and writes native structured JSON by default.
+- `audio_transcribe_vibevoice.py` uses `mlx-audio` with VibeVoice-ASR on Apple Silicon, defaults to `mlx-community/VibeVoice-ASR-4bit`, and writes native structured JSON by default; opt-in `--chunk-seconds` splits long files on silence for low-memory Macs (speaker labels reset per chunk).
 - `tidal_import_page_to_playlist.py` imports classical albums from MHTML/MD files to TIDAL playlists using API v2.
 - `test_matching.py` helper for testing TIDAL matching (see below).
 
