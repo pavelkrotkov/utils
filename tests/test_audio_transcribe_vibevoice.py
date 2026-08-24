@@ -178,6 +178,29 @@ def test_detect_silences_parses_ffmpeg_stderr(
     assert any(part == "d=0.5" or "d=0.5" in part for part in captured_cmd[0])
 
 
+def test_detect_silences_drops_unterminated_interval_without_duration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tone = tmp_path / "audio.wav"
+    tone.write_bytes(b"fake")
+
+    monkeypatch.setattr(
+        vv.subprocess,
+        "run",
+        lambda *_a, **_kw: _FakeCompletedProcess(
+            stdout="",
+            stderr="[silencedetect @ 0x1] silence_start: 40\n",
+            returncode=0,
+        ),
+    )
+    # Unknown duration: the trailing interval would be zero-length, so it must
+    # be dropped rather than recorded as (40, 40).
+    monkeypatch.setattr(vv, "probe_media_duration", lambda *_args, **_kw: None)
+
+    assert vv.detect_silences(tone, noise_db=-30.0, min_silence=0.5) == []
+
+
 def test_detect_silences_survives_missing_ffmpeg(tmp_path: Path) -> None:
     missing = tmp_path / "audio.wav"
     missing.write_bytes(b"x")

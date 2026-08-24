@@ -435,10 +435,10 @@ def detect_silences(
             if pending_start is not None:
                 silences.append((pending_start, float(match.group(1))))
             pending_start = None
-    if pending_start is not None:
-        # Silence ran to EOF without an explicit end event.
-        duration = probe_media_duration(path, "ffprobe")
-        silences.append((pending_start, duration if duration else pending_start))
+    if pending_start is not None and (duration := probe_media_duration(path, "ffprobe")):
+        # Silence ran to EOF without an explicit end event. Only record it
+        # when the duration is known, so intervals always have end > start.
+        silences.append((pending_start, duration))
     return silences
 
 
