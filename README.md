@@ -85,6 +85,16 @@ uv run ./pdf_convert_marker.py input.pdf -o output.md
 uv run ./pdf_convert_marker.py input.pdf --page-range 1,3,5-N
 ```
 
+OpenDataLoader PDF (local, requires Java 11+):
+
+```bash
+uv run ./pdf_convert_opendataloader.py input.pdf -o output.md
+uv run ./pdf_convert_opendataloader.py input.pdf --page-range 1-5 --use-struct-tree
+```
+
+Install Java first (`brew install --cask temurin`). Image assets referenced by the
+Markdown are copied next to the output file.
+
 ## Markdown Tools
 
 Split a Markdown file into smaller Markdown files in the same folder at each `##` or

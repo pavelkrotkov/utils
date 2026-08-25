@@ -4,9 +4,65 @@
 from __future__ import annotations
 
 import importlib
+import re
+import shutil
 import sys
+import urllib.parse
 from pathlib import Path
 from types import ModuleType
+
+MARKDOWN_LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)\)")
+HTML_IMG_SRC_RE = re.compile(r"<img[^>]+src=\"([^\"]+)\"", re.IGNORECASE)
+
+
+def collect_local_references(markdown_text: str) -> list[str]:
+    """Return unique local file references from Markdown links and image tags."""
+    references: list[str] = []
+    seen: set[str] = set()
+    matches = list(MARKDOWN_LINK_RE.finditer(markdown_text))
+    matches.extend(HTML_IMG_SRC_RE.finditer(markdown_text))
+
+    for match in matches:
+        raw_reference = urllib.parse.unquote(match.group(1))
+        reference = raw_reference.split("#", 1)[0].split("?", 1)[0]
+        if not reference or reference in seen:
+            continue
+        if reference.lower().startswith(("http://", "https://", "data:", "file:")):
+            continue
+        seen.add(reference)
+        references.append(reference)
+    return references
+
+
+def copy_referenced_assets(
+    markdown_text: str,
+    source_dir: Path,
+    target_dir: Path,
+) -> list[Path]:
+    """Copy files referenced by relative links next to the output Markdown.
+
+    Returns the list of copied paths. References outside ``source_dir`` are
+    ignored, and existing files at the destination are left untouched.
+    """
+    copied: list[Path] = []
+    resolved_source_dir = source_dir.resolve()
+
+    for reference in collect_local_references(markdown_text):
+        candidate = (source_dir / reference).resolve()
+        try:
+            relative_path = candidate.relative_to(resolved_source_dir)
+        except ValueError:
+            continue
+        if not candidate.is_file():
+            continue
+
+        target_path = target_dir / relative_path
+        if target_path.exists():
+            continue
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(candidate, target_path)
+        copied.append(target_path)
+    return copied
 
 
 def resolve_output_path(
