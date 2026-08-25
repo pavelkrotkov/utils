@@ -6,15 +6,17 @@
 Convert a local PDF to Markdown using PaddleOCR-VL.
 
 The first run downloads the layout and VLM models automatically.
-Thread pools (OMP/MKL/OpenBLAS/NumExpr/Paddle) are capped with --threads
+Thread pools (OMP/MKL/OpenBLAS/NumExpr/Paddle) are forced to --threads
 to keep CPU and memory usage bounded on small machines.
 
 Usage:
     # Run with uv (recommended):
     uv run ./pdf_convert_paddleocr_vl.py input.pdf
+    uv run ./pdf_convert_paddleocr_vl.py input.pdf --page-range 1-5
 
     # Standard execution:
     ./pdf_convert_paddleocr_vl.py input.pdf -o output.md
+    ./pdf_convert_paddleocr_vl.py input.pdf --threads 4 --device cpu
 """
 
 from __future__ import annotations
@@ -46,9 +48,9 @@ THREAD_LIMIT_ENV_VARS = (
 
 
 def apply_thread_limit(threads: int) -> None:
-    """Cap numeric thread pools before the framework libraries load."""
+    """Force numeric thread pools before the framework libraries load."""
     for env_var in THREAD_LIMIT_ENV_VARS:
-        os.environ.setdefault(env_var, str(threads))
+        os.environ[env_var] = str(threads)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -80,8 +82,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_THREADS,
         help=(
-            f"Cap for OMP/BLAS/Paddle thread pools (default: {DEFAULT_THREADS}). "
-            "Raise only on machines with ample cores and memory."
+            f"Thread pool count forced onto OMP/BLAS/Paddle (default: {DEFAULT_THREADS}); "
+            "overrides ambient thread environment variables"
         ),
     )
     parser.add_argument(
@@ -221,7 +223,11 @@ def main() -> None:
 
         markdown_text = generated_md.read_text(encoding="utf-8")
 
-    output_path.write_text(markdown_text, encoding="utf-8")
+    try:
+        output_path.write_text(markdown_text, encoding="utf-8")
+    except OSError as exc:
+        print(f"ERROR: Unable to write Markdown output: {exc}", file=sys.stderr)
+        sys.exit(1)
     print(f"Wrote Markdown to: {output_path}")
 
 

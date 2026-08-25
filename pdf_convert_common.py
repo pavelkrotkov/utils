@@ -72,6 +72,12 @@ def resolve_output_path(
 ) -> Path:
     """Resolve a Markdown output path and ensure its parent directory exists."""
     if output_path is not None:
+        if output_path.resolve() == input_path.resolve():
+            print(
+                f"ERROR: Output path must differ from the input PDF: {output_path}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         return output_path
 
