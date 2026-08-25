@@ -95,6 +95,19 @@ uv run ./pdf_convert_opendataloader.py input.pdf --page-range 1-5 --use-struct-t
 Install Java first (`brew install --cask temurin`). Image assets referenced by the
 Markdown are copied next to the output file.
 
+MinerU (local; `pipeline` backend by default, `-b vlm-engine` for the MinerU 2.5
+Pro VLM):
+
+```bash
+uv run ./pdf_convert_mineru.py input.pdf -o output.md
+uv run ./pdf_convert_mineru.py input.pdf --page-range 1-5 -b pipeline
+uv run ./pdf_convert_mineru.py input.pdf -b vlm-engine
+```
+
+Models download automatically on first run. Thread pools are forced to 4 by
+default (`--threads`) to keep CPU/memory usage bounded. Page ranges must be
+contiguous (MinerU limitation).
+
 ## Markdown Tools
 
 Split a Markdown file into smaller Markdown files in the same folder at each `##` or

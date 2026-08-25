@@ -65,6 +65,14 @@ def copy_referenced_assets(
     return copied
 
 
+def find_generated_markdown(directory: Path) -> Path | None:
+    """Return the single Markdown file generated under a directory tree."""
+    candidates = sorted(path for path in directory.rglob("*.md") if path.is_file())
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
 def resolve_output_path(
     input_path: Path,
     output_path: Path | None,
