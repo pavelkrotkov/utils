@@ -95,6 +95,17 @@ uv run ./pdf_convert_opendataloader.py input.pdf --page-range 1-5 --use-struct-t
 Install Java first (`brew install --cask temurin`). Image assets referenced by the
 Markdown are copied next to the output file.
 
+PaddleOCR-VL (local vision-language parsing, downloads models on first run):
+
+```bash
+uv run ./pdf_convert_paddleocr_vl.py input.pdf -o output.md
+uv run ./pdf_convert_paddleocr_vl.py input.pdf --page-range 1-5 --engine transformers
+```
+
+Use `--engine transformers` for a torch-based backend (often faster on Apple Silicon).
+Thread pools are forced to 4 by default (`--threads`) to keep CPU/memory usage bounded;
+raise it only on larger machines.
+
 ## Markdown Tools
 
 Split a Markdown file into smaller Markdown files in the same folder at each `##` or

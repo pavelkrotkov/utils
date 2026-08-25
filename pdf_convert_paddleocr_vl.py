@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+# /// script
+# dependencies = ["paddlepaddle>=3.2", "paddleocr[doc-parser]>=3.3", "pypdf"]
+# ///
+"""
+Convert a local PDF to Markdown using PaddleOCR-VL.
+
+The first run downloads the layout and VLM models automatically.
+Thread pools (OMP/MKL/OpenBLAS/NumExpr/Paddle) are capped with --threads
+to keep CPU and memory usage bounded on small machines.
+
+Usage:
+    # Run with uv (recommended):
+    uv run ./pdf_convert_paddleocr_vl.py input.pdf
+
+    # Standard execution:
+    ./pdf_convert_paddleocr_vl.py input.pdf -o output.md
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+from pdf_convert_common import (
+    import_or_die,
+    parse_page_range,
+    require_pdf_path,
+    resolve_output_path,
+)
+
+ENGINE_CHOICES = ("paddle", "transformers")
+PIPELINE_VERSION_CHOICES = ("v1", "v1.5", "v1.6")
+DEFAULT_THREADS = 4
+# Thread pool sizes read by OpenMP, BLAS libraries, NumExpr, and PaddlePaddle.
+THREAD_LIMIT_ENV_VARS = (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "CPU_NUM",
+)
+
+
+def apply_thread_limit(threads: int) -> None:
+    """Cap numeric thread pools before the framework libraries load."""
+    for env_var in THREAD_LIMIT_ENV_VARS:
+        os.environ.setdefault(env_var, str(threads))
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Convert a PDF to Markdown using PaddleOCR-VL.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("pdf_path", type=Path, help="Path to the input PDF file")
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        help="Output markdown file path (default: same name as PDF with .md)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Directory to write output files (defaults to input file directory)",
+    )
+    parser.add_argument(
+        "--page-range",
+        help=(
+            "Comma-separated 1-based page numbers or ranges. "
+            "Examples: 1-5, 1,3,5-10, 5-N (N = last page)."
+        ),
+    )
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=DEFAULT_THREADS,
+        help=(
+            f"Cap for OMP/BLAS/Paddle thread pools (default: {DEFAULT_THREADS}). "
+            "Raise only on machines with ample cores and memory."
+        ),
+    )
+    parser.add_argument(
+        "--engine",
+        choices=ENGINE_CHOICES,
+        help=(
+            "Inference engine: paddle (default) or transformers "
+            "(torch-based; often faster on Apple Silicon)"
+        ),
+    )
+    parser.add_argument(
+        "--device",
+        help='Device for inference (e.g. "cpu", "gpu:0"); default is chosen by the pipeline',
+    )
+    parser.add_argument(
+        "--pipeline-version",
+        choices=PIPELINE_VERSION_CHOICES,
+        help="PaddleOCR-VL pipeline version (v1, v1.5, v1.6); default is chosen by the library",
+    )
+    return parser
+
+
+def extract_page_subset(pdf_path: Path, pages_zero_based: list[int], target_path: Path) -> None:
+    pypdf = import_or_die("pypdf", "pypdf")
+
+    try:
+        reader = pypdf.PdfReader(str(pdf_path))
+        writer = pypdf.PdfWriter()
+        for page_index in pages_zero_based:
+            writer.add_page(reader.pages[page_index])
+        with target_path.open("wb") as output_file:
+            writer.write(output_file)
+    except Exception as exc:
+        print(f"ERROR: Unable to extract pages: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
+def locate_generated_markdown(save_dir: Path, expected_stem: str) -> Path | None:
+    expected_path = save_dir / f"{expected_stem}.md"
+    if expected_path.is_file():
+        return expected_path
+
+    candidates = sorted(path for path in save_dir.rglob("*.md") if path.is_file())
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if args.threads < 1:
+        print("ERROR: --threads must be at least 1.", file=sys.stderr)
+        sys.exit(1)
+    apply_thread_limit(args.threads)
+
+    pdf_path = require_pdf_path(args.pdf_path)
+
+    output_path = resolve_output_path(pdf_path, args.output, args.output_dir)
+
+    pages_one_based = None
+    if args.page_range:
+        pypdf = import_or_die("pypdf", "pypdf")
+
+        try:
+            reader = pypdf.PdfReader(str(pdf_path))
+            page_count = len(reader.pages)
+        except Exception as exc:
+            print(f"ERROR: Unable to read PDF pages: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+        try:
+            pages_one_based = parse_page_range(args.page_range, page_count, one_based=True)
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+    paddleocr = import_or_die("paddleocr", "paddleocr[doc-parser]")
+    PaddleOCRVL = paddleocr.PaddleOCRVL
+
+    pipeline_kwargs: dict[str, object] = {}
+    if args.engine is not None:
+        pipeline_kwargs["engine"] = args.engine
+    if args.device is not None:
+        pipeline_kwargs["device"] = args.device
+    if args.pipeline_version is not None:
+        pipeline_kwargs["pipeline_version"] = args.pipeline_version
+
+    with tempfile.TemporaryDirectory(prefix="paddleocr_vl_") as work_dir_raw:
+        work_dir = Path(work_dir_raw)
+
+        input_pdf = pdf_path
+        if pages_one_based is not None:
+            input_pdf = work_dir / f"{pdf_path.stem}.pdf"
+            extract_page_subset(pdf_path, [page - 1 for page in pages_one_based], input_pdf)
+            print(f"INFO: Extracted {len(pages_one_based)} pages for parsing.")
+
+        try:
+            pipeline = PaddleOCRVL(**pipeline_kwargs)
+        except Exception as exc:
+            print(f"ERROR: Failed to initialize PaddleOCR-VL pipeline: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+        try:
+            pages_results = list(pipeline.predict(input=str(input_pdf)))
+        except Exception as exc:
+            print(f"ERROR: PaddleOCR-VL prediction failed: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+        if not pages_results:
+            print("ERROR: PaddleOCR-VL returned no results.", file=sys.stderr)
+            sys.exit(1)
+
+        try:
+            merged_results = pipeline.restructure_pages(
+                pages_results,
+                merge_tables=True,
+                relevel_titles=True,
+                concatenate_pages=True,
+            )
+            save_dir = work_dir / "markdown"
+            save_dir.mkdir(parents=True, exist_ok=True)
+            for result in merged_results:
+                result.save_to_markdown(save_path=str(save_dir))
+        except Exception as exc:
+            print(f"ERROR: Saving Markdown failed: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+        generated_md = locate_generated_markdown(save_dir, pdf_path.stem)
+        if generated_md is None:
+            print(
+                f"ERROR: PaddleOCR-VL did not produce a Markdown file in: {save_dir}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        markdown_text = generated_md.read_text(encoding="utf-8")
+
+    output_path.write_text(markdown_text, encoding="utf-8")
+    print(f"Wrote Markdown to: {output_path}")
+
+
+if __name__ == "__main__":
+    main()
