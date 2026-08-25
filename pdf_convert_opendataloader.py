@@ -205,8 +205,13 @@ def main() -> None:
 
         markdown_text = generated_md.read_text(encoding="utf-8")
 
+        copied_assets = copy_referenced_assets(
+            markdown_text,
+            generated_md.parent,
+            output_path.parent,
+        )
+
     output_path.write_text(markdown_text, encoding="utf-8")
-    copied_assets = copy_referenced_assets(markdown_text, generated_md.parent, output_path.parent)
     for asset_path in copied_assets:
         print(f"INFO: Copied referenced asset: {asset_path}")
     print(f"Wrote Markdown to: {output_path}")
