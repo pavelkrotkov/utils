@@ -119,6 +119,23 @@ Models download automatically on first run. Thread pools are forced to 4 by
 default (`--threads`) to keep CPU/memory usage bounded. Page ranges must be
 contiguous (MinerU limitation).
 
+### PDF converter quality ranking
+
+Output-quality ranking for scientific papers, measured on arXiv 1706.03762
+("Attention Is All You Need", 15 pages, two-column layout, dense math, two
+tables). Single-paper benchmark; re-run before relying on the order.
+
+| # | Converter | Runs | Notes |
+|---|---|---|---|
+| 1 | `pdf_convert_mathpix_sdk.py` | Mathpix API (paid) | Reference-quality LaTeX and table structure |
+| 2 | `pdf_convert_llamaparse.py` | LlamaCloud API (paid) | Complete output with clean display equations |
+| 3 | `pdf_convert_paddleocr_vl.py` | local | Clean math/tables (HTML); slow on CPU; jumbled author block |
+| 4 | `pdf_convert_mineru.py` | local | Good structure + display math; occasional table-cell OCR slips (`0(1)`); `-b vlm-engine` likely better on GPU |
+| 5 | `pdf_convert_docling.py` | local | Excellent prose/headings but silently drops display equations |
+| 6 | `pdf_convert_marker.py` | local | Usable, but misfiles an equation as a table row and drops one heading; current versions need `llama.cpp` (`brew install llama.cpp`) for their default layout/OCR models |
+| 7 | `pdf_convert_opendataloader.py` | local | Fast and deterministic, but Markdown fragments math/layout (its JSON mode is stronger) |
+| 8 | `pdf_convert_pymupdf4llm.py` | local | Fastest rough text dump; misses section headings, mangles formatting |
+
 ## Markdown Tools
 
 Split a Markdown file into smaller Markdown files in the same folder at each `##` or
