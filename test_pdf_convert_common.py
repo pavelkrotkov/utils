@@ -11,6 +11,8 @@ from pathlib import Path
 
 from pdf_convert_common import (
     collapse_consecutive,
+    copy_referenced_assets,
+    find_generated_markdown,
     format_page_ranges,
     import_or_die,
     parse_page_range,
@@ -98,6 +100,53 @@ class PdfConvertCommonTest(unittest.TestCase):
                 self.assertRaisesRegex(ValueError, r"^Invalid --page-range value:"),
             ):
                 parse_page_range(spec, 10, one_based=True)
+
+    def test_find_generated_markdown_returns_only_unambiguous_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            nested = root / "doc" / "vlm"
+            nested.mkdir(parents=True)
+            generated = nested / "doc.md"
+            generated.write_text("# hi", encoding="utf-8")
+
+            self.assertEqual(find_generated_markdown(root), generated)
+
+            (root / "other.md").write_text("# other", encoding="utf-8")
+            self.assertIsNone(find_generated_markdown(root))
+            self.assertIsNone(find_generated_markdown(root / "missing"))
+
+    def test_copy_referenced_assets_copies_local_links_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_dir = root / "generated"
+            images = source_dir / "images"
+            images.mkdir(parents=True)
+            asset = images / "fig.jpg"
+            asset.write_bytes(b"jpeg")
+            secret = root / "secret.txt"
+            secret.write_text("nope", encoding="utf-8")
+
+            markdown_text = (
+                "![ok](images/fig.jpg)\n"
+                "[evil](../secret.txt)\n"
+                "![abs](/etc/hosts)\n"
+                "![remote](https://example.com/x.png)\n"
+                '<img src="images/fig.jpg">'
+            )
+
+            copied = copy_referenced_assets(markdown_text, source_dir, root / "out")
+
+            self.assertEqual([path.name for path in copied], ["fig.jpg"])
+            self.assertEqual((root / "out" / "images" / "fig.jpg").read_bytes(), b"jpeg")
+            self.assertFalse((root / "out" / "secret.txt").exists())
+
+            stale = root / "out" / "images" / "fig.jpg"
+            stale.write_bytes(b"stale")
+
+            copied_again = copy_referenced_assets(markdown_text, source_dir, root / "out")
+
+            self.assertEqual([path.name for path in copied_again], ["fig.jpg"])
+            self.assertEqual(stale.read_bytes(), b"jpeg")
 
 
 if __name__ == "__main__":

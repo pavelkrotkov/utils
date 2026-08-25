@@ -42,7 +42,8 @@ def copy_referenced_assets(
     """Copy files referenced by relative links next to the output Markdown.
 
     Returns the list of copied paths. References outside ``source_dir`` are
-    ignored, and existing files at the destination are left untouched.
+    ignored, and existing files at the destination are overwritten so a
+    reconversion never pairs new Markdown with stale assets.
     """
     copied: list[Path] = []
     resolved_source_dir = source_dir.resolve()
@@ -57,12 +58,18 @@ def copy_referenced_assets(
             continue
 
         target_path = target_dir / relative_path
-        if target_path.exists():
-            continue
         target_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(candidate, target_path)
         copied.append(target_path)
     return copied
+
+
+def find_generated_markdown(directory: Path) -> Path | None:
+    """Return the single Markdown file generated under a directory tree."""
+    candidates = sorted(path for path in directory.rglob("*.md") if path.is_file())
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
 
 
 def resolve_output_path(

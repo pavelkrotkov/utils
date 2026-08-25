@@ -106,6 +106,19 @@ Use `--engine transformers` for a torch-based backend (often faster on Apple Sil
 Thread pools are forced to 4 by default (`--threads`) to keep CPU/memory usage bounded;
 raise it only on larger machines.
 
+MinerU (local; `pipeline` backend by default, `-b vlm-engine` for the MinerU 2.5
+Pro VLM):
+
+```bash
+uv run ./pdf_convert_mineru.py input.pdf -o output.md
+uv run ./pdf_convert_mineru.py input.pdf --page-range 1-5 -b pipeline
+uv run ./pdf_convert_mineru.py input.pdf -b vlm-engine
+```
+
+Models download automatically on first run. Thread pools are forced to 4 by
+default (`--threads`) to keep CPU/memory usage bounded. Page ranges must be
+contiguous (MinerU limitation).
+
 ## Markdown Tools
 
 Split a Markdown file into smaller Markdown files in the same folder at each `##` or
