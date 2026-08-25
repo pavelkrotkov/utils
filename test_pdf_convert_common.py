@@ -140,6 +140,14 @@ class PdfConvertCommonTest(unittest.TestCase):
             self.assertEqual((root / "out" / "images" / "fig.jpg").read_bytes(), b"jpeg")
             self.assertFalse((root / "out" / "secret.txt").exists())
 
+            stale = root / "out" / "images" / "fig.jpg"
+            stale.write_bytes(b"stale")
+
+            copied_again = copy_referenced_assets(markdown_text, source_dir, root / "out")
+
+            self.assertEqual([path.name for path in copied_again], ["fig.jpg"])
+            self.assertEqual(stale.read_bytes(), b"jpeg")
+
 
 if __name__ == "__main__":
     unittest.main()

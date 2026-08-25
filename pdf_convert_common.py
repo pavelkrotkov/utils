@@ -42,7 +42,8 @@ def copy_referenced_assets(
     """Copy files referenced by relative links next to the output Markdown.
 
     Returns the list of copied paths. References outside ``source_dir`` are
-    ignored, and existing files at the destination are left untouched.
+    ignored, and existing files at the destination are overwritten so a
+    reconversion never pairs new Markdown with stale assets.
     """
     copied: list[Path] = []
     resolved_source_dir = source_dir.resolve()
@@ -57,8 +58,6 @@ def copy_referenced_assets(
             continue
 
         target_path = target_dir / relative_path
-        if target_path.exists():
-            continue
         target_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(candidate, target_path)
         copied.append(target_path)

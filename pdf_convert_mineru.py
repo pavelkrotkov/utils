@@ -55,6 +55,7 @@ THREAD_LIMIT_ENV_VARS = (
     "OPENBLAS_NUM_THREADS",
     "MKL_NUM_THREADS",
     "NUMEXPR_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
 )
 
 
@@ -197,22 +198,30 @@ def main() -> None:
             command.extend(["-u", args.backend_url])
 
         try:
-            completed = subprocess.run(command, check=False)
-        except OSError as exc:
-            print(f"ERROR: Failed to launch MinerU: {exc}", file=sys.stderr)
-            sys.exit(1)
-
-        if completed.returncode != 0:
+            subprocess.run(command, check=True)
+        except subprocess.CalledProcessError as exc:
             print(
-                f"ERROR: MinerU exited with status {completed.returncode}.",
+                f"ERROR: MinerU exited with status {exc.returncode}: {exc}",
                 file=sys.stderr,
             )
+            sys.exit(1)
+        except OSError as exc:
+            print(f"ERROR: Failed to launch MinerU: {exc}", file=sys.stderr)
             sys.exit(1)
 
         generated_md = find_generated_markdown(work_dir)
         if generated_md is None:
             print(
                 f"ERROR: MinerU did not produce a Markdown file in: {work_dir}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        try:
+            generated_md.resolve().relative_to(work_dir.resolve())
+        except ValueError:
+            print(
+                f"ERROR: Generated file is outside temporary directory: {generated_md}",
                 file=sys.stderr,
             )
             sys.exit(1)
