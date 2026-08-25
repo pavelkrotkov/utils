@@ -38,13 +38,15 @@ from pdf_convert_common import (
 ENGINE_CHOICES = ("paddle", "transformers")
 PIPELINE_VERSION_CHOICES = ("v1", "v1.5", "v1.6")
 DEFAULT_THREADS = 4
-# Thread pool sizes read by OpenMP, BLAS libraries, NumExpr, and PaddlePaddle.
+# Thread pool sizes read by OpenMP, BLAS libraries, NumExpr, PaddlePaddle,
+# and Accelerate (macOS).
 THREAD_LIMIT_ENV_VARS = (
     "OMP_NUM_THREADS",
     "OPENBLAS_NUM_THREADS",
     "MKL_NUM_THREADS",
     "NUMEXPR_NUM_THREADS",
     "CPU_NUM",
+    "VECLIB_MAXIMUM_THREADS",
 )
 
 
