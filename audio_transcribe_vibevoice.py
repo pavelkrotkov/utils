@@ -51,6 +51,7 @@ from audio_common import (
     probe_media_duration,
     run_threaded_with_periodic_progress,
 )
+from audio_segments import TranscriptError, read_transcript_file
 from audio_transcript import TranscriptSegment, emit_transcript
 
 DEFAULT_MODEL = "mlx-community/VibeVoice-ASR-4bit"
@@ -212,174 +213,18 @@ def validate_output(path: Path) -> None:
 
 
 def load_vibevoice_segments(json_path: Path) -> list[TranscriptSegment]:
-    with open(json_path, encoding="utf-8") as file:
-        try:
-            data = json.load(file)
-        except json.JSONDecodeError as exc:
-            print(f"ERROR: Invalid VibeVoice JSON in {json_path}: {exc}", file=sys.stderr)
-            sys.exit(1)
-
-    raw_segments = _extract_raw_segments(data)
-    segments = [_segment_from_raw(item) for item in raw_segments]
-    segments = [segment for segment in segments if segment.text.strip()]
-
-    if segments:
-        return segments
-
-    fallback_text = _extract_text(data)
-    if fallback_text:
-        return [TranscriptSegment(start=0.0, end=0.0, text=fallback_text)]
-
-    print(f"ERROR: VibeVoice JSON contained no transcript text: {json_path}", file=sys.stderr)
-    sys.exit(1)
-
-
-def _extract_raw_segments(data: Any) -> list[Any]:
-    if isinstance(data, list):
-        return data if _looks_like_segment_list(data) else []
-    if not isinstance(data, dict):
-        return []
-
-    for key in ("segments", "chunks", "transcription", "results"):
-        value = data.get(key)
-        if isinstance(value, list):
-            if _looks_like_segment_list(value):
-                return value
-            continue
-        if isinstance(value, dict):
-            nested = _extract_raw_segments(value)
-            if nested:
-                return nested
-
-    # Older mlx-audio versions serialized the segment array as a JSON string in "text".
-    # The string may be truncated mid-object; recover complete segments up to last '}'.
-    for key in ("text", "content"):
-        value = data.get(key)
-        if not isinstance(value, str):
-            continue
-        for candidate in _json_array_candidates(value):
-            if isinstance(candidate, list) and _looks_like_segment_list(candidate):
-                return candidate
-
-    return []
-
-
-def _json_array_candidates(s: str) -> list[Any]:
-    """Yield parseable JSON array candidates, including a truncation-recovery fallback."""
-    if not s.lstrip().startswith("["):
-        return []
+    """Read mlx-audio's JSON into transcript segments, or exit with an error."""
     try:
-        parsed = json.loads(s)
-        return [parsed]
-    except (json.JSONDecodeError, ValueError):
-        pass
-    pos = len(s)
-    while (pos := s.rfind("}", 0, pos)) >= 0:
-        try:
-            return [json.loads(s[: pos + 1] + "]")]
-        except (json.JSONDecodeError, ValueError):
-            pass
-    return []
+        transcript = read_transcript_file(json_path, label="VibeVoice")
+    except TranscriptError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
 
-
-def _looks_like_segment_list(value: list[Any]) -> bool:
-    return any(isinstance(item, str) or _looks_like_segment(item) for item in value)
-
-
-def _looks_like_segment(value: Any) -> bool:
-    if not isinstance(value, dict):
-        return False
-
-    segment_keys = {
-        "text",
-        "content",
-        "utterance",
-        "transcript",
-        "start",
-        "start_time",
-        "begin",
-        "ts",
-        "t0",
-        "end",
-        "end_time",
-        "finish",
-        "te",
-        "t1",
-        "offsets",
-        "speaker",
-        "speaker_id",
-        "speaker_label",
-    }
-    value_keys_lower = {k.lower() for k in value}
-    return bool(value_keys_lower & segment_keys)
-
-
-def _segment_from_raw(raw: Any) -> TranscriptSegment:
-    if isinstance(raw, str):
-        return TranscriptSegment(start=0.0, end=0.0, text=raw)
-
-    if not isinstance(raw, dict):
-        return TranscriptSegment(start=0.0, end=0.0, text=str(raw))
-
-    # Older mlx-audio versions used capitalized keys (Start, End, Speaker, Content).
-    if any(k[:1].isupper() for k in raw):
-        raw = {k.lower(): v for k, v in raw.items()}
-
-    text = _extract_text(raw)
-    start = _extract_time(raw, "start", "start_time", "begin", "ts", "t0")
-    end = _extract_time(raw, "end", "end_time", "finish", "te", "t1")
-    offsets = raw.get("offsets")
-    if isinstance(offsets, dict):
-        if start is None and "from" in offsets:
-            start = _coerce_seconds(offsets["from"], milliseconds=True)
-        if end is None and "to" in offsets:
-            end = _coerce_seconds(offsets["to"], milliseconds=True)
-
-    start = 0.0 if start is None else start
-    end = start if end is None or end < start else end
-    speaker = None
-    for k in ("speaker", "speaker_id", "speaker_label"):
-        if (val := raw.get(k)) is not None:
-            speaker = val
-            break
-    return TranscriptSegment(
-        start=start, end=end, text=text, speaker=str(speaker) if speaker is not None else None
-    )
-
-
-def _extract_text(value: Any) -> str:
-    if isinstance(value, str):
-        return value.strip()
-    if not isinstance(value, dict):
-        return ""
-    for key in ("text", "content", "utterance", "transcript"):
-        if key in value:
-            return str(value[key]).strip()
-    return ""
-
-
-def _extract_time(value: dict[str, Any], *keys: str) -> float | None:
-    for key in keys:
-        if key in value:
-            return _coerce_seconds(value[key], centiseconds=key in {"t0", "t1"})
-    return None
-
-
-def _coerce_seconds(
-    value: Any,
-    *,
-    centiseconds: bool = False,
-    milliseconds: bool = False,
-) -> float | None:
-    try:
-        seconds = float(value)
-    except (TypeError, ValueError):
-        return None
-    if centiseconds:
-        return seconds * 0.01
-    if milliseconds:
-        return seconds * 0.001
-    return seconds
+    segments = transcript.resolved_segments()
+    if not segments:
+        print(f"ERROR: VibeVoice JSON contained no transcript text: {json_path}", file=sys.stderr)
+        sys.exit(1)
+    return segments
 
 
 def _bool_env(name: str) -> bool:
