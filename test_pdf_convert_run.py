@@ -171,6 +171,13 @@ class RunTest(unittest.TestCase):
             self.assertIn(f"Wrote Markdown to: {actual}", stdout.getvalue())
             self.assertFalse((root / "notes.txt").exists())
 
+    def test_a_reported_output_that_was_never_written_is_an_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = _make_pdf(Path(temp_dir))
+
+            with self.assertRaisesRegex(ConversionError, "reported an output that does not exist"):
+                run(FakeBackend(AlreadyWritten()), _args(pdf_path))
+
     def test_markdown_directory_outcome_copies_referenced_assets(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

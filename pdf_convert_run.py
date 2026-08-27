@@ -241,6 +241,13 @@ def run(backend: Backend, args: argparse.Namespace) -> Path:
     if isinstance(outcome, AlreadyWritten) and outcome.path is not None:
         output_path = outcome.path
 
+    # A backend that writes its own output can silently write elsewhere; never
+    # announce a file that is not there.
+    if not output_path.is_file():
+        raise ConversionError(
+            f"{backend.name} reported an output that does not exist: {output_path}"
+        )
+
     for asset_path in copied_assets:
         print(f"INFO: Copied referenced asset: {asset_path}")
     print(f"Wrote Markdown to: {output_path}")
