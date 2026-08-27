@@ -37,7 +37,6 @@ continuity across decode windows is more important than hallucination risk.
 import argparse
 import inspect
 import itertools
-import json
 import os
 import platform
 import re
@@ -45,6 +44,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +54,7 @@ from audio_common import (
     print_process_tail,
     run_with_progress,
 )
+from audio_segments import Transcript, TranscriptError, read_transcript_file
 from audio_transcript import TranscriptSegment, emit_transcript
 
 DEFAULT_MAX_CONTEXT = 0
@@ -132,157 +133,34 @@ class PyannoteProgressHook:
 # ───────────────────────────────────────────────────────────────────────────────
 
 
-def _has_time(seg: Any) -> bool:
-    """Check if segment (dict or string) has any timing keys."""
-    if not isinstance(seg, dict):
-        return False
-    if any(k in seg for k in ["start", "end", "t0", "t1", "ts", "te"]):
-        return True
-    # Check whisper-cpp offsets format
-    if "offsets" in seg and isinstance(seg["offsets"], dict):
-        return "from" in seg["offsets"] or "to" in seg["offsets"]
-    return False
+def load_whisper_transcript(json_path: Path, verbose: bool = False) -> Transcript:
+    """Load whisper-cpp JSON as a transcript, or exit with a CLI-oriented error.
 
-
-def _seg_start(seg: dict[str, Any]) -> float | None:
-    """Extract start time (seconds) from segment, or None if unavailable."""
-    if "start" in seg:
-        return float(seg["start"])
-    if "t0" in seg:
-        return float(seg["t0"]) * 0.01  # centiseconds
-    if "ts" in seg:
-        return float(seg["ts"])
-    # whisper-cpp format: offsets.from in milliseconds
-    if "offsets" in seg and isinstance(seg["offsets"], dict) and "from" in seg["offsets"]:
-        return float(seg["offsets"]["from"]) * 0.001
-    return None
-
-
-def _seg_end(seg: dict[str, Any]) -> float | None:
-    """Extract end time (seconds) from segment, or None if unavailable."""
-    if "end" in seg:
-        return float(seg["end"])
-    if "t1" in seg:
-        return float(seg["t1"]) * 0.01  # centiseconds
-    if "te" in seg:
-        return float(seg["te"])
-    # whisper-cpp format: offsets.to in milliseconds
-    if "offsets" in seg and isinstance(seg["offsets"], dict) and "to" in seg["offsets"]:
-        return float(seg["offsets"]["to"]) * 0.001
-    return None
-
-
-def _seg_text(seg: Any) -> str:
-    """Extract text from segment (dict or string). Handle multiple text keys."""
-    if isinstance(seg, str):
-        return seg
-    if isinstance(seg, dict):
-        for key in ["text", "content", "utterance"]:
-            if key in seg:
-                return str(seg[key]).strip()
-    return ""
-
-
-def _normalize_segments(raw: Any) -> list[dict[str, Any]]:
+    Decoding lives in ``audio_segments``; this only adds whisper's wording for
+    the ways the file can be unusable.
     """
-    Normalize whisper JSON 'segments' field to a list of dicts.
-    Handles:
-      - list of dicts
-      - dict keyed by numeric strings ("0", "1", ...)
-      - nested lists (flatten)
-      - plain strings (wrap as {"text": "..."})
-    """
-    if isinstance(raw, list):
-        result = []
-        for item in raw:
-            if isinstance(item, list):
-                # Nested list: flatten
-                result.extend(_normalize_segments(item))
-            elif isinstance(item, str):
-                result.append({"text": item})
-            elif isinstance(item, dict):
-                result.append(item)
-            else:
-                # Unknown type: wrap as text
-                result.append({"text": str(item)})
-        return result
-
-    if isinstance(raw, dict):
-        # Try numeric key ordering
-        keys = list(raw.keys())
-        try:
-            keys_sorted = sorted(keys, key=int)
-            return [
-                raw[k] if isinstance(raw[k], dict) else {"text": str(raw[k])} for k in keys_sorted
-            ]
-        except ValueError:
-            # Not numeric keys; just use values
-            return [v if isinstance(v, dict) else {"text": str(v)} for v in raw.values()]
-
-    # Single item or unknown
-    if isinstance(raw, str):
-        return [{"text": raw}]
-    if isinstance(raw, dict):
-        return [raw]
-    return []
-
-
-def load_whisper_segments(
-    json_path: Path, verbose: bool = False
-) -> tuple[list[dict[str, Any]], str | None]:
-    """
-    Load and normalize whisper-cpp JSON output.
-    Returns: (segments_list, fallback_text)
-      - segments_list: normalized list of segment dicts
-      - fallback_text: top-level "text" field if present, else None
-    Raises SystemExit on errors.
-    """
-    if not json_path.exists():
-        print(f"ERROR: Whisper JSON not found: {json_path}", file=sys.stderr)
+    try:
+        transcript = read_transcript_file(json_path, label="Whisper")
+    except TranscriptError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    with open(json_path, encoding="utf-8") as f:
-        try:
-            data = json.load(f)
-        except json.JSONDecodeError as e:
-            print(f"ERROR: Invalid JSON in {json_path}: {e}", file=sys.stderr)
-            sys.exit(1)
-
-    fallback_text = data.get("text")
-    raw_segments = data.get("segments") or data.get("transcription")
-
-    if raw_segments is None:
-        if fallback_text:
+    if not transcript.segments:
+        if transcript.fallback_text:
             if verbose:
                 print(
-                    "INFO: No 'segments'/'transcription' field, using top-level 'text'",
+                    "INFO: No usable 'segments'/'transcription' field, using top-level 'text'",
                     file=sys.stderr,
                 )
-            return [], fallback_text
+            return transcript
         print(
-            f"ERROR: Whisper JSON has no 'segments'/'transcription' and no 'text': {json_path}",
+            "ERROR: Whisper JSON has no usable 'segments'/'transcription' and no 'text': "
+            f"{json_path}",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    segments = _normalize_segments(raw_segments)
-    if not segments and not fallback_text:
-        print(
-            f"ERROR: Whisper JSON 'segments' is empty and no 'text': {json_path}", file=sys.stderr
-        )
-        sys.exit(1)
-
-    # Sort by time if any segment has timestamps
-    if any(_has_time(s) for s in segments):
-
-        def sort_key(s: dict[str, Any]) -> tuple[float, float]:
-            start = _seg_start(s)
-            end = _seg_end(s)
-            return (start if start is not None else 0.0, end if end is not None else 0.0)
-
-        segments.sort(key=sort_key)
-
-    return segments, fallback_text
+    return transcript
 
 
 # ───────────────────────────────────────────────────────────────────────────────
@@ -526,7 +404,7 @@ def merge_asr_turns(
 
 
 def merge_asr_with_diar(
-    segments: list[dict[str, Any]],
+    segments: Sequence[TranscriptSegment],
     diarization: Any,
     verbose: bool = False,
 ) -> list[TranscriptSegment]:
@@ -536,13 +414,7 @@ def merge_asr_with_diar(
     Returns segments tagged with normalized `SPEAKER_NN` labels (by order of
     first appearance); user-supplied names are applied later at emit time.
     """
-    # Build index of timed segments
-    timed_segs = []
-    for seg in segments:
-        start = _seg_start(seg)
-        end = _seg_end(seg)
-        if start is not None and end is not None:
-            timed_segs.append((start, end, _seg_text(seg)))
+    timed_segs = [(seg.start, seg.end, seg.text) for seg in segments]
 
     if not timed_segs:
         if verbose:
@@ -562,51 +434,6 @@ def merge_asr_with_diar(
         for turn, _, speaker_label in diarization.itertracks(yield_label=True)
     ]
     return merge_asr_turn_segments(timed_segs, speaker_turns, verbose)
-
-
-# ───────────────────────────────────────────────────────────────────────────────
-# Fallback: plain ASR transcript (no diarization)
-# ───────────────────────────────────────────────────────────────────────────────
-
-
-def plain_transcript(segments: list[dict[str, Any]], fallback_text: str | None) -> str:
-    """Produce plain transcript from ASR segments or fallback text."""
-    if fallback_text:
-        return fallback_text.strip()
-    texts = [_seg_text(s) for s in segments]
-    return " ".join(t for t in texts if t).strip()
-
-
-def transcript_segments_from_whisper(
-    segments: list[dict[str, Any]],
-    fallback_text: str | None,
-) -> list[TranscriptSegment]:
-    """Convert normalized whisper segment dictionaries to shared transcript segments."""
-    transcript_segments = []
-    for seg in segments:
-        text = _seg_text(seg)
-        if not text:
-            continue
-        start = _seg_start(seg)
-        end = _seg_end(seg)
-        if start is None:
-            start = 0.0
-        if end is None:
-            end = start
-        if end < start:
-            end = start
-        speaker = seg.get("speaker") if isinstance(seg, dict) else None
-        transcript_segments.append(
-            TranscriptSegment(start=start, end=end, text=text, speaker=speaker)
-        )
-
-    if transcript_segments:
-        return transcript_segments
-
-    if fallback_text:
-        return [TranscriptSegment(start=0.0, end=0.0, text=fallback_text.strip())]
-
-    return []
 
 
 # ───────────────────────────────────────────────────────────────────────────────
@@ -889,14 +716,13 @@ def main() -> None:
         # Step 3: Load ASR results
         if progress:
             progress.start("loading whisper output")
-        segments, fallback_text = load_whisper_segments(json_path, args.verbose)
+        transcript = load_whisper_transcript(json_path, args.verbose)
         if progress:
             progress.finish("loading whisper output")
-        transcript_segments = transcript_segments_from_whisper(segments, fallback_text)
+        transcript_segments = transcript.resolved_segments()
 
-        # Check if segments have timestamps
-        has_timestamps = any(_has_time(s) for s in segments)
-        if not has_timestamps and not fallback_text:
+        has_timestamps = transcript.has_timing
+        if not has_timestamps and not transcript.fallback_text:
             print("ERROR: ASR produced no usable segments.", file=sys.stderr)
             sys.exit(1)
 
@@ -927,7 +753,9 @@ def main() -> None:
             if has_timestamps:
                 if progress:
                     progress.start("merging ASR with diarization")
-                diarized_segments = merge_asr_with_diar(segments, diarization, args.verbose)
+                diarized_segments = merge_asr_with_diar(
+                    transcript.segments, diarization, args.verbose
+                )
                 if diarized_segments:
                     transcript_segments = diarized_segments
                 if progress:
@@ -946,9 +774,7 @@ def main() -> None:
                     "WARNING: No transcript segments; falling back to plain ASR transcript.",
                     file=sys.stderr,
                 )
-            transcript_segments = [
-                TranscriptSegment(0.0, 0.0, plain_transcript(segments, fallback_text))
-            ]
+            transcript_segments = [TranscriptSegment(0.0, 0.0, transcript.plain_text())]
 
         final_text = emit_transcript(transcript_segments, output_format, speaker_names)
 
