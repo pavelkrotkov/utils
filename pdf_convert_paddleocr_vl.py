@@ -30,9 +30,14 @@ from pathlib import Path
 from pdf_convert_common import (
     copy_referenced_assets,
     import_or_die,
-    parse_page_range,
     require_pdf_path,
     resolve_output_path,
+)
+from pdf_page_selection import (
+    PAGE_RANGE_HELP,
+    PageSelection,
+    PageSelectionError,
+    load_page_count,
 )
 
 ENGINE_CHOICES = ("paddle", "transformers")
@@ -73,13 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Directory to write output files (defaults to input file directory)",
     )
-    parser.add_argument(
-        "--page-range",
-        help=(
-            "Comma-separated 1-based page numbers or ranges. "
-            "Examples: 1-5, 1,3,5-10, 5-N (N = last page)."
-        ),
-    )
+    parser.add_argument("--page-range", help=PAGE_RANGE_HELP)
     parser.add_argument(
         "--threads",
         type=int,
@@ -109,21 +108,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def extract_page_subset(pdf_path: Path, pages_zero_based: list[int], target_path: Path) -> None:
-    pypdf = import_or_die("pypdf", "pypdf")
-
-    try:
-        reader = pypdf.PdfReader(str(pdf_path))
-        writer = pypdf.PdfWriter()
-        for page_index in pages_zero_based:
-            writer.add_page(reader.pages[page_index])
-        with target_path.open("wb") as output_file:
-            writer.write(output_file)
-    except Exception as exc:
-        print(f"ERROR: Unable to extract pages: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-
 def locate_generated_markdown(save_dir: Path, expected_stem: str) -> Path | None:
     expected_path = save_dir / f"{expected_stem}.md"
     if expected_path.is_file():
@@ -148,20 +132,11 @@ def main() -> None:
 
     output_path = resolve_output_path(pdf_path, args.output, args.output_dir)
 
-    pages_one_based = None
+    selection = None
     if args.page_range:
-        pypdf = import_or_die("pypdf", "pypdf")
-
         try:
-            reader = pypdf.PdfReader(str(pdf_path))
-            page_count = len(reader.pages)
-        except Exception as exc:
-            print(f"ERROR: Unable to read PDF pages: {exc}", file=sys.stderr)
-            sys.exit(1)
-
-        try:
-            pages_one_based = parse_page_range(args.page_range, page_count, one_based=True)
-        except ValueError as exc:
+            selection = PageSelection.parse(args.page_range, load_page_count(pdf_path))
+        except PageSelectionError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
 
@@ -180,10 +155,14 @@ def main() -> None:
         work_dir = Path(work_dir_raw)
 
         input_pdf = pdf_path
-        if pages_one_based is not None:
-            input_pdf = work_dir / f"{pdf_path.stem}.pdf"
-            extract_page_subset(pdf_path, [page - 1 for page in pages_one_based], input_pdf)
-            print(f"INFO: Extracted {len(pages_one_based)} pages for parsing.")
+        if selection is not None:
+            # PaddleOCR-VL takes no page argument, so the subset becomes its input.
+            try:
+                input_pdf = selection.as_extracted_pdf(pdf_path, work_dir / f"{pdf_path.stem}.pdf")
+            except PageSelectionError as exc:
+                print(f"ERROR: {exc}", file=sys.stderr)
+                sys.exit(1)
+            print(f"INFO: Extracted {len(selection)} pages for parsing.")
 
         try:
             pipeline = PaddleOCRVL(**pipeline_kwargs)

@@ -37,6 +37,9 @@ dev = [
     "pip>=26.2.1",
     "pip-audit>=2.10.1",
     "pre-commit>=4.6.2",
+    # Test-only: exercises the pypdf-backed paths of pdf_page_selection.
+    # Converters still declare pypdf per-script via PEP 723.
+    "pypdf>=6.4.0",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
     "ruff>=0.16.3",

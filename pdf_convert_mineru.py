@@ -35,10 +35,14 @@ from pathlib import Path
 from pdf_convert_common import (
     copy_referenced_assets,
     find_generated_markdown,
-    import_or_die,
-    parse_page_range,
     require_pdf_path,
     resolve_output_path,
+)
+from pdf_page_selection import (
+    PAGE_RANGE_HELP,
+    PageSelection,
+    PageSelectionError,
+    load_page_count,
 )
 
 BACKEND_CHOICES = (
@@ -84,11 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--page-range",
-        help=(
-            "Comma-separated 1-based page numbers or ranges. "
-            "Examples: 1-5, 1,3,5-10, 5-N (N = last page). "
-            "MinerU supports contiguous ranges only."
-        ),
+        help=f"{PAGE_RANGE_HELP} MinerU supports contiguous ranges only.",
     )
     parser.add_argument(
         "-b",
@@ -141,31 +141,21 @@ def locate_mineru_binary() -> str:
 
 
 def resolve_contiguous_pages(spec: str, pdf_path: Path) -> tuple[int, int]:
-    pypdf = import_or_die("pypdf", "pypdf")
-
+    """Resolve a page-range spec to the single run of pages MinerU accepts."""
     try:
-        reader = pypdf.PdfReader(str(pdf_path))
-        page_count = len(reader.pages)
-    except Exception as exc:
-        print(f"ERROR: Unable to read PDF pages: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    try:
-        pages = parse_page_range(spec, page_count, one_based=True)
-    except ValueError as exc:
+        selection = PageSelection.parse(spec, load_page_count(pdf_path))
+    except PageSelectionError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    first_page, last_page = pages[0], pages[-1]
-    if len(pages) != last_page - first_page + 1:
+    try:
+        return selection.as_contiguous()
+    except PageSelectionError as exc:
         print(
-            "ERROR: MinerU supports contiguous page ranges only; "
-            f"got {len(pages)} pages selected across gaps.",
+            f"ERROR: MinerU supports contiguous page ranges only; {exc}",
             file=sys.stderr,
         )
         sys.exit(1)
-
-    return first_page, last_page
 
 
 def main() -> None:
