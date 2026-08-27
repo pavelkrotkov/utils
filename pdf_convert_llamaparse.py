@@ -353,7 +353,11 @@ def _parse_chunk(
 
     try:
         result = wait_for_job(client, job_id)
-    except (TimeoutError, ConversionError):
+    except TimeoutError as exc:
+        # main() only reports ConversionError; a bare TimeoutError would
+        # surface as a traceback instead of an ERROR: line.
+        raise ConversionError(str(exc)) from exc
+    except ConversionError:
         raise
     except Exception as exc:
         raise ConversionError(f"LlamaParse job failed: {exc}") from exc

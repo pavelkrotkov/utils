@@ -108,13 +108,13 @@ class MarkerBackend(Backend):
                 llm_service=config_parser.get_llm_service(),
             )
             rendered = converter(str(request.pdf_path))
-            # marker writes <output_dir>/<base_name>.md itself, which is
-            # exactly the resolved output path.
+            # marker names its own output: <output_dir>/<base_name>.md, whatever
+            # suffix -o asked for. Report the path it actually wrote.
             marker_output.save_output(rendered, str(output_dir), base_name)
         except Exception as exc:
             raise ConversionError(f"marker conversion failed: {exc}") from exc
 
-        return AlreadyWritten()
+        return AlreadyWritten(output_dir / f"{base_name}.md")
 
 
 def main() -> None:

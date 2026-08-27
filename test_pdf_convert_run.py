@@ -15,6 +15,7 @@ import tempfile
 import unittest
 from collections.abc import Callable
 from pathlib import Path
+from unittest import mock
 
 from pdf_convert_run import (
     AlreadyWritten,
@@ -149,6 +150,26 @@ class RunTest(unittest.TestCase):
                 output_path = run(backend, _args(pdf_path))
 
             self.assertEqual(output_path.read_text(encoding="utf-8"), "# by the backend\n")
+
+    def test_already_written_can_report_a_different_path(self) -> None:
+        """marker names its own output; the run must announce the real file."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pdf_path = _make_pdf(root)
+            actual = root / "notes.md"
+
+            def write_it(request: ConversionRequest) -> Outcome:
+                actual.write_text("# by the backend\n", encoding="utf-8")
+                return AlreadyWritten(actual)
+
+            with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                output_path = run(
+                    FakeBackend(produce=write_it), _args(pdf_path, output=root / "notes.txt")
+                )
+
+            self.assertEqual(output_path, actual)
+            self.assertIn(f"Wrote Markdown to: {actual}", stdout.getvalue())
+            self.assertFalse((root / "notes.txt").exists())
 
     def test_markdown_directory_outcome_copies_referenced_assets(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -436,6 +457,61 @@ class ConverterWiringTest(unittest.TestCase):
                         hasattr(module, leaked),
                         f"{module_name} still exposes {leaked}",
                     )
+
+
+class MarkerOutputPathTest(unittest.TestCase):
+    """marker always writes <stem>.md, whatever suffix -o asked for."""
+
+    def test_backend_reports_the_md_file_it_actually_wrote(self) -> None:
+        marker = importlib.import_module("pdf_convert_marker")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pdf_path = _make_pdf(root)
+            backend = marker.MarkerBackend()
+            args = build_parser(backend).parse_args([str(pdf_path)])
+            request = ConversionRequest(
+                pdf_path=pdf_path,
+                output_path=root / "notes.txt",
+                workspace=root,
+                args=args,
+            )
+
+            saved: dict[str, str] = {}
+
+            class FakeConfigParser:
+                def __init__(self, options):
+                    saved["output_dir"] = options["output_dir"]
+
+                def get_converter_cls(self):
+                    return lambda **kwargs: lambda path: "rendered"
+
+                def generate_config_dict(self):
+                    return {}
+
+                def get_processors(self):
+                    return []
+
+                def get_renderer(self):
+                    return None
+
+                def get_llm_service(self):
+                    return None
+
+            def fake_require_module(module_name: str, install_package: str):
+                if module_name == "marker.config.parser":
+                    return argparse.Namespace(ConfigParser=FakeConfigParser)
+                if module_name == "marker.models":
+                    return argparse.Namespace(create_model_dict=dict)
+                return argparse.Namespace(
+                    save_output=lambda rendered, out_dir, base: saved.update(base=base)
+                )
+
+            with mock.patch.object(marker, "require_module", fake_require_module):
+                outcome = backend.convert(request)
+
+            self.assertEqual(outcome, AlreadyWritten(root / "notes.md"))
+            self.assertEqual(saved["base"], "notes")
 
 
 if __name__ == "__main__":

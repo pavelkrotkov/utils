@@ -82,7 +82,14 @@ class MarkdownDirectory:
 
 @dataclass(frozen=True)
 class AlreadyWritten:
-    """The backend wrote the requested output path itself."""
+    """The backend wrote the output itself.
+
+    ``path`` names the file it actually wrote, for backends that choose their
+    own extension: marker always writes ``<stem>.md`` even when ``-o`` asked
+    for another suffix. Defaults to the requested output path.
+    """
+
+    path: Path | None = None
 
 
 Outcome = MarkdownText | MarkdownDirectory | AlreadyWritten
@@ -230,6 +237,9 @@ def run(backend: Backend, args: argparse.Namespace) -> Path:
         )
         outcome = backend.convert(request)
         copied_assets = _materialize(backend, request, outcome)
+
+    if isinstance(outcome, AlreadyWritten) and outcome.path is not None:
+        output_path = outcome.path
 
     for asset_path in copied_assets:
         print(f"INFO: Copied referenced asset: {asset_path}")
