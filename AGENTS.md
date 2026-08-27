@@ -65,6 +65,7 @@ LlamaCloud API key setup:
 - Create a key at https://cloud.llamaindex.ai via API Key -> Generate New Key.
 
 Repository scripts:
+- `pdf_convert_run.py` owns a conversion run: the shared CLI skeleton, input/output path resolution, page-selection wiring, locating generated Markdown, copying referenced assets, and error reporting. Each converter supplies a `Backend` (`add_arguments`, `validate`, `convert`) and returns one of `MarkdownText`, `MarkdownDirectory`, or `AlreadyWritten`. Backends raise `ConversionError`; they must not call `sys.exit`.
 - `pdf_page_selection.py` owns `--page-range`: one parse into a `PageSelection`, then per-backend projections (`as_one_based`, `as_zero_based`, `as_contiguous`, `as_ranges`, `as_extracted_pdf`). Converters must not re-implement page indexing; `PAGE_RANGE_HELP` is the shared flag help.
 - `pdf_convert_mathpix_sdk.py` uses the `mpxpy` SDK.
 - `pdf_convert_marker.py` uses `marker-pdf` for simpler PDFs (local conversion).

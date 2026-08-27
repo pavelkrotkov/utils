@@ -29,21 +29,17 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-from pdf_convert_common import (
-    copy_referenced_assets,
-    find_generated_markdown,
-    require_pdf_path,
-    resolve_output_path,
+from pdf_convert_run import (
+    Backend,
+    ConversionError,
+    ConversionRequest,
+    MarkdownDirectory,
+    Outcome,
+    execute,
 )
-from pdf_page_selection import (
-    PAGE_RANGE_HELP,
-    PageSelection,
-    PageSelectionError,
-    load_page_count,
-)
+from pdf_page_selection import PageSelectionError
 
 BACKEND_CHOICES = (
     "pipeline",
@@ -69,62 +65,12 @@ def apply_thread_limit(threads: int) -> None:
         os.environ[env_var] = str(threads)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Convert a PDF to Markdown using MinerU.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument("pdf_path", type=Path, help="Path to the input PDF file")
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=Path,
-        help="Output markdown file path (default: same name as PDF with .md)",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        help="Directory to write output files (defaults to input file directory)",
-    )
-    parser.add_argument(
-        "--page-range",
-        help=f"{PAGE_RANGE_HELP} MinerU supports contiguous ranges only.",
-    )
-    parser.add_argument(
-        "-b",
-        "--backend",
-        choices=BACKEND_CHOICES,
-        default="pipeline",
-        help=(
-            f"Parsing backend (default: {BACKEND_CHOICES[0]} for CPU safety). "
-            f"MinerU's own default is {BACKEND_CHOICES[2]}; "
-            "the *-http-client backends also need --backend-url."
-        ),
-    )
-    parser.add_argument(
-        "-m",
-        "--method",
-        choices=METHOD_CHOICES,
-        help="Parsing method for pipeline-style backends (default: auto)",
-    )
-    parser.add_argument(
-        "-u",
-        "--backend-url",
-        help="OpenAI-compatible server URL for *-http-client backends",
-    )
-    parser.add_argument(
-        "--threads",
-        type=int,
-        default=DEFAULT_THREADS,
-        help=(
-            f"Thread pool count forced onto OMP/BLAS libraries (default: {DEFAULT_THREADS}); "
-            "overrides ambient thread environment variables"
-        ),
-    )
-    return parser
-
-
 def locate_mineru_binary() -> str:
+    """Return the path to the ``mineru`` executable.
+
+    Raises:
+        ConversionError: the executable is not in this environment.
+    """
     candidate = shutil.which("mineru")
     if candidate is not None:
         return candidate
@@ -133,52 +79,67 @@ def locate_mineru_binary() -> str:
     if local_candidate.is_file():
         return str(local_candidate)
 
-    print(
-        "ERROR: The 'mineru' executable was not found in this environment.",
-        file=sys.stderr,
-    )
-    sys.exit(1)
+    raise ConversionError("The 'mineru' executable was not found in this environment.")
 
 
-def resolve_contiguous_pages(spec: str, pdf_path: Path) -> tuple[int, int]:
-    """Resolve a page-range spec to the single run of pages MinerU accepts."""
-    try:
-        selection = PageSelection.parse(spec, load_page_count(pdf_path))
-    except PageSelectionError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        sys.exit(1)
+class MinerUBackend(Backend):
+    name = "mineru"
+    description = "Convert a PDF to Markdown using MinerU."
+    page_range_caveat = "MinerU supports contiguous ranges only."
 
-    try:
-        return selection.as_contiguous()
-    except PageSelectionError as exc:
-        print(
-            f"ERROR: MinerU supports contiguous page ranges only; {exc}",
-            file=sys.stderr,
+    def add_arguments(self, parser: argparse.ArgumentParser) -> None:
+        parser.add_argument(
+            "-b",
+            "--backend",
+            choices=BACKEND_CHOICES,
+            default="pipeline",
+            help=(
+                f"Parsing backend (default: {BACKEND_CHOICES[0]} for CPU safety). "
+                f"MinerU's own default is {BACKEND_CHOICES[2]}; "
+                "the *-http-client backends also need --backend-url."
+            ),
         )
-        sys.exit(1)
+        parser.add_argument(
+            "-m",
+            "--method",
+            choices=METHOD_CHOICES,
+            help="Parsing method for pipeline-style backends (default: auto)",
+        )
+        parser.add_argument(
+            "-u",
+            "--backend-url",
+            help="OpenAI-compatible server URL for *-http-client backends",
+        )
+        parser.add_argument(
+            "--threads",
+            type=int,
+            default=DEFAULT_THREADS,
+            help=(
+                f"Thread pool count forced onto OMP/BLAS libraries (default: {DEFAULT_THREADS}); "
+                "overrides ambient thread environment variables"
+            ),
+        )
 
+    def validate(self, args: argparse.Namespace) -> None:
+        if args.threads < 1:
+            raise ConversionError("--threads must be at least 1.")
+        # Must land before the MinerU process is spawned, so it happens here.
+        apply_thread_limit(args.threads)
 
-def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
+    def convert(self, request: ConversionRequest) -> Outcome:
+        args = request.args
+        mineru_bin = locate_mineru_binary()
 
-    if args.threads < 1:
-        print("ERROR: --threads must be at least 1.", file=sys.stderr)
-        sys.exit(1)
-    apply_thread_limit(args.threads)
+        command = [mineru_bin, "-p", str(request.pdf_path), "-o", str(request.workspace)]
 
-    pdf_path = require_pdf_path(args.pdf_path)
-    mineru_bin = locate_mineru_binary()
-
-    output_path = resolve_output_path(pdf_path, args.output, args.output_dir)
-
-    command = [mineru_bin, "-p", str(pdf_path)]
-    with tempfile.TemporaryDirectory(prefix="mineru_") as work_dir_raw:
-        work_dir = Path(work_dir_raw)
-        command.extend(["-o", str(work_dir)])
-
-        if args.page_range is not None:
-            first_page, last_page = resolve_contiguous_pages(args.page_range, pdf_path)
+        if request.selection is not None:
+            try:
+                first_page, last_page = request.selection.as_contiguous()
+            except PageSelectionError as exc:
+                raise ConversionError(
+                    f"MinerU supports contiguous page ranges only; {exc}"
+                ) from exc
+            # MinerU's -s/-e are 0-based and inclusive.
             command.extend(["-s", str(first_page - 1), "-e", str(last_page - 1)])
         if args.backend is not None:
             command.extend(["-b", args.backend])
@@ -190,47 +151,17 @@ def main() -> None:
         try:
             subprocess.run(command, check=True)
         except subprocess.CalledProcessError as exc:
-            print(
-                f"ERROR: MinerU exited with status {exc.returncode}: {exc}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+            raise ConversionError(f"MinerU exited with status {exc.returncode}: {exc}") from exc
         except OSError as exc:
-            print(f"ERROR: Failed to launch MinerU: {exc}", file=sys.stderr)
-            sys.exit(1)
+            raise ConversionError(f"Failed to launch MinerU: {exc}") from exc
 
-        generated_md = find_generated_markdown(work_dir)
-        if generated_md is None:
-            print(
-                f"ERROR: MinerU did not produce a Markdown file in: {work_dir}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+        # MinerU nests its output as <stem>/<method>/<stem>.md, so the run
+        # module falls through to the single-unambiguous-Markdown rule.
+        return MarkdownDirectory(request.workspace, expected_stem=request.pdf_path.stem)
 
-        try:
-            generated_md.resolve().relative_to(work_dir.resolve())
-        except ValueError:
-            print(
-                f"ERROR: Generated file is outside temporary directory: {generated_md}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
 
-        markdown_text = generated_md.read_text(encoding="utf-8")
-        copied_assets = copy_referenced_assets(
-            markdown_text,
-            generated_md.parent,
-            output_path.parent,
-        )
-
-    try:
-        output_path.write_text(markdown_text, encoding="utf-8")
-    except OSError as exc:
-        print(f"ERROR: Unable to write Markdown output: {exc}", file=sys.stderr)
-        sys.exit(1)
-    for asset_path in copied_assets:
-        print(f"INFO: Copied referenced asset: {asset_path}")
-    print(f"Wrote Markdown to: {output_path}")
+def main() -> None:
+    sys.exit(execute(MinerUBackend()))
 
 
 if __name__ == "__main__":
