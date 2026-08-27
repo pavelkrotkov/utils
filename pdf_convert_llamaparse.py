@@ -30,12 +30,15 @@ import time
 from pathlib import Path
 
 from pdf_convert_common import (
-    collapse_consecutive,
-    format_page_ranges,
     import_or_die,
-    parse_page_range,
     require_pdf_path,
     resolve_output_path,
+)
+from pdf_page_selection import (
+    PAGE_RANGE_HELP,
+    PageSelection,
+    PageSelectionError,
+    load_page_count,
 )
 
 DEFAULT_TIER = "cost_effective"
@@ -75,13 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Directory to write output files (defaults to input file directory)",
     )
-    parser.add_argument(
-        "--page-range",
-        help=(
-            "Comma-separated 1-based page numbers or ranges. "
-            "Examples: 1-5, 1,3,5-10, 5-N (N = last page)."
-        ),
-    )
+    parser.add_argument("--page-range", help=PAGE_RANGE_HELP)
     parser.add_argument(
         "--max-pages",
         type=int,
@@ -135,17 +132,6 @@ def resolve_output_path_for_job(
         file=sys.stderr,
     )
     sys.exit(1)
-
-
-def load_pdf_page_count(pdf_path: Path) -> int:
-    pypdf = import_or_die("pypdf", "pypdf")
-
-    try:
-        reader = pypdf.PdfReader(str(pdf_path))
-        return len(reader.pages)
-    except Exception as exc:
-        print(f"ERROR: Unable to read PDF pages: {exc}", file=sys.stderr)
-        sys.exit(1)
 
 
 def chunk_pages(pages: list[int], chunk_size: int) -> list[list[int]]:
@@ -322,13 +308,17 @@ def main() -> None:
         print("ERROR: --max-pages must be at least 1.", file=sys.stderr)
         sys.exit(1)
 
-    total_pages = load_pdf_page_count(pdf_path)
-    pages = list(range(1, total_pages + 1))
+    try:
+        total_pages = load_page_count(pdf_path)
+    except PageSelectionError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
 
+    pages = list(range(1, total_pages + 1))
     if args.page_range:
         try:
-            pages = parse_page_range(args.page_range, total_pages, one_based=True)
-        except ValueError as exc:
+            pages = PageSelection.parse(args.page_range, total_pages).as_one_based()
+        except PageSelectionError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
 
@@ -396,7 +386,7 @@ def main() -> None:
                 file=sys.stderr,
             )
 
-        target_pages = format_page_ranges(collapse_consecutive(chunk_pages_list))
+        target_pages = PageSelection.from_pages(chunk_pages_list, total_pages).as_ranges()
         print(f"INFO: Chunk {index}/{len(chunks)} pages {target_pages} -> {chunk_path}")
 
         try:

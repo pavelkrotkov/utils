@@ -21,10 +21,10 @@ from pathlib import Path
 
 from pdf_convert_common import (
     import_or_die,
-    parse_page_range,
     require_pdf_path,
     resolve_output_path,
 )
+from pdf_page_selection import PAGE_RANGE_HELP, PageSelection, PageSelectionError
 
 DEFAULT_DPI = 150
 DEFAULT_IMAGE_FORMAT = "png"
@@ -47,13 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Directory to write output files (defaults to input file directory)",
     )
-    parser.add_argument(
-        "--page-range",
-        help=(
-            "Comma-separated 1-based page numbers or ranges. "
-            "Examples: 1-5, 1,3,5-10, 5-N (N = last page)."
-        ),
-    )
+    parser.add_argument("--page-range", help=PAGE_RANGE_HELP)
     parser.add_argument(
         "--layout",
         action="store_true",
@@ -123,18 +117,21 @@ def main() -> None:
 
     pages = None
     if args.page_range:
+        # PyMuPDF is already a dependency here, so the page count comes from the
+        # open document rather than pulling in a second PDF library.
         try:
             doc = pymupdf.open(str(pdf_path))
         except Exception as exc:
             print(f"ERROR: Unable to open PDF: {exc}", file=sys.stderr)
             sys.exit(1)
         try:
-            pages = parse_page_range(args.page_range, doc.page_count, one_based=False)
-        except ValueError as exc:
+            selection = PageSelection.parse(args.page_range, doc.page_count)
+        except PageSelectionError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
         finally:
             doc.close()
+        pages = selection.as_zero_based()
 
     image_path = ""
     if args.write_images:

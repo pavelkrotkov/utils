@@ -20,11 +20,15 @@ import sys
 from pathlib import Path
 
 from pdf_convert_common import (
-    collapse_consecutive,
     import_or_die,
-    parse_page_range,
     require_pdf_path,
     resolve_output_path,
+)
+from pdf_page_selection import (
+    PAGE_RANGE_HELP,
+    PageSelection,
+    PageSelectionError,
+    load_page_count,
 )
 
 
@@ -45,25 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Directory to write output files (defaults to input file directory)",
     )
-    parser.add_argument(
-        "--page-range",
-        help=(
-            "Comma-separated 1-based page numbers or ranges. "
-            "Examples: 1-5, 1,3,5-10, 5-N (N = last page)."
-        ),
-    )
+    parser.add_argument("--page-range", help=PAGE_RANGE_HELP)
     return parser
-
-
-def load_pdf_page_count(pdf_path: Path) -> int:
-    pypdf = import_or_die("pypdf", "pypdf")
-
-    try:
-        reader = pypdf.PdfReader(str(pdf_path))
-        return len(reader.pages)
-    except Exception as exc:
-        print(f"ERROR: Unable to read PDF pages: {exc}", file=sys.stderr)
-        sys.exit(1)
 
 
 def main() -> None:
@@ -80,12 +67,11 @@ def main() -> None:
     page_ranges = None
     if args.page_range:
         try:
-            page_count = load_pdf_page_count(pdf_path)
-            pages = parse_page_range(args.page_range, page_count, one_based=True)
-            page_ranges = collapse_consecutive(pages)
-        except ValueError as exc:
+            selection = PageSelection.parse(args.page_range, load_page_count(pdf_path))
+        except PageSelectionError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
+        page_ranges = selection.as_range_pairs()
 
     converter = DocumentConverter()
     try:
