@@ -82,10 +82,43 @@ class ContainerShapeTest(unittest.TestCase):
             read_transcript("just text").segments, [TranscriptSegment(0.0, 0.0, "just text")]
         )
 
-    def test_nested_lists_are_flattened(self) -> None:
+    def test_nested_lists_are_flattened_into_separate_segments(self) -> None:
         data = {"segments": [["a", "b"]]}
 
-        self.assertEqual(read_transcript(data).segments, [TranscriptSegment(0.0, 0.0, "a b")])
+        self.assertEqual(
+            read_transcript(data).segments,
+            [TranscriptSegment(0.0, 0.0, "a"), TranscriptSegment(0.0, 0.0, "b")],
+        )
+
+    def test_nested_lists_keep_each_child_timing_and_speaker(self) -> None:
+        data = {
+            "segments": [
+                [
+                    {"start": 0.0, "end": 1.0, "text": "one", "speaker": "A"},
+                    {"start": 1.0, "end": 2.0, "text": "two", "speaker": "B"},
+                ]
+            ]
+        }
+        transcript = read_transcript(data)
+
+        self.assertEqual(
+            transcript.segments,
+            [
+                TranscriptSegment(0.0, 1.0, "one", "A"),
+                TranscriptSegment(1.0, 2.0, "two", "B"),
+            ],
+        )
+        self.assertEqual(transcript.timed_count, 2)
+
+    def test_a_string_under_a_container_key_is_one_segment(self) -> None:
+        for key in ("segments", "transcription"):
+            with self.subTest(key=key):
+                transcript = read_transcript({key: "whole transcript"})
+
+                self.assertEqual(
+                    transcript.resolved_segments(),
+                    [TranscriptSegment(0.0, 0.0, "whole transcript")],
+                )
 
     def test_segment_array_serialised_into_a_text_field(self) -> None:
         """Older mlx-audio stringified the array into "text"."""
@@ -221,6 +254,28 @@ class TimingAwarenessTest(unittest.TestCase):
             [segment.text for segment in read_transcript(data).segments],
             ["earlier", "later"],
         )
+
+    def test_partly_timed_output_keeps_source_order(self) -> None:
+        """VibeVoice can mix timed and untimed records; sorting would hoist the untimed."""
+        data = [
+            {"start": 5.0, "end": 6.0, "text": "spoken later"},
+            {"text": "no timestamp"},
+            {"start": 1.0, "end": 2.0, "text": "spoken first"},
+        ]
+
+        self.assertEqual(
+            [segment.text for segment in read_transcript(data).segments],
+            ["spoken later", "no timestamp", "spoken first"],
+        )
+
+    def test_an_end_only_timestamp_does_not_count_as_alignable(self) -> None:
+        """The segment is kept and usable; it just cannot anchor a diarization merge."""
+        for key in ("end", "t1", "te"):
+            with self.subTest(key=key):
+                transcript = read_transcript([{key: 2.0, "text": "hi"}])
+
+                self.assertEqual(len(transcript), 1)
+                self.assertFalse(transcript.has_timing)
 
     def test_untimed_segments_keep_their_order(self) -> None:
         data = [{"text": "first"}, {"text": "second"}]

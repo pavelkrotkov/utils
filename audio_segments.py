@@ -60,7 +60,12 @@ class Transcript:
 
     @property
     def has_timing(self) -> bool:
-        """Whether any segment carried a real timestamp."""
+        """Whether any segment can be placed on a timeline.
+
+        Gates the diarization merge only: it says alignment is possible, not
+        that the transcript is usable. A transcript with text but no timestamps
+        is still worth writing out.
+        """
         return self.timed_count > 0
 
     def __bool__(self) -> bool:
@@ -110,13 +115,17 @@ def read_transcript(data: Any) -> Transcript:
     Never raises on shape: unrecognised input yields an empty transcript, which
     callers report in their own words.
     """
-    raw_segments = _find_segment_list(data)
+    raw_segments = _flatten(_find_segment_list(data))
     decoded = [_segment_from_raw(item) for item in raw_segments]
+    decoded = [(segment, timed) for segment, timed in decoded if segment.text.strip()]
 
-    segments = [segment for segment, _ in decoded if segment.text.strip()]
-    timed_count = sum(1 for segment, timed in decoded if timed and segment.text.strip())
+    segments = [segment for segment, _ in decoded]
+    timed_count = sum(1 for _, timed in decoded if timed)
 
-    if timed_count:
+    # Sorting is only safe when every segment carries a time. Untimed segments
+    # sit at 0.0, so sorting a partly-timed transcript would hoist them all to
+    # the front; VibeVoice can emit exactly that mixture.
+    if timed_count and timed_count == len(segments):
         segments.sort(key=lambda segment: (segment.start, segment.end))
 
     return Transcript(
@@ -131,6 +140,17 @@ def read_transcript(data: Any) -> Transcript:
 # --------------------------------------------------------------------------
 
 
+def _flatten(raw_segments: list[Any]) -> list[Any]:
+    """Expand nested lists in place, so each child keeps its own timing."""
+    flattened: list[Any] = []
+    for item in raw_segments:
+        if isinstance(item, list):
+            flattened.extend(_flatten(item))
+        else:
+            flattened.append(item)
+    return flattened
+
+
 def _find_segment_list(data: Any) -> list[Any]:
     if isinstance(data, list):
         return data if _looks_like_segment_list(data) else []
@@ -141,6 +161,12 @@ def _find_segment_list(data: Any) -> list[Any]:
 
     for key in SEGMENT_CONTAINER_KEYS:
         value = data.get(key)
+        # whisper-cpp may put the whole transcript under a container key as a
+        # plain string rather than a list of segments.
+        if isinstance(value, str):
+            if value.strip():
+                return [value]
+            continue
         if isinstance(value, list):
             if _looks_like_segment_list(value):
                 return value
@@ -223,10 +249,6 @@ def _fallback_text(data: Any) -> str | None:
 
 def _segment_from_raw(raw: Any) -> tuple[TranscriptSegment, bool]:
     """Decode one raw item. Returns the segment and whether it carried a start time."""
-    if isinstance(raw, list):
-        # A nested list: keep whatever text it flattens to.
-        joined = " ".join(_segment_from_raw(item)[0].text for item in raw).strip()
-        return TranscriptSegment(start=0.0, end=0.0, text=joined), False
     if not isinstance(raw, dict):
         text = raw if isinstance(raw, str) else str(raw)
         return TranscriptSegment(start=0.0, end=0.0, text=text.strip()), False

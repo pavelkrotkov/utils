@@ -721,10 +721,13 @@ def main() -> None:
             progress.finish("loading whisper output")
         transcript_segments = transcript.resolved_segments()
 
-        has_timestamps = transcript.has_timing
-        if not has_timestamps and not transcript.fallback_text:
+        # Usability is about text, not timing: a transcript with no timestamps
+        # is still worth writing. has_timing only decides whether diarization
+        # has anything to align against.
+        if not transcript_segments:
             print("ERROR: ASR produced no usable segments.", file=sys.stderr)
             sys.exit(1)
+        has_timestamps = transcript.has_timing
 
         # Step 4: Run diarization
         if not args.diarization:
