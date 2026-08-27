@@ -165,8 +165,16 @@ class SharedCliSyntaxTest(unittest.TestCase):
     )
 
     def _page_range_action(self, module_name: str):
+        from pdf_convert_run import Backend, build_parser
+
         module = importlib.import_module(module_name)
-        parser = module.build_parser()
+        backends = [
+            value
+            for value in vars(module).values()
+            if isinstance(value, type) and issubclass(value, Backend) and value is not Backend
+        ]
+        self.assertEqual(len(backends), 1, f"{module_name} should declare exactly one Backend")
+        parser = build_parser(backends[0]())
         for action in parser._actions:
             if "--page-range" in action.option_strings:
                 return action

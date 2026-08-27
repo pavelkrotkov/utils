@@ -19,147 +19,133 @@ import argparse
 import sys
 from pathlib import Path
 
-from pdf_convert_common import (
-    import_or_die,
-    require_pdf_path,
-    resolve_output_path,
+from pdf_convert_run import (
+    Backend,
+    ConversionError,
+    ConversionRequest,
+    MarkdownText,
+    Outcome,
+    execute,
+    require_module,
 )
-from pdf_page_selection import PAGE_RANGE_HELP, PageSelection, PageSelectionError
+from pdf_page_selection import PageSelection, PageSelectionError
 
 DEFAULT_DPI = 150
 DEFAULT_IMAGE_FORMAT = "png"
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Convert a PDF to Markdown using pymupdf4llm.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument("pdf_path", type=Path, help="Path to the input PDF file")
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=Path,
-        help="Output markdown file path (default: same name as PDF with .md)",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        help="Directory to write output files (defaults to input file directory)",
-    )
-    parser.add_argument("--page-range", help=PAGE_RANGE_HELP)
-    parser.add_argument(
-        "--layout",
-        action="store_true",
-        help="Enable layout mode (requires pymupdf4llm[layout])",
-    )
-    parser.add_argument(
-        "--write-images",
-        action="store_true",
-        help="Write extracted images to disk",
-    )
-    parser.add_argument(
-        "--embed-images",
-        action="store_true",
-        help="Embed extracted images as base64 in markdown",
-    )
-    parser.add_argument(
-        "--images-dir",
-        type=Path,
-        help="Directory to write extracted images (defaults to output directory)",
-    )
-    parser.add_argument(
-        "--image-format",
-        default=DEFAULT_IMAGE_FORMAT,
-        help=f"Image format for extracted images (default: {DEFAULT_IMAGE_FORMAT})",
-    )
-    parser.add_argument(
-        "--dpi",
-        type=int,
-        default=DEFAULT_DPI,
-        help=f"DPI for rendered images (default: {DEFAULT_DPI})",
-    )
-    force_group = parser.add_mutually_exclusive_group()
-    force_group.add_argument(
-        "--force-text",
-        action="store_true",
-        help="Force text extraction in image areas",
-    )
-    force_group.add_argument(
-        "--no-force-text",
-        action="store_true",
-        help="Suppress text extraction in image areas",
-    )
-    return parser
+class PyMuPdf4LlmBackend(Backend):
+    name = "pymupdf4llm"
+    description = "Convert a PDF to Markdown using pymupdf4llm."
+    # PyMuPDF is already a dependency here, so the page count comes from the
+    # open document rather than pulling in a second PDF library. The run module
+    # never needs to resolve a selection for this backend.
+    supports_page_selection = False
+
+    def add_arguments(self, parser: argparse.ArgumentParser) -> None:
+        parser.add_argument("--page-range", help=self.page_range_help())
+        parser.add_argument(
+            "--layout",
+            action="store_true",
+            help="Enable layout mode (requires pymupdf4llm[layout])",
+        )
+        parser.add_argument(
+            "--write-images",
+            action="store_true",
+            help="Write extracted images to disk",
+        )
+        parser.add_argument(
+            "--embed-images",
+            action="store_true",
+            help="Embed extracted images as base64 in markdown",
+        )
+        parser.add_argument(
+            "--images-dir",
+            type=Path,
+            help="Directory to write extracted images (defaults to output directory)",
+        )
+        parser.add_argument(
+            "--image-format",
+            default=DEFAULT_IMAGE_FORMAT,
+            help=f"Image format for extracted images (default: {DEFAULT_IMAGE_FORMAT})",
+        )
+        parser.add_argument(
+            "--dpi",
+            type=int,
+            default=DEFAULT_DPI,
+            help=f"DPI for rendered images (default: {DEFAULT_DPI})",
+        )
+        force_group = parser.add_mutually_exclusive_group()
+        force_group.add_argument(
+            "--force-text",
+            action="store_true",
+            help="Force text extraction in image areas",
+        )
+        force_group.add_argument(
+            "--no-force-text",
+            action="store_true",
+            help="Suppress text extraction in image areas",
+        )
+
+    def validate(self, args: argparse.Namespace) -> None:
+        if args.write_images and args.embed_images:
+            raise ConversionError("--write-images and --embed-images cannot be used together.")
+
+    def convert(self, request: ConversionRequest) -> Outcome:
+        args = request.args
+        pymupdf = require_module("pymupdf", "pymupdf4llm")
+        if args.layout:
+            require_module("pymupdf.layout", "pymupdf4llm[layout]")
+        pymupdf4llm = require_module("pymupdf4llm", "pymupdf4llm")
+
+        pages = None
+        if args.page_range:
+            pages = self._resolve_pages(pymupdf, request, args.page_range)
+
+        image_path = ""
+        if args.write_images:
+            image_dir = args.images_dir or request.output_path.parent
+            try:
+                image_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise ConversionError(f"Unable to create the image directory: {exc}") from exc
+            image_path = str(image_dir)
+
+        kwargs = {
+            "pages": pages,
+            "write_images": args.write_images,
+            "embed_images": args.embed_images,
+            "image_path": image_path,
+            "image_format": args.image_format,
+            "dpi": args.dpi,
+        }
+        if args.force_text:
+            kwargs["force_text"] = True
+        elif args.no_force_text:
+            kwargs["force_text"] = False
+
+        try:
+            markdown_text = pymupdf4llm.to_markdown(str(request.pdf_path), **kwargs)
+        except Exception as exc:
+            raise ConversionError(f"pymupdf4llm failed: {exc}") from exc
+        return MarkdownText(markdown_text)
+
+    @staticmethod
+    def _resolve_pages(pymupdf, request: ConversionRequest, spec: str) -> list[int]:
+        try:
+            doc = pymupdf.open(str(request.pdf_path))
+        except Exception as exc:
+            raise ConversionError(f"Unable to open PDF: {exc}") from exc
+        try:
+            return PageSelection.parse(spec, doc.page_count).as_zero_based()
+        except PageSelectionError as exc:
+            raise ConversionError(str(exc)) from exc
+        finally:
+            doc.close()
 
 
 def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
-
-    pdf_path = require_pdf_path(args.pdf_path)
-
-    if args.write_images and args.embed_images:
-        print(
-            "ERROR: --write-images and --embed-images cannot be used together.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    pymupdf = import_or_die("pymupdf", "pymupdf4llm")
-
-    if args.layout:
-        import_or_die("pymupdf.layout", "pymupdf4llm[layout]")
-
-    pymupdf4llm = import_or_die("pymupdf4llm", "pymupdf4llm")
-
-    output_path = resolve_output_path(pdf_path, args.output, args.output_dir)
-
-    pages = None
-    if args.page_range:
-        # PyMuPDF is already a dependency here, so the page count comes from the
-        # open document rather than pulling in a second PDF library.
-        try:
-            doc = pymupdf.open(str(pdf_path))
-        except Exception as exc:
-            print(f"ERROR: Unable to open PDF: {exc}", file=sys.stderr)
-            sys.exit(1)
-        try:
-            selection = PageSelection.parse(args.page_range, doc.page_count)
-        except PageSelectionError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            sys.exit(1)
-        finally:
-            doc.close()
-        pages = selection.as_zero_based()
-
-    image_path = ""
-    if args.write_images:
-        image_dir = args.images_dir or output_path.parent
-        image_dir.mkdir(parents=True, exist_ok=True)
-        image_path = str(image_dir)
-
-    kwargs = {
-        "pages": pages,
-        "write_images": args.write_images,
-        "embed_images": args.embed_images,
-        "image_path": image_path,
-        "image_format": args.image_format,
-        "dpi": args.dpi,
-    }
-    if args.force_text:
-        kwargs["force_text"] = True
-    elif args.no_force_text:
-        kwargs["force_text"] = False
-
-    try:
-        markdown_text = pymupdf4llm.to_markdown(str(pdf_path), **kwargs)
-    except Exception as exc:
-        print(f"ERROR: pymupdf4llm failed: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    output_path.write_text(markdown_text, encoding="utf-8")
-    print(f"Wrote Markdown to: {output_path}")
+    sys.exit(execute(PyMuPdf4LlmBackend()))
 
 
 if __name__ == "__main__":

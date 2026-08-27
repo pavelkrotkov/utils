@@ -13,143 +13,112 @@ Usage:
     ./pdf_convert_marker.py input.pdf -o output.md
 """
 
+from __future__ import annotations
+
 import argparse
 import sys
 from pathlib import Path
 
-from pdf_convert_common import (
-    import_or_die,
-    require_pdf_path,
-    resolve_output_path,
-)
-from pdf_page_selection import (
-    PAGE_RANGE_HELP,
-    PageSelection,
-    PageSelectionError,
-    load_page_count,
+from pdf_convert_run import (
+    AlreadyWritten,
+    Backend,
+    ConversionError,
+    ConversionRequest,
+    Outcome,
+    execute,
+    require_module,
 )
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Convert a PDF to Markdown using marker.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument("pdf_path", type=Path, help="Path to the input PDF file")
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=Path,
-        help="Output markdown file path (default: same name as PDF with .md)",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        help="Directory to write output files (defaults to input file directory)",
-    )
-    parser.add_argument("--page-range", help=PAGE_RANGE_HELP)
-    parser.add_argument(
-        "--force-ocr",
-        action="store_true",
-        help="Force OCR for all pages (slower, helps with poor PDFs)",
-    )
-    parser.add_argument(
-        "--strip-existing-ocr",
-        action="store_true",
-        help="Remove embedded OCR text and re-OCR",
-    )
-    parser.add_argument(
-        "--use-llm",
-        action="store_true",
-        help="Use an LLM to improve formatting accuracy (requires LLM config)",
-    )
-    parser.add_argument(
-        "--llm-service",
-        help="LLM service import path (e.g., marker.services.gemini.GoogleGeminiService)",
-    )
-    parser.add_argument(
-        "--disable-image-extraction",
-        action="store_true",
-        help="Skip extracting images from the PDF",
-    )
-    parser.add_argument(
-        "--config-json",
-        type=Path,
-        help="Path to marker config JSON for advanced settings",
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable debug output from marker",
-    )
-    return parser
+class MarkerBackend(Backend):
+    name = "marker"
+    description = "Convert a PDF to Markdown using marker."
+
+    def add_arguments(self, parser: argparse.ArgumentParser) -> None:
+        parser.add_argument(
+            "--force-ocr",
+            action="store_true",
+            help="Force OCR for all pages (slower, helps with poor PDFs)",
+        )
+        parser.add_argument(
+            "--strip-existing-ocr",
+            action="store_true",
+            help="Remove embedded OCR text and re-OCR",
+        )
+        parser.add_argument(
+            "--use-llm",
+            action="store_true",
+            help="Use an LLM to improve formatting accuracy (requires LLM config)",
+        )
+        parser.add_argument(
+            "--llm-service",
+            help="LLM service import path (e.g., marker.services.gemini.GoogleGeminiService)",
+        )
+        parser.add_argument(
+            "--disable-image-extraction",
+            action="store_true",
+            help="Skip extracting images from the PDF",
+        )
+        parser.add_argument(
+            "--config-json",
+            type=Path,
+            help="Path to marker config JSON for advanced settings",
+        )
+        parser.add_argument(
+            "--debug",
+            action="store_true",
+            help="Enable debug output from marker",
+        )
+
+    def convert(self, request: ConversionRequest) -> Outcome:
+        args = request.args
+        output_dir = request.output_path.parent
+        base_name = request.output_path.stem
+
+        # marker indexes pages from 0 and takes a comma-separated spec string.
+        page_range = None
+        if request.selection is not None:
+            page_range = request.selection.as_ranges(zero_based=True)
+
+        marker_parser = require_module("marker.config.parser", "marker-pdf")
+        marker_models = require_module("marker.models", "marker-pdf")
+        marker_output = require_module("marker.output", "marker-pdf")
+
+        config_options = {
+            "output_format": "markdown",
+            "output_dir": str(output_dir),
+            "page_range": page_range,
+            "force_ocr": args.force_ocr,
+            "strip_existing_ocr": args.strip_existing_ocr,
+            "use_llm": args.use_llm,
+            "llm_service": args.llm_service,
+            "disable_image_extraction": args.disable_image_extraction,
+            "config_json": str(args.config_json) if args.config_json else None,
+            "debug": args.debug,
+        }
+
+        try:
+            config_parser = marker_parser.ConfigParser(config_options)
+            converter_cls = config_parser.get_converter_cls()
+            converter = converter_cls(
+                artifact_dict=marker_models.create_model_dict(),
+                config=config_parser.generate_config_dict(),
+                processor_list=config_parser.get_processors(),
+                renderer=config_parser.get_renderer(),
+                llm_service=config_parser.get_llm_service(),
+            )
+            rendered = converter(str(request.pdf_path))
+            # marker names its own output: <output_dir>/<base_name>.md, whatever
+            # suffix -o asked for. Report the path it actually wrote.
+            marker_output.save_output(rendered, str(output_dir), base_name)
+        except Exception as exc:
+            raise ConversionError(f"marker conversion failed: {exc}") from exc
+
+        return AlreadyWritten(output_dir / f"{base_name}.md")
 
 
 def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
-
-    pdf_path = require_pdf_path(args.pdf_path)
-
-    output_path = resolve_output_path(
-        pdf_path,
-        args.output,
-        args.output_dir,
-    )
-    output_dir = output_path.parent
-    base_name = output_path.stem
-
-    page_range = None
-    if args.page_range:
-        try:
-            selection = PageSelection.parse(args.page_range, load_page_count(pdf_path))
-        except PageSelectionError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            sys.exit(1)
-        # marker indexes pages from 0 and takes a comma-separated spec string.
-        page_range = selection.as_ranges(zero_based=True)
-
-    marker_parser = import_or_die("marker.config.parser", "marker-pdf")
-    marker_models = import_or_die("marker.models", "marker-pdf")
-    marker_output = import_or_die("marker.output", "marker-pdf")
-    ConfigParser = marker_parser.ConfigParser
-    create_model_dict = marker_models.create_model_dict
-    save_output = marker_output.save_output
-
-    config_options = {
-        "output_format": "markdown",
-        "output_dir": str(output_dir),
-        "page_range": page_range,
-        "force_ocr": args.force_ocr,
-        "strip_existing_ocr": args.strip_existing_ocr,
-        "use_llm": args.use_llm,
-        "llm_service": args.llm_service,
-        "disable_image_extraction": args.disable_image_extraction,
-        "config_json": str(args.config_json) if args.config_json else None,
-        "debug": args.debug,
-    }
-
-    config_parser = ConfigParser(config_options)
-    config = config_parser.generate_config_dict()
-
-    converter_cls = config_parser.get_converter_cls()
-    renderer = config_parser.get_renderer()
-    processor_list = config_parser.get_processors()
-    llm_service = config_parser.get_llm_service()
-
-    converter = converter_cls(
-        artifact_dict=create_model_dict(),
-        config=config,
-        processor_list=processor_list,
-        renderer=renderer,
-        llm_service=llm_service,
-    )
-
-    rendered = converter(str(pdf_path))
-    save_output(rendered, str(output_dir), base_name)
-
-    output_md = output_dir / f"{base_name}.md"
-    print(f"Wrote Markdown to: {output_md}")
+    sys.exit(execute(MarkerBackend()))
 
 
 if __name__ == "__main__":

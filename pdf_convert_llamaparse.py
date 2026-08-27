@@ -29,17 +29,17 @@ import sys
 import time
 from pathlib import Path
 
-from pdf_convert_common import (
-    import_or_die,
-    require_pdf_path,
-    resolve_output_path,
+from pdf_convert_run import (
+    AlreadyWritten,
+    Backend,
+    ConversionError,
+    ConversionRequest,
+    Outcome,
+    build_parser,
+    require_module,
+    run,
 )
-from pdf_page_selection import (
-    PAGE_RANGE_HELP,
-    PageSelection,
-    PageSelectionError,
-    load_page_count,
-)
+from pdf_page_selection import PageSelection
 
 DEFAULT_TIER = "cost_effective"
 DEFAULT_VERSION = "latest"
@@ -47,71 +47,6 @@ DEFAULT_CHUNK_PAGES = 100
 DEFAULT_POLL_TIMEOUT_SECONDS = 300.0
 DEFAULT_POLL_INTERVAL_SECONDS = 5.0
 EXPAND_FIELDS = ["markdown"]
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Convert a PDF to Markdown using LlamaParse.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "Environment Variables:\n"
-            "  LLAMA_CLOUD_API_KEY   LlamaCloud API key\n\n"
-            "API Key:\n"
-            "  Create one at https://cloud.llamaindex.ai "
-            "(API Key -> Generate New Key).\n"
-        ),
-    )
-    parser.add_argument(
-        "pdf_path",
-        type=Path,
-        nargs="?",
-        help="Path to the input PDF file (omit when using --fetch-job)",
-    )
-    parser.add_argument(
-        "-o",
-        "--output",
-        type=Path,
-        help="Output markdown file path (default: same name as PDF with .md)",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        help="Directory to write output files (defaults to input file directory)",
-    )
-    parser.add_argument("--page-range", help=PAGE_RANGE_HELP)
-    parser.add_argument(
-        "--max-pages",
-        type=int,
-        help="Limit total pages to process starting from page 1",
-    )
-    parser.add_argument(
-        "--chunk-pages",
-        type=int,
-        default=DEFAULT_CHUNK_PAGES,
-        help=(
-            f"Pages per chunk (default: {DEFAULT_CHUNK_PAGES}). "
-            "Chunking is always enabled to support resume."
-        ),
-    )
-    parser.add_argument(
-        "--tier",
-        default=DEFAULT_TIER,
-        help=f"LlamaParse tier (default: {DEFAULT_TIER})",
-    )
-    parser.add_argument(
-        "--version",
-        default=DEFAULT_VERSION,
-        help=f"LlamaParse version (default: {DEFAULT_VERSION})",
-    )
-    parser.add_argument(
-        "--api-key",
-        help="LlamaCloud API key (overrides LLAMA_CLOUD_API_KEY)",
-    )
-    parser.add_argument(
-        "--fetch-job",
-        help="Fetch markdown for an existing LlamaParse job ID",
-    )
-    return parser
 
 
 def resolve_output_path_for_job(
@@ -127,11 +62,7 @@ def resolve_output_path_for_job(
         output_dir.mkdir(parents=True, exist_ok=True)
         return output_dir / f"{job_id}.md"
 
-    print(
-        "ERROR: --fetch-job requires --output or --output-dir.",
-        file=sys.stderr,
-    )
-    sys.exit(1)
+    raise ConversionError("--fetch-job requires --output or --output-dir.")
 
 
 def chunk_pages(pages: list[int], chunk_size: int) -> list[list[int]]:
@@ -250,196 +181,225 @@ def write_joined_markdown(chunk_paths: list[Path], output_path: Path) -> None:
             output_file.write(text)
 
 
-def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
+class LlamaParseBackend(Backend):
+    name = "llamaparse"
+    description = "Convert a PDF to Markdown using LlamaParse."
+    epilog = (
+        "Environment Variables:\n"
+        "  LLAMA_CLOUD_API_KEY   LlamaCloud API key\n\n"
+        "API Key:\n"
+        "  Create one at https://cloud.llamaindex.ai "
+        "(API Key -> Generate New Key).\n"
+    )
+    # --fetch-job retrieves an existing job and needs no PDF, so main() branches
+    # before entering the run.
+    pdf_path_required = False
 
-    llama_cloud = import_or_die("llama_cloud", "llama-cloud")
-    LlamaCloud = llama_cloud.LlamaCloud
-
-    if args.fetch_job:
-        api_key = args.api_key or os.getenv("LLAMA_CLOUD_API_KEY")
-        if not api_key:
-            print(
-                "ERROR: Missing LlamaCloud API key. Set LLAMA_CLOUD_API_KEY or pass --api-key.",
-                file=sys.stderr,
-            )
-            print(
-                "Create one at https://cloud.llamaindex.ai (API Key -> Generate New Key).",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-        output_path = resolve_output_path_for_job(
-            args.fetch_job,
-            args.output,
-            args.output_dir,
+    def add_arguments(self, parser: argparse.ArgumentParser) -> None:
+        parser.add_argument(
+            "--max-pages",
+            type=int,
+            help="Limit total pages to process starting from page 1",
+        )
+        parser.add_argument(
+            "--chunk-pages",
+            type=int,
+            default=DEFAULT_CHUNK_PAGES,
+            help=(
+                f"Pages per chunk (default: {DEFAULT_CHUNK_PAGES}). "
+                "Chunking is always enabled to support resume."
+            ),
+        )
+        parser.add_argument(
+            "--tier",
+            default=DEFAULT_TIER,
+            help=f"LlamaParse tier (default: {DEFAULT_TIER})",
+        )
+        parser.add_argument(
+            "--version",
+            default=DEFAULT_VERSION,
+            help=f"LlamaParse version (default: {DEFAULT_VERSION})",
+        )
+        parser.add_argument(
+            "--api-key",
+            help="LlamaCloud API key (overrides LLAMA_CLOUD_API_KEY)",
+        )
+        parser.add_argument(
+            "--fetch-job",
+            help="Fetch markdown for an existing LlamaParse job ID",
         )
 
-        client = LlamaCloud(api_key=api_key)
+    def validate(self, args: argparse.Namespace) -> None:
+        if args.chunk_pages < 1:
+            raise ConversionError("--chunk-pages must be at least 1.")
+        if args.max_pages is not None and args.max_pages < 1:
+            raise ConversionError("--max-pages must be at least 1.")
+
+    def convert(self, request: ConversionRequest) -> Outcome:
+        args = request.args
+        total_pages = request.page_count()
+
+        pages = (
+            request.selection.as_one_based()
+            if request.selection is not None
+            else list(range(1, total_pages + 1))
+        )
+        if args.max_pages is not None:
+            pages = [page for page in pages if page <= args.max_pages]
+        if not pages:
+            raise ConversionError("No pages selected for parsing.")
+
+        chunks = chunk_pages(pages, args.chunk_pages)
+        chunk_paths = [
+            chunk_output_path(request.output_path, index) for index in range(1, len(chunks) + 1)
+        ]
+
+        print(
+            "INFO: Chunking "
+            f"{len(pages)} pages into {len(chunks)} chunks of up to "
+            f"{args.chunk_pages} pages."
+        )
+
+        if not _missing_chunks(chunk_paths):
+            print("INFO: All chunk outputs already exist. Joining.")
+            write_joined_markdown(chunk_paths, request.output_path)
+            return AlreadyWritten()
+
+        client = _build_client(args)
         try:
-            result = wait_for_job(client, args.fetch_job)
+            file_obj = client.files.create(file=str(request.pdf_path), purpose="parse")
         except Exception as exc:
-            print(
-                f"ERROR: Failed to fetch job {args.fetch_job}: {exc}",
-                file=sys.stderr,
+            raise ConversionError(f"Failed to upload PDF: {exc}") from exc
+
+        file_id = getattr(file_obj, "id", None)
+        if not file_id:
+            raise ConversionError("Failed to retrieve file ID from upload.")
+
+        for index, chunk_pages_list in enumerate(chunks, start=1):
+            chunk_path = chunk_paths[index - 1]
+            if chunk_path.exists() and chunk_path.stat().st_size > 0:
+                print(f"INFO: Chunk {index}/{len(chunks)} exists, skipping: {chunk_path}")
+                continue
+            if chunk_path.exists() and chunk_path.stat().st_size == 0:
+                print(
+                    f"WARNING: Chunk {index}/{len(chunks)} is empty, reprocessing.",
+                    file=sys.stderr,
+                )
+
+            target_pages = PageSelection.from_pages(chunk_pages_list, total_pages).as_ranges()
+            print(f"INFO: Chunk {index}/{len(chunks)} pages {target_pages} -> {chunk_path}")
+            markdown_text = _parse_chunk(client, args, file_id, target_pages, chunk_path)
+            chunk_path.write_text(markdown_text, encoding="utf-8")
+            print(f"INFO: Wrote chunk to: {chunk_path}")
+
+        missing = _missing_chunks(chunk_paths)
+        if missing:
+            missing_list = ", ".join(str(index) for index in missing)
+            raise ConversionError(
+                f"Missing chunk outputs; rerun to resume. Missing chunks: {missing_list}"
             )
-            sys.exit(1)
 
-        markdown_text = extract_markdown(result)
-        if not markdown_text.strip():
-            print("ERROR: LlamaParse returned empty markdown output.", file=sys.stderr)
-            sys.exit(1)
+        write_joined_markdown(chunk_paths, request.output_path)
+        return AlreadyWritten()
 
-        output_path.write_text(markdown_text, encoding="utf-8")
-        print(f"Wrote Markdown to: {output_path}")
-        return
 
-    if args.pdf_path is None:
-        parser.error("pdf_path is required unless --fetch-job is provided.")
-
-    pdf_path = require_pdf_path(args.pdf_path)
-
-    if args.chunk_pages < 1:
-        print("ERROR: --chunk-pages must be at least 1.", file=sys.stderr)
-        sys.exit(1)
-
-    if args.max_pages is not None and args.max_pages < 1:
-        print("ERROR: --max-pages must be at least 1.", file=sys.stderr)
-        sys.exit(1)
-
-    try:
-        total_pages = load_page_count(pdf_path)
-    except PageSelectionError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    pages = list(range(1, total_pages + 1))
-    if args.page_range:
-        try:
-            pages = PageSelection.parse(args.page_range, total_pages).as_one_based()
-        except PageSelectionError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            sys.exit(1)
-
-    if args.max_pages is not None:
-        pages = [page for page in pages if page <= args.max_pages]
-
-    if not pages:
-        print("ERROR: No pages selected for parsing.", file=sys.stderr)
-        sys.exit(1)
-
-    chunks = chunk_pages(pages, args.chunk_pages)
-    output_path = resolve_output_path(pdf_path, args.output, args.output_dir)
-    chunk_paths = [chunk_output_path(output_path, index) for index in range(1, len(chunks) + 1)]
-
-    print(
-        "INFO: Chunking "
-        f"{len(pages)} pages into {len(chunks)} chunks of up to "
-        f"{args.chunk_pages} pages."
-    )
-
-    missing_chunks = [
+def _missing_chunks(chunk_paths: list[Path]) -> list[int]:
+    return [
         index
         for index, path in enumerate(chunk_paths, start=1)
         if not path.exists() or path.stat().st_size == 0
     ]
-    if not missing_chunks:
-        print("INFO: All chunk outputs already exist. Joining.")
-        write_joined_markdown(chunk_paths, output_path)
-        print(f"Wrote Markdown to: {output_path}")
-        return
 
+
+def _resolve_api_key(args: argparse.Namespace) -> str:
     api_key = args.api_key or os.getenv("LLAMA_CLOUD_API_KEY")
     if not api_key:
-        print(
-            "ERROR: Missing LlamaCloud API key. Set LLAMA_CLOUD_API_KEY or pass --api-key.",
-            file=sys.stderr,
+        raise ConversionError(
+            "Missing LlamaCloud API key. Set LLAMA_CLOUD_API_KEY or pass --api-key. "
+            "Create one at https://cloud.llamaindex.ai (API Key -> Generate New Key)."
         )
-        print(
-            "Create one at https://cloud.llamaindex.ai (API Key -> Generate New Key).",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    return api_key
 
-    client = LlamaCloud(api_key=api_key)
+
+def _build_client(args: argparse.Namespace) -> object:
+    llama_cloud = require_module("llama_cloud", "llama-cloud")
+    return llama_cloud.LlamaCloud(api_key=_resolve_api_key(args))
+
+
+def _parse_chunk(
+    client: object,
+    args: argparse.Namespace,
+    file_id: str,
+    target_pages: str,
+    chunk_path: Path,
+) -> str:
+    """Submit one chunk, wait for it, and return its Markdown."""
     try:
-        file_obj = client.files.create(file=str(pdf_path), purpose="parse")
-    except Exception as exc:
-        print(f"ERROR: Failed to upload PDF: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    file_id = getattr(file_obj, "id", None)
-    if not file_id:
-        print("ERROR: Failed to retrieve file ID from upload.", file=sys.stderr)
-        sys.exit(1)
-
-    for index, chunk_pages_list in enumerate(chunks, start=1):
-        chunk_path = chunk_paths[index - 1]
-        if chunk_path.exists() and chunk_path.stat().st_size > 0:
-            print(f"INFO: Chunk {index}/{len(chunks)} exists, skipping: {chunk_path}")
-            continue
-
-        if chunk_path.exists() and chunk_path.stat().st_size == 0:
-            print(
-                f"WARNING: Chunk {index}/{len(chunks)} is empty, reprocessing.",
-                file=sys.stderr,
-            )
-
-        target_pages = PageSelection.from_pages(chunk_pages_list, total_pages).as_ranges()
-        print(f"INFO: Chunk {index}/{len(chunks)} pages {target_pages} -> {chunk_path}")
-
-        try:
-            job = client.parsing.create(
-                tier=args.tier,
-                version=args.version,
-                file_id=file_id,
-                page_ranges={"target_pages": target_pages},
-            )
-        except Exception as exc:
-            print(f"ERROR: LlamaParse request failed: {exc}", file=sys.stderr)
-            sys.exit(1)
-
-        job_id = extract_job_id(job)
-        if not job_id:
-            print("ERROR: LlamaParse did not return a job ID.", file=sys.stderr)
-            sys.exit(1)
-
-        print(f"INFO: Job ID: {job_id}")
-        print(f"INFO: Manual fetch: {manual_fetch_command(job_id, chunk_path)}")
-
-        try:
-            result = wait_for_job(client, job_id)
-        except TimeoutError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            sys.exit(1)
-        except Exception as exc:
-            print(f"ERROR: LlamaParse job failed: {exc}", file=sys.stderr)
-            sys.exit(1)
-
-        markdown_text = extract_markdown(result)
-        if not markdown_text.strip():
-            print("ERROR: LlamaParse returned empty markdown output.", file=sys.stderr)
-            sys.exit(1)
-
-        chunk_path.write_text(markdown_text, encoding="utf-8")
-        print(f"INFO: Wrote chunk to: {chunk_path}")
-
-    missing_chunks = [
-        index
-        for index, path in enumerate(chunk_paths, start=1)
-        if not path.exists() or path.stat().st_size == 0
-    ]
-    if missing_chunks:
-        missing_list = ", ".join(str(index) for index in missing_chunks)
-        print(
-            f"ERROR: Missing chunk outputs; rerun to resume. Missing chunks: {missing_list}",
-            file=sys.stderr,
+        job = client.parsing.create(
+            tier=args.tier,
+            version=args.version,
+            file_id=file_id,
+            page_ranges={"target_pages": target_pages},
         )
-        sys.exit(1)
+    except Exception as exc:
+        raise ConversionError(f"LlamaParse request failed: {exc}") from exc
 
-    write_joined_markdown(chunk_paths, output_path)
+    job_id = extract_job_id(job)
+    if not job_id:
+        raise ConversionError("LlamaParse did not return a job ID.")
+
+    print(f"INFO: Job ID: {job_id}")
+    print(f"INFO: Manual fetch: {manual_fetch_command(job_id, chunk_path)}")
+
+    try:
+        result = wait_for_job(client, job_id)
+    except TimeoutError as exc:
+        # main() only reports ConversionError; a bare TimeoutError would
+        # surface as a traceback instead of an ERROR: line.
+        raise ConversionError(str(exc)) from exc
+    except ConversionError:
+        raise
+    except Exception as exc:
+        raise ConversionError(f"LlamaParse job failed: {exc}") from exc
+
+    markdown_text = extract_markdown(result)
+    if not markdown_text.strip():
+        raise ConversionError("LlamaParse returned empty markdown output.")
+    return markdown_text
+
+
+def fetch_job(args: argparse.Namespace) -> Path:
+    """Fetch a previously submitted job's Markdown and write it out."""
+    client = _build_client(args)
+    output_path = resolve_output_path_for_job(args.fetch_job, args.output, args.output_dir)
+
+    try:
+        result = wait_for_job(client, args.fetch_job)
+    except ConversionError:
+        raise
+    except Exception as exc:
+        raise ConversionError(f"Failed to fetch job {args.fetch_job}: {exc}") from exc
+
+    markdown_text = extract_markdown(result)
+    if not markdown_text.strip():
+        raise ConversionError("LlamaParse returned empty markdown output.")
+
+    output_path.write_text(markdown_text, encoding="utf-8")
     print(f"Wrote Markdown to: {output_path}")
+    return output_path
+
+
+def main() -> None:
+    backend = LlamaParseBackend()
+    args = build_parser(backend).parse_args()
+    try:
+        if args.fetch_job:
+            fetch_job(args)
+        else:
+            run(backend, args)
+    except ConversionError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
