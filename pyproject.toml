@@ -39,11 +39,11 @@ dev = [
     "pre-commit>=4.6.2",
     # Test-only: exercises the pypdf-backed paths of pdf_page_selection.
     # Converters still declare pypdf per-script via PEP 723.
-    "pypdf>=6.4.0",
+    "pypdf>=6.16.2",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
-    "ruff>=0.16.3",
-    "ty>=0.0.73",
+    "ruff>=0.16.4",
+    "ty>=0.0.74",
 ]
 
 [tool.ty.src]
