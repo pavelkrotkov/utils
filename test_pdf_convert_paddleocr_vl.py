@@ -2,6 +2,7 @@ import argparse
 import subprocess
 import sys
 import time
+import weakref
 from unittest import mock
 
 import pytest
@@ -37,6 +38,58 @@ def test_safe_resource_defaults_reach_paddle():
         config["SubModules"]["LayoutDetection"]["batch_size"],
         config["SubModules"]["VLRecognition"]["batch_size"],
     ) == (1, 1, 1)
+
+
+def test_streams_pages_without_retaining_results(tmp_path, monkeypatch):
+    refs = []
+
+    class Image:
+        def save(self, path):
+            path.write_bytes(b"png")
+
+    class Result:
+        def __init__(self, index):
+            images = {"figures/first.png": Image()} if index == 0 else {}
+            self.markdown = {
+                "markdown_texts": f"page {index} $x^2$",
+                "markdown_images": images,
+            }
+
+    def results():
+        for index in range(4):
+            result = Result(index)
+            refs.append(weakref.ref(result))
+            yield result
+            if index:
+                assert refs[index - 1]() is None
+
+    pipeline = mock.Mock()
+    pipeline.predict_iter.return_value = results()
+    paddleocr = mock.Mock(PaddleOCRVL=mock.Mock(return_value=pipeline))
+    monkeypatch.setattr(
+        paddle,
+        "require_module",
+        lambda name, _package: paddleocr if name == "paddleocr" else mock.Mock(),
+    )
+    monkeypatch.setattr(paddle, "_resource_config", lambda *_args: {})
+    args = argparse.Namespace(
+        engine=None, device=None, pipeline_version="v1.6", threads=4, queues=False
+    )
+    request = paddle.ConversionRequest(
+        tmp_path / "input.pdf", tmp_path / "out.md", tmp_path / "work", args
+    )
+
+    outcome = paddle.PaddleOcrVlBackend().convert(request)
+
+    assert pipeline.predict_iter.call_args == mock.call(input=str(request.pdf_path))
+    assert (outcome.directory / "input.md").read_text(encoding="utf-8").split("\n\n") == [
+        "page 0 $x^2$",
+        "page 1 $x^2$",
+        "page 2 $x^2$",
+        "page 3 $x^2$",
+        "",
+    ]
+    assert (outcome.directory / "figures/first.png").read_bytes() == b"png"
 
 
 def test_transformers_rejects_unsupported_device():
