@@ -5,17 +5,12 @@
 """
 Convert a local PDF to Markdown using PaddleOCR-VL.
 
-The first run downloads the layout and VLM models automatically.
-Thread pools (OMP/MKL/OpenBLAS/NumExpr/Paddle) are forced to --threads
-to keep CPU and memory usage bounded on small machines.
+The first run downloads the layout and VLM models automatically. Resource
+limits default to values suitable for a 16 GB Apple Silicon Mac.
 
 Usage:
-    # Run with uv (recommended):
     uv run ./pdf_convert_paddleocr_vl.py input.pdf
     uv run ./pdf_convert_paddleocr_vl.py input.pdf --page-range 1-5
-
-    # Standard execution:
-    ./pdf_convert_paddleocr_vl.py input.pdf -o output.md
     ./pdf_convert_paddleocr_vl.py input.pdf --threads 4 --device cpu
 """
 
@@ -43,14 +38,18 @@ from pdf_page_selection import PageSelectionError
 
 ENGINE_CHOICES = ("paddle", "transformers")
 PIPELINE_VERSION_CHOICES = ("v1", "v1.5", "v1.6")
-PIPELINE_ARGS = ("engine", "device", "pipeline_version")
+DEFAULT_PIPELINE_VERSION = "v1.6"
+PIPELINE_NAMES = {
+    "v1": "PaddleOCR-VL",
+    "v1.5": "PaddleOCR-VL-1.5",
+    "v1.6": "PaddleOCR-VL-1.6",
+}
 HELP_FLAGS = frozenset(("-h", "--help"))
 TERMINATION_SIGNALS = (signal.SIGINT, signal.SIGHUP, signal.SIGTERM)
 DEFAULT_THREADS = 4
+DEFAULT_BATCH_SIZE = 1
 LOCK_PATH = Path.home() / ".pdf_convert_paddleocr_vl.lock"
 WORKER_ENV = "PDF_CONVERT_PADDLEOCR_VL_WORKER"
-# Thread pool sizes read by OpenMP, BLAS libraries, NumExpr, PaddlePaddle,
-# and Accelerate (macOS).
 THREAD_LIMIT_ENV_VARS = (
     "OMP_NUM_THREADS",
     "OPENBLAS_NUM_THREADS",
@@ -138,7 +137,21 @@ def _supervise(argv: list[str]) -> int:
 
 
 def _pipeline_kwargs(args: argparse.Namespace) -> dict[str, object]:
-    return {name: getattr(args, name) for name in PIPELINE_ARGS if getattr(args, name) is not None}
+    return {
+        "engine": args.engine,
+        "device": args.device,
+        "pipeline_version": args.pipeline_version,
+        "cpu_threads": args.threads,
+        "use_queues": args.queues,
+    }
+
+
+def _resource_config(paddlex, args: argparse.Namespace):
+    config = paddlex.load_pipeline_config(PIPELINE_NAMES[args.pipeline_version])
+    config["batch_size"] = args.page_batch_size
+    config["SubModules"]["LayoutDetection"]["batch_size"] = args.layout_batch_size
+    config["SubModules"]["VLRecognition"]["batch_size"] = args.vlm_batch_size
+    return config
 
 
 def _input_pdf(request: ConversionRequest) -> Path:
@@ -163,10 +176,19 @@ class PaddleOcrVlBackend(Backend):
             "--threads",
             type=int,
             default=DEFAULT_THREADS,
-            help=(
-                f"Thread pool count forced onto OMP/BLAS libraries (default: {DEFAULT_THREADS}); "
-                "overrides ambient thread environment variables"
-            ),
+            help=f"CPU inference/thread-pool limit (default: {DEFAULT_THREADS})",
+        )
+        for name, label in (("page", "PDF page"), ("layout", "layout"), ("vlm", "VLM")):
+            parser.add_argument(
+                f"--{name}-batch-size",
+                type=int,
+                default=DEFAULT_BATCH_SIZE,
+                help=f"{label} batch size (default: {DEFAULT_BATCH_SIZE})",
+            )
+        parser.add_argument(
+            "--queues",
+            action="store_true",
+            help="enable PaddleX async prefetch queues (default: off; upstream buffers 64 batches)",
         )
         parser.add_argument(
             "--engine",
@@ -180,19 +202,32 @@ class PaddleOcrVlBackend(Backend):
         parser.add_argument(
             "--pipeline-version",
             choices=PIPELINE_VERSION_CHOICES,
-            help="PaddleOCR-VL pipeline version (default: PaddleOCR's own default)",
+            default=DEFAULT_PIPELINE_VERSION,
+            help=f"PaddleOCR-VL pipeline version (default: {DEFAULT_PIPELINE_VERSION})",
         )
 
     def validate(self, args: argparse.Namespace) -> None:
-        if args.threads < 1:
-            raise ConversionError("--threads must be at least 1.")
-        # Must land before paddle is imported, so it happens in validate.
+        if min(
+            args.threads,
+            args.page_batch_size,
+            args.layout_batch_size,
+            args.vlm_batch_size,
+        ) < 1:
+            raise ConversionError("Thread and batch limits must be at least 1.")
+        if (
+            args.engine == "transformers"
+            and args.device
+            and args.device.split(":", 1)[0] not in ("cpu", "gpu")
+        ):
+            raise ConversionError("--engine transformers supports only cpu or gpu devices.")
         apply_thread_limit(args.threads)
 
     def convert(self, request: ConversionRequest) -> Outcome:
         args = request.args
         paddleocr = require_module("paddleocr", "paddleocr[doc-parser]")
+        paddlex = require_module("paddlex.inference", "paddleocr[doc-parser]")
         pipeline_kwargs = _pipeline_kwargs(args)
+        pipeline_kwargs["paddlex_config"] = _resource_config(paddlex, args)
         input_pdf = _input_pdf(request)
 
         try:
