@@ -137,8 +137,17 @@ class PaddleOcrVlBackend(Backend):
         add = parser.add_argument
         add("--threads", type=int, default=DEFAULT_THREADS, help="CPU inference/thread limit")
         for name in ("page", "layout", "vlm"):
-            add(f"--{name}-batch-size", type=int, default=DEFAULT_BATCH_SIZE)
-        add("--queues", action="store_true", help="enable PaddleX async prefetch queues")
+            add(
+                f"--{name}-batch-size",
+                type=int,
+                default=DEFAULT_BATCH_SIZE,
+                help=f"{name} batch size (default: {DEFAULT_BATCH_SIZE})",
+            )
+        add(
+            "--queues",
+            action="store_true",
+            help="enable PaddleX async prefetch queues (default: off; upstream buffers 64 batches)",
+        )
         add("--engine", choices=ENGINE_CHOICES, help="VLM inference engine")
         add("--device", help="pipeline device, e.g. cpu or gpu:0")
         add(
