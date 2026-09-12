@@ -72,6 +72,9 @@ def _conversion_lock():
     except BlockingIOError as exc:
         lock.close()
         raise ConversionError("Another PaddleOCR-VL conversion is already running.") from exc
+    except Exception:
+        lock.close()
+        raise
     return lock
 
 
