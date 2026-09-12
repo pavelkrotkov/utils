@@ -105,14 +105,11 @@ def _supervise(argv: list[str]) -> int:
             env=env,
             start_new_session=True,
         )
-        previous_sigterm = signal.signal(signal.SIGTERM, signal.default_int_handler)
         try:
-            try:
-                return worker.wait()
-            except KeyboardInterrupt:
-                return 130
+            return worker.wait()
+        except KeyboardInterrupt:
+            return 130
         finally:
-            signal.signal(signal.SIGTERM, previous_sigterm)
             if worker.returncode != 0:
                 _terminate_process_group(worker)
 
@@ -209,6 +206,7 @@ class PaddleOcrVlBackend(Backend):
 def main() -> None:
     if os.environ.pop(WORKER_ENV, None):
         sys.exit(execute(PaddleOcrVlBackend()))
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     sys.exit(_supervise(sys.argv[1:]))
 
 
