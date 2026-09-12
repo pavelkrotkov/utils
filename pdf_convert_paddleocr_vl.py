@@ -212,12 +212,15 @@ class PaddleOcrVlBackend(Backend):
         )
 
     def validate(self, args: argparse.Namespace) -> None:
-        if min(
-            args.threads,
-            args.page_batch_size,
-            args.layout_batch_size,
-            args.vlm_batch_size,
-        ) < 1:
+        if (
+            min(
+                args.threads,
+                args.page_batch_size,
+                args.layout_batch_size,
+                args.vlm_batch_size,
+            )
+            < 1
+        ):
             raise ConversionError("Thread and batch limits must be at least 1.")
         if (
             args.engine == "transformers"
