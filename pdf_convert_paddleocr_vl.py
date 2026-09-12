@@ -45,6 +45,8 @@ from pdf_page_selection import PageSelectionError
 ENGINE_CHOICES = ("paddle", "transformers")
 PIPELINE_VERSION_CHOICES = ("v1", "v1.5", "v1.6")
 PIPELINE_ARGS = ("engine", "device", "pipeline_version")
+HELP_FLAGS = frozenset(("-h", "--help"))
+TERMINATION_SIGNALS = (signal.SIGINT, signal.SIGHUP, signal.SIGTERM)
 DEFAULT_THREADS = 4
 LOCK_PATH = Path(tempfile.gettempdir()) / f"pdf_convert_paddleocr_vl-{os.getuid()}.lock"
 WORKER_ENV = "PDF_CONVERT_PADDLEOCR_VL_WORKER"
@@ -91,28 +93,39 @@ def _terminate_process_group(worker: subprocess.Popen[bytes]) -> None:
     worker.wait()
 
 
+def _run_worker(argv: list[str], lock) -> int:
+    env = os.environ.copy()
+    env[WORKER_ENV] = "1"
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, TERMINATION_SIGNALS)
+    worker = None
+    try:
+        worker = subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), *argv],
+            env=env,
+            pass_fds=(lock.fileno(),),
+            start_new_session=True,
+        )
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        return worker.wait()
+    except KeyboardInterrupt:
+        return 130
+    finally:
+        signal.pthread_sigmask(signal.SIG_BLOCK, TERMINATION_SIGNALS)
+        if worker is not None and worker.returncode != 0:
+            _terminate_process_group(worker)
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
+
 def _supervise(argv: list[str]) -> int:
+    if HELP_FLAGS.intersection(argv):
+        return execute(PaddleOcrVlBackend())
     try:
         lock = _conversion_lock()
     except ConversionError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-
     with lock:
-        env = os.environ.copy()
-        env[WORKER_ENV] = "1"
-        worker = subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve()), *argv],
-            env=env,
-            start_new_session=True,
-        )
-        try:
-            return worker.wait()
-        except KeyboardInterrupt:
-            return 130
-        finally:
-            if worker.returncode != 0:
-                _terminate_process_group(worker)
+        return _run_worker(argv, lock)
 
 
 def _pipeline_kwargs(args: argparse.Namespace) -> dict[str, object]:
