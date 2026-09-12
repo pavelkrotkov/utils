@@ -53,6 +53,23 @@ def test_worker_inherits_lock_fd(tmp_path, monkeypatch):
     assert len(popen.call_args.kwargs["pass_fds"]) == 1
 
 
+def test_worker_restores_termination_signals(monkeypatch):
+    pthread_sigmask = mock.Mock()
+    set_signal = mock.Mock()
+    monkeypatch.setattr(paddle.signal, "pthread_sigmask", pthread_sigmask)
+    monkeypatch.setattr(paddle.signal, "signal", set_signal)
+
+    paddle._prepare_worker_signals()
+
+    pthread_sigmask.assert_called_once_with(
+        paddle.signal.SIG_UNBLOCK, paddle.TERMINATION_SIGNALS
+    )
+    assert set_signal.call_args_list == [
+        mock.call(signum, paddle.signal.default_int_handler)
+        for signum in paddle.TERMINATION_SIGNALS
+    ]
+
+
 def test_lock_recovers_after_holder_is_killed(tmp_path, monkeypatch):
     lock_path = tmp_path / "lock"
     holder = subprocess.Popen(
