@@ -38,6 +38,7 @@ def test_help_bypasses_active_lock(tmp_path, monkeypatch):
     monkeypatch.setattr(paddle.subprocess, "Popen", popen)
     with paddle._conversion_lock():
         assert paddle._supervise(["--help"]) == 0
+        assert paddle._supervise(["--", "--help"]) == 1
     execute.assert_called_once()
     popen.assert_not_called()
 
