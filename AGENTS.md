@@ -73,7 +73,7 @@ Repository scripts:
 - `pdf_convert_llamaparse.py` uses LlamaParse (LlamaCloud) for hosted parsing.
 - `pdf_convert_pymupdf4llm.py` uses PyMuPDF4LLM for local Markdown conversion.
 - `pdf_convert_opendataloader.py` uses OpenDataLoader PDF for local Markdown conversion (requires Java 11+); referenced image assets are copied next to the output file.
-- `pdf_convert_paddleocr_vl.py` uses the PaddleOCR-VL vision-language pipeline for local Markdown conversion; downloads models on first run, merges pages via `restructure_pages`, and forces OMP/BLAS/Paddle thread pools to a small default for resource safety.
+- `pdf_convert_paddleocr_vl.py` uses the PaddleOCR-VL vision-language pipeline for local Markdown conversion; downloads models on first run, streams each page directly to Markdown without cross-page restructuring, and forces OMP/BLAS/Paddle thread pools to a small default for resource safety.
 - `pdf_convert_mineru.py` wraps the `mineru` CLI for local Markdown conversion; defaults to the CPU-friendly `pipeline` backend (`-b vlm-engine` for the MinerU 2.5 Pro VLM) and forces OMP/BLAS thread pools to a small default for resource safety.
 - `audio_folder_to_m4b.py` converts folders of audio tracks into chaptered M4B audiobooks via ffmpeg (one chapter per track, natural-sorted, with embedded cover art); probes each track once for duration plus audio-stream identity and skips unreadable or audio-less tracks; `.m4b` is output-only, never an accepted input.
 - `audio_transcribe_openai.sh` uses OpenAI's `/v1/audio/transcriptions` API and can downsample large files.

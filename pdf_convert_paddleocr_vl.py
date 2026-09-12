@@ -8,7 +8,8 @@ Convert a local PDF to Markdown using PaddleOCR-VL.
 The first run downloads the layout and VLM models automatically. Defaults are
 conservative for a 16 GB Apple Silicon Mac: 4 CPU threads, page/layout/VLM
 batches of 1, and asynchronous queues off. Thread limits reduce contention;
-batch and queue limits are what bound memory-bearing concurrency.
+batch and queue limits bound memory-bearing concurrency. Results stream directly
+to Markdown without cross-page restructuring.
 
 Usage:
     uv run ./pdf_convert_paddleocr_vl.py input.pdf
@@ -244,28 +245,27 @@ class PaddleOcrVlBackend(Backend):
         except Exception as exc:
             raise ConversionError(f"Failed to initialize PaddleOCR-VL pipeline: {exc}") from exc
 
-        try:
-            pages_results = list(pipeline.predict(input=str(input_pdf)))
-        except Exception as exc:
-            raise ConversionError(f"PaddleOCR-VL prediction failed: {exc}") from exc
-
-        if not pages_results:
-            raise ConversionError("PaddleOCR-VL returned no results.")
-
         save_dir = request.workspace / "markdown"
+        markdown_path = save_dir / f"{request.pdf_path.stem}.md"
+        page_count = 0
         try:
-            merged_results = pipeline.restructure_pages(
-                pages_results,
-                merge_tables=True,
-                relevel_titles=True,
-                concatenate_pages=True,
-            )
             save_dir.mkdir(parents=True, exist_ok=True)
-            for result in merged_results:
-                result.save_to_markdown(save_path=str(save_dir))
+            with markdown_path.open("w", encoding="utf-8") as output:
+                for result in pipeline.predict_iter(input=str(input_pdf)):
+                    page_count += 1
+                    markdown = result.markdown
+                    text = markdown["markdown_texts"]
+                    for image_ref, image in markdown.get("markdown_images", {}).items():
+                        text = text.replace(image_ref, f"page_{page_count}/{image_ref}")
+                        image_path = save_dir / f"page_{page_count}/{image_ref}"
+                        image_path.parent.mkdir(parents=True, exist_ok=True)
+                        image.save(image_path)
+                    output.write(text + "\n\n")
         except Exception as exc:
-            raise ConversionError(f"Saving Markdown failed: {exc}") from exc
+            raise ConversionError(f"PaddleOCR-VL conversion failed: {exc}") from exc
 
+        if not page_count:
+            raise ConversionError("PaddleOCR-VL returned no results.")
         return MarkdownDirectory(save_dir, expected_stem=request.pdf_path.stem)
 
 
