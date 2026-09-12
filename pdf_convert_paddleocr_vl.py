@@ -8,9 +8,8 @@ Convert a local PDF to Markdown using PaddleOCR-VL.
 The first run downloads the layout and VLM models automatically. Defaults are
 conservative for a 16 GB Apple Silicon Mac: 4 CPU threads, page/layout/VLM
 batches of 1, and asynchronous queues off. Thread limits reduce contention;
-batch and queue limits are what bound memory-bearing concurrency. Page results
-stream directly to Markdown, so cross-page table merging/title releveling is
-skipped rather than retaining the whole document in memory.
+batch and queue limits bound memory-bearing concurrency. Results stream directly
+to Markdown without cross-page restructuring.
 
 Usage:
     uv run ./pdf_convert_paddleocr_vl.py input.pdf
@@ -257,9 +256,8 @@ class PaddleOcrVlBackend(Backend):
                     markdown = result.markdown
                     markdown_text = markdown["markdown_texts"]
                     for image_ref, image in markdown.get("markdown_images", {}).items():
-                        relative_path = f"page_{page_count}/{image_ref}"
-                        markdown_text = markdown_text.replace(image_ref, relative_path)
-                        image_path = save_dir / relative_path
+                        markdown_text = markdown_text.replace(image_ref, f"page_{page_count}/{image_ref}")
+                        image_path = save_dir / f"page_{page_count}/{image_ref}"
                         image_path.parent.mkdir(parents=True, exist_ok=True)
                         image.save(image_path)
                     output.write(markdown_text + "\n\n")
