@@ -61,9 +61,7 @@ def test_worker_restores_termination_signals(monkeypatch):
 
     paddle._prepare_worker_signals()
 
-    pthread_sigmask.assert_called_once_with(
-        paddle.signal.SIG_UNBLOCK, paddle.TERMINATION_SIGNALS
-    )
+    pthread_sigmask.assert_called_once_with(paddle.signal.SIG_UNBLOCK, paddle.TERMINATION_SIGNALS)
     assert set_signal.call_args_list == [
         mock.call(signum, paddle.signal.default_int_handler)
         for signum in paddle.TERMINATION_SIGNALS
