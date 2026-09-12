@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # /// script
-# dependencies = ["paddlepaddle>=3.2", "paddleocr[doc-parser]>=3.6", "pypdf"]
+# dependencies = ["paddlepaddle>=3.2", "paddleocr[doc-parser]>=3.6", "pypdf", "psutil>=5.9"]
 # ///
 """
 Convert a local PDF to Markdown using PaddleOCR-VL.
@@ -16,6 +16,8 @@ Usage:
     uv run ./pdf_convert_paddleocr_vl.py input.pdf --page-range 1-5
     uv run ./pdf_convert_paddleocr_vl.py input.pdf --page-batch-size 2 --layout-batch-size 2 --vlm-batch-size 2 --queues
     ./pdf_convert_paddleocr_vl.py input.pdf --threads 4 --device cpu
+    uv run ./pdf_convert_paddleocr_vl.py input.pdf --memory-interval 10 --memory-abort-percent 90
+    uv run ./pdf_convert_paddleocr_vl.py input.pdf --mlx-vlm-url http://localhost:8111/
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ from pdf_convert_run import (
     ConversionRequest,
     MarkdownDirectory,
     Outcome,
+    build_parser,
     execute,
     require_module,
 )
@@ -52,6 +55,7 @@ HELP_FLAGS = frozenset(("-h", "--help"))
 TERMINATION_SIGNALS = (signal.SIGINT, signal.SIGHUP, signal.SIGTERM)
 DEFAULT_THREADS = 4  # PaddleOCR defaults CPU inference to 10.
 DEFAULT_BATCH_SIZE = 1  # PaddleX defaults page/layout batches to 64/8.
+DEFAULT_MEMORY_POLL_SECONDS = 5
 LOCK_PATH = Path.home() / ".pdf_convert_paddleocr_vl.lock"
 WORKER_ENV = "PDF_CONVERT_PADDLEOCR_VL_WORKER"
 # Thread pool sizes read by OpenMP, BLAS libraries, NumExpr, PaddlePaddle,
@@ -103,7 +107,39 @@ def _prepare_worker_signals() -> None:
         signal.signal(signum, signal.default_int_handler)
 
 
-def _run_worker(argv: list[str], lock) -> int:
+def _wait_for_worker(worker: subprocess.Popen[bytes], args: argparse.Namespace) -> int:
+    interval = args.memory_interval or (
+        DEFAULT_MEMORY_POLL_SECONDS if args.memory_abort_percent is not None else 0
+    )
+    if not interval:
+        return worker.wait()
+
+    psutil = require_module("psutil", "psutil")
+    process = psutil.Process(worker.pid)
+    while True:
+        try:
+            return worker.wait(timeout=interval)
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            rss = process.memory_info().rss
+        except psutil.NoSuchProcess:
+            return worker.wait()
+        memory = psutil.virtual_memory()
+        print(
+            f"INFO: Memory worker_rss={rss / 2**30:.2f} GiB "
+            f"system={memory.percent:.1f}% used available={memory.available / 2**30:.2f} GiB"
+        )
+        if args.memory_abort_percent is not None and memory.percent >= args.memory_abort_percent:
+            print(
+                f"WARNING: System memory reached {memory.percent:.1f}% "
+                f"(abort threshold {args.memory_abort_percent:.1f}%); stopping conversion.",
+                file=sys.stderr,
+            )
+            raise ConversionError("Memory abort threshold reached.")
+
+
+def _run_worker(argv: list[str], lock, args: argparse.Namespace) -> int:
     env = os.environ.copy()
     env[WORKER_ENV] = "1"
     previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, TERMINATION_SIGNALS)
@@ -119,7 +155,7 @@ def _run_worker(argv: list[str], lock) -> int:
         except OSError as exc:
             raise ConversionError(f"Failed to start PaddleOCR-VL worker: {exc}") from exc
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
-        return worker.wait()
+        return _wait_for_worker(worker, args)
     except KeyboardInterrupt:
         return 130
     finally:
@@ -133,23 +169,33 @@ def _supervise(argv: list[str]) -> int:
     help_args = argv[: argv.index("--")] if "--" in argv else argv
     if HELP_FLAGS.intersection(help_args):
         return execute(PaddleOcrVlBackend())
+    backend = PaddleOcrVlBackend()
+    args = build_parser(backend).parse_args(argv)
     try:
         lock = _conversion_lock()
         with lock:
-            return _run_worker(argv, lock)
+            return _run_worker(argv, lock, args)
     except ConversionError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
 
 def _pipeline_kwargs(args: argparse.Namespace) -> dict[str, object]:
-    return {
+    kwargs: dict[str, object] = {
         "engine": args.engine,
         "device": args.device,
         "pipeline_version": args.pipeline_version,
         "cpu_threads": args.threads,
         "use_queues": args.queues,  # PaddleX defaults asynchronous queues on.
     }
+    mlx_vlm_url = getattr(args, "mlx_vlm_url", None)
+    if mlx_vlm_url:
+        kwargs.update(
+            vl_rec_backend="mlx-vlm-server",
+            vl_rec_server_url=mlx_vlm_url,
+            vl_rec_api_model_name=f"PaddlePaddle/{PIPELINE_NAMES[args.pipeline_version]}",
+        )
+    return kwargs
 
 
 def _resource_config(paddlex, args: argparse.Namespace):
@@ -158,6 +204,19 @@ def _resource_config(paddlex, args: argparse.Namespace):
     config["SubModules"]["LayoutDetection"]["batch_size"] = args.layout_batch_size  # upstream: 8
     config["SubModules"]["VLRecognition"]["batch_size"] = args.vlm_batch_size  # upstream: -1
     return config
+
+
+def _log_runtime(paddle, args: argparse.Namespace, device: str) -> None:
+    paddle_support = "cuda" if paddle.device.is_compiled_with_cuda() else "cpu-only"
+    vlm_backend = "mlx-vlm-server" if getattr(args, "mlx_vlm_url", None) else "native"
+    print(
+        f"INFO: PaddleOCR-VL device={device} engine={args.engine or 'paddle'} "
+        f"vlm_backend={vlm_backend} paddle={paddle_support} "
+        f"model={PIPELINE_NAMES[args.pipeline_version]} threads={args.threads} "
+        f"batches={getattr(args, 'page_batch_size', 1)}/"
+        f"{getattr(args, 'layout_batch_size', 1)}/{getattr(args, 'vlm_batch_size', 1)} "
+        f"queues={'on' if args.queues else 'off'}"
+    )
 
 
 def _input_pdf(request: ConversionRequest) -> Path:
@@ -212,6 +271,23 @@ class PaddleOcrVlBackend(Backend):
             default=DEFAULT_PIPELINE_VERSION,
             help=f"PaddleOCR-VL pipeline version (default: {DEFAULT_PIPELINE_VERSION})",
         )
+        parser.add_argument(
+            "--mlx-vlm-url",
+            help="delegate VLM recognition to an external MLX-VLM server",
+        )
+        parser.add_argument(
+            "--memory-interval",
+            type=float,
+            default=0,
+            metavar="SECONDS",
+            help="periodic worker/system memory report interval; 0 disables reports",
+        )
+        parser.add_argument(
+            "--memory-abort-percent",
+            type=float,
+            metavar="PERCENT",
+            help="abort when system memory usage reaches this percentage",
+        )
 
     def validate(self, args: argparse.Namespace) -> None:
         if (
@@ -230,15 +306,26 @@ class PaddleOcrVlBackend(Backend):
             and args.device.split(":", 1)[0] not in ("cpu", "gpu")
         ):
             raise ConversionError("--engine transformers supports only cpu or gpu devices.")
+        if args.memory_interval < 0:
+            raise ConversionError("--memory-interval cannot be negative.")
+        if args.memory_abort_percent is not None and not 0 < args.memory_abort_percent <= 100:
+            raise ConversionError("--memory-abort-percent must be between 0 and 100.")
+        if args.mlx_vlm_url and not args.mlx_vlm_url.startswith(("http://", "https://")):
+            raise ConversionError("--mlx-vlm-url must use http:// or https://.")
         apply_thread_limit(args.threads)
 
     def convert(self, request: ConversionRequest) -> Outcome:
         args = request.args
         paddleocr = require_module("paddleocr", "paddleocr[doc-parser]")
         paddlex = require_module("paddlex.inference", "paddleocr[doc-parser]")
+        paddle = require_module("paddle", "paddlepaddle")
+        device_utils = require_module("paddlex.utils.device", "paddleocr[doc-parser]")
         pipeline_kwargs = _pipeline_kwargs(args)
+        device = args.device or device_utils.get_default_device()
+        pipeline_kwargs["device"] = device
         pipeline_kwargs["paddlex_config"] = _resource_config(paddlex, args)
         input_pdf = _input_pdf(request)
+        _log_runtime(paddle, args, device)
 
         try:
             pipeline = paddleocr.PaddleOCRVL(**pipeline_kwargs)
