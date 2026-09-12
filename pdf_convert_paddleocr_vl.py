@@ -172,6 +172,7 @@ def _supervise(argv: list[str]) -> int:
     backend = PaddleOcrVlBackend()
     args = build_parser(backend).parse_args(argv)
     try:
+        backend.validate(args)
         lock = _conversion_lock()
         with lock:
             return _run_worker(argv, lock, args)
@@ -230,6 +231,19 @@ def _input_pdf(request: ConversionRequest) -> Path:
         raise ConversionError(str(exc)) from exc
     print(f"INFO: Extracted {len(request.selection)} pages for parsing.")
     return path
+
+
+def _validate_memory_args(args: argparse.Namespace) -> None:
+    if args.memory_interval < 0:
+        raise ConversionError("--memory-interval cannot be negative.")
+    threshold = args.memory_abort_percent
+    if threshold is not None and not 0 < threshold <= 100:
+        raise ConversionError("--memory-abort-percent must be between 0 and 100.")
+
+
+def _validate_mlx_url(url: str | None) -> None:
+    if url and not url.startswith(("http://", "https://")):
+        raise ConversionError("--mlx-vlm-url must use http:// or https://.")
 
 
 class PaddleOcrVlBackend(Backend):
@@ -306,12 +320,8 @@ class PaddleOcrVlBackend(Backend):
             and args.device.split(":", 1)[0] not in ("cpu", "gpu")
         ):
             raise ConversionError("--engine transformers supports only cpu or gpu devices.")
-        if args.memory_interval < 0:
-            raise ConversionError("--memory-interval cannot be negative.")
-        if args.memory_abort_percent is not None and not 0 < args.memory_abort_percent <= 100:
-            raise ConversionError("--memory-abort-percent must be between 0 and 100.")
-        if args.mlx_vlm_url and not args.mlx_vlm_url.startswith(("http://", "https://")):
-            raise ConversionError("--mlx-vlm-url must use http:// or https://.")
+        _validate_memory_args(args)
+        _validate_mlx_url(args.mlx_vlm_url)
         apply_thread_limit(args.threads)
 
     def convert(self, request: ConversionRequest) -> Outcome:
