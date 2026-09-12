@@ -22,8 +22,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import os
+import signal
+import subprocess
 import sys
+from pathlib import Path
 
 from pdf_convert_run import (
     Backend,
@@ -38,7 +43,12 @@ from pdf_page_selection import PageSelectionError
 
 ENGINE_CHOICES = ("paddle", "transformers")
 PIPELINE_VERSION_CHOICES = ("v1", "v1.5", "v1.6")
+PIPELINE_ARGS = ("engine", "device", "pipeline_version")
+HELP_FLAGS = frozenset(("-h", "--help"))
+TERMINATION_SIGNALS = (signal.SIGINT, signal.SIGHUP, signal.SIGTERM)
 DEFAULT_THREADS = 4
+LOCK_PATH = Path.home() / ".pdf_convert_paddleocr_vl.lock"
+WORKER_ENV = "PDF_CONVERT_PADDLEOCR_VL_WORKER"
 # Thread pool sizes read by OpenMP, BLAS libraries, NumExpr, PaddlePaddle,
 # and Accelerate (macOS).
 THREAD_LIMIT_ENV_VARS = (
@@ -55,6 +65,93 @@ def apply_thread_limit(threads: int) -> None:
     """Force numeric thread pools before the framework libraries load."""
     for env_var in THREAD_LIMIT_ENV_VARS:
         os.environ[env_var] = str(threads)
+
+
+def _conversion_lock():
+    lock = LOCK_PATH.open("a")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        lock.close()
+        raise ConversionError("Another PaddleOCR-VL conversion is already running.") from exc
+    except Exception:
+        lock.close()
+        raise
+    return lock
+
+
+def _terminate_process_group(worker: subprocess.Popen[bytes]) -> None:
+    try:
+        os.killpg(worker.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    with contextlib.suppress(subprocess.TimeoutExpired, KeyboardInterrupt):
+        worker.wait(timeout=2)
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(worker.pid, signal.SIGKILL)
+    worker.wait()
+
+
+def _prepare_worker_signals() -> None:
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, TERMINATION_SIGNALS)
+    for signum in TERMINATION_SIGNALS:
+        signal.signal(signum, signal.default_int_handler)
+
+
+def _run_worker(argv: list[str], lock) -> int:
+    env = os.environ.copy()
+    env[WORKER_ENV] = "1"
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, TERMINATION_SIGNALS)
+    worker = None
+    try:
+        try:
+            worker = subprocess.Popen(
+                [sys.executable, str(Path(__file__).resolve()), *argv],
+                env=env,
+                pass_fds=(lock.fileno(),),
+                start_new_session=True,
+            )
+        except OSError as exc:
+            raise ConversionError(f"Failed to start PaddleOCR-VL worker: {exc}") from exc
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        return worker.wait()
+    except KeyboardInterrupt:
+        return 130
+    finally:
+        signal.pthread_sigmask(signal.SIG_BLOCK, TERMINATION_SIGNALS)
+        if worker is not None and worker.returncode != 0:
+            _terminate_process_group(worker)
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
+
+def _supervise(argv: list[str]) -> int:
+    help_args = argv[: argv.index("--")] if "--" in argv else argv
+    if HELP_FLAGS.intersection(help_args):
+        return execute(PaddleOcrVlBackend())
+    try:
+        lock = _conversion_lock()
+        with lock:
+            return _run_worker(argv, lock)
+    except ConversionError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+
+def _pipeline_kwargs(args: argparse.Namespace) -> dict[str, object]:
+    return {name: getattr(args, name) for name in PIPELINE_ARGS if getattr(args, name) is not None}
+
+
+def _input_pdf(request: ConversionRequest) -> Path:
+    if request.selection is None:
+        return request.pdf_path
+    try:
+        path = request.selection.as_extracted_pdf(
+            request.pdf_path, request.workspace / f"{request.pdf_path.stem}.pdf"
+        )
+    except PageSelectionError as exc:
+        raise ConversionError(str(exc)) from exc
+    print(f"INFO: Extracted {len(request.selection)} pages for parsing.")
+    return path
 
 
 class PaddleOcrVlBackend(Backend):
@@ -95,26 +192,8 @@ class PaddleOcrVlBackend(Backend):
     def convert(self, request: ConversionRequest) -> Outcome:
         args = request.args
         paddleocr = require_module("paddleocr", "paddleocr[doc-parser]")
-
-        pipeline_kwargs: dict[str, object] = {}
-        if args.engine is not None:
-            pipeline_kwargs["engine"] = args.engine
-        if args.device is not None:
-            pipeline_kwargs["device"] = args.device
-        if args.pipeline_version is not None:
-            pipeline_kwargs["pipeline_version"] = args.pipeline_version
-
-        input_pdf = request.pdf_path
-        if request.selection is not None:
-            # PaddleOCR-VL takes no page argument, so the subset becomes its input.
-            try:
-                input_pdf = request.selection.as_extracted_pdf(
-                    request.pdf_path,
-                    request.workspace / f"{request.pdf_path.stem}.pdf",
-                )
-            except PageSelectionError as exc:
-                raise ConversionError(str(exc)) from exc
-            print(f"INFO: Extracted {len(request.selection)} pages for parsing.")
+        pipeline_kwargs = _pipeline_kwargs(args)
+        input_pdf = _input_pdf(request)
 
         try:
             pipeline = paddleocr.PaddleOCRVL(**pipeline_kwargs)
@@ -147,7 +226,12 @@ class PaddleOcrVlBackend(Backend):
 
 
 def main() -> None:
-    sys.exit(execute(PaddleOcrVlBackend()))
+    if os.environ.pop(WORKER_ENV, None):
+        _prepare_worker_signals()
+        sys.exit(execute(PaddleOcrVlBackend()))
+    signal.signal(signal.SIGHUP, signal.default_int_handler)
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
+    sys.exit(_supervise(sys.argv[1:]))
 
 
 if __name__ == "__main__":
