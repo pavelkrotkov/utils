@@ -23,21 +23,18 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import contextlib
-import fcntl
 import os
 import signal
-import subprocess
 import sys
 from pathlib import Path
 
+import pdf_paddleocr_supervisor as supervisor
 from pdf_convert_run import (
     Backend,
     ConversionError,
     ConversionRequest,
     MarkdownDirectory,
     Outcome,
-    build_parser,
     execute,
     require_module,
 )
@@ -46,139 +43,21 @@ from pdf_page_selection import PageSelectionError
 ENGINE_CHOICES = ("paddle", "transformers")
 PIPELINE_VERSION_CHOICES = ("v1", "v1.5", "v1.6")
 DEFAULT_PIPELINE_VERSION = "v1.6"
-PIPELINE_NAMES = {
-    "v1": "PaddleOCR-VL",
-    "v1.5": "PaddleOCR-VL-1.5",
-    "v1.6": "PaddleOCR-VL-1.6",
-}
-HELP_FLAGS = frozenset(("-h", "--help"))
-TERMINATION_SIGNALS = (signal.SIGINT, signal.SIGHUP, signal.SIGTERM)
+PIPELINE_NAMES = {"v1": "PaddleOCR-VL", "v1.5": "PaddleOCR-VL-1.5", "v1.6": "PaddleOCR-VL-1.6"}
 DEFAULT_THREADS = 4  # PaddleOCR defaults CPU inference to 10.
 DEFAULT_BATCH_SIZE = 1  # PaddleX defaults page/layout batches to 64/8.
-DEFAULT_MEMORY_POLL_SECONDS = 5
-LOCK_PATH = Path.home() / ".pdf_convert_paddleocr_vl.lock"
-WORKER_ENV = "PDF_CONVERT_PADDLEOCR_VL_WORKER"
 # Thread pool sizes read by OpenMP, BLAS libraries, NumExpr, PaddlePaddle,
 # and Accelerate (macOS).
 THREAD_LIMIT_ENV_VARS = (
-    "OMP_NUM_THREADS",
-    "OPENBLAS_NUM_THREADS",
-    "MKL_NUM_THREADS",
-    "NUMEXPR_NUM_THREADS",
-    "CPU_NUM",
-    "VECLIB_MAXIMUM_THREADS",
-)
+    "OMP_NUM_THREADS OPENBLAS_NUM_THREADS MKL_NUM_THREADS NUMEXPR_NUM_THREADS "
+    "CPU_NUM VECLIB_MAXIMUM_THREADS"
+).split()
 
 
 def apply_thread_limit(threads: int) -> None:
     """Force numeric thread pools before the framework libraries load."""
     for env_var in THREAD_LIMIT_ENV_VARS:
         os.environ[env_var] = str(threads)
-
-
-def _conversion_lock():
-    lock = LOCK_PATH.open("a")
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError as exc:
-        lock.close()
-        raise ConversionError("Another PaddleOCR-VL conversion is already running.") from exc
-    except Exception:
-        lock.close()
-        raise
-    return lock
-
-
-def _terminate_process_group(worker: subprocess.Popen[bytes]) -> None:
-    try:
-        os.killpg(worker.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-    with contextlib.suppress(subprocess.TimeoutExpired, KeyboardInterrupt):
-        worker.wait(timeout=2)
-    with contextlib.suppress(ProcessLookupError):
-        os.killpg(worker.pid, signal.SIGKILL)
-    worker.wait()
-
-
-def _prepare_worker_signals() -> None:
-    signal.pthread_sigmask(signal.SIG_UNBLOCK, TERMINATION_SIGNALS)
-    for signum in TERMINATION_SIGNALS:
-        signal.signal(signum, signal.default_int_handler)
-
-
-def _wait_for_worker(worker: subprocess.Popen[bytes], args: argparse.Namespace) -> int:
-    interval = args.memory_interval or (
-        DEFAULT_MEMORY_POLL_SECONDS if args.memory_abort_percent is not None else 0
-    )
-    if not interval:
-        return worker.wait()
-
-    psutil = require_module("psutil", "psutil")
-    process = psutil.Process(worker.pid)
-    while True:
-        try:
-            return worker.wait(timeout=interval)
-        except subprocess.TimeoutExpired:
-            pass
-        try:
-            rss = process.memory_info().rss
-        except psutil.NoSuchProcess:
-            return worker.wait()
-        memory = psutil.virtual_memory()
-        print(
-            f"INFO: Memory worker_rss={rss / 2**30:.2f} GiB "
-            f"system={memory.percent:.1f}% used available={memory.available / 2**30:.2f} GiB"
-        )
-        if args.memory_abort_percent is not None and memory.percent >= args.memory_abort_percent:
-            print(
-                f"WARNING: System memory reached {memory.percent:.1f}% "
-                f"(abort threshold {args.memory_abort_percent:.1f}%); stopping conversion.",
-                file=sys.stderr,
-            )
-            raise ConversionError("Memory abort threshold reached.")
-
-
-def _run_worker(argv: list[str], lock, args: argparse.Namespace) -> int:
-    env = os.environ.copy()
-    env[WORKER_ENV] = "1"
-    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, TERMINATION_SIGNALS)
-    worker = None
-    try:
-        try:
-            worker = subprocess.Popen(
-                [sys.executable, str(Path(__file__).resolve()), *argv],
-                env=env,
-                pass_fds=(lock.fileno(),),
-                start_new_session=True,
-            )
-        except OSError as exc:
-            raise ConversionError(f"Failed to start PaddleOCR-VL worker: {exc}") from exc
-        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
-        return _wait_for_worker(worker, args)
-    except KeyboardInterrupt:
-        return 130
-    finally:
-        signal.pthread_sigmask(signal.SIG_BLOCK, TERMINATION_SIGNALS)
-        if worker is not None and worker.returncode != 0:
-            _terminate_process_group(worker)
-        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
-
-
-def _supervise(argv: list[str]) -> int:
-    help_args = argv[: argv.index("--")] if "--" in argv else argv
-    if HELP_FLAGS.intersection(help_args):
-        return execute(PaddleOcrVlBackend())
-    backend = PaddleOcrVlBackend()
-    args = build_parser(backend).parse_args(argv)
-    try:
-        backend.validate(args)
-        lock = _conversion_lock()
-        with lock:
-            return _run_worker(argv, lock, args)
-    except ConversionError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 1
 
 
 def _pipeline_kwargs(args: argparse.Namespace) -> dict[str, object]:
@@ -251,75 +130,29 @@ class PaddleOcrVlBackend(Backend):
     description = "Convert a PDF to Markdown using PaddleOCR-VL."
 
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
-        parser.add_argument(
-            "--threads",
-            type=int,
-            default=DEFAULT_THREADS,
-            help=f"CPU inference/thread-pool limit (default: {DEFAULT_THREADS})",
-        )
-        for name, label in (("page", "PDF page"), ("layout", "layout"), ("vlm", "VLM")):
-            parser.add_argument(
-                f"--{name}-batch-size",
-                type=int,
-                default=DEFAULT_BATCH_SIZE,
-                help=f"{label} batch size (default: {DEFAULT_BATCH_SIZE})",
-            )
-        # ponytail: upstream exposes queue enablement but not its hard-coded 64-batch depth.
-        parser.add_argument(
-            "--queues",
-            action="store_true",
-            help="enable PaddleX async prefetch queues (default: off; upstream buffers 64 batches)",
-        )
-        parser.add_argument(
-            "--engine",
-            choices=ENGINE_CHOICES,
-            help="VLM inference engine (default: PaddleOCR's own default)",
-        )
-        parser.add_argument(
-            "--device",
-            help="Device passed to the pipeline, e.g. cpu or gpu:0",
-        )
-        parser.add_argument(
+        add = parser.add_argument
+        add("--threads", type=int, default=DEFAULT_THREADS, help="CPU inference/thread limit")
+        for name in ("page", "layout", "vlm"):
+            add(f"--{name}-batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+        add("--queues", action="store_true", help="enable PaddleX async prefetch queues")
+        add("--engine", choices=ENGINE_CHOICES, help="VLM inference engine")
+        add("--device", help="pipeline device, e.g. cpu or gpu:0")
+        add(
             "--pipeline-version",
             choices=PIPELINE_VERSION_CHOICES,
             default=DEFAULT_PIPELINE_VERSION,
-            help=f"PaddleOCR-VL pipeline version (default: {DEFAULT_PIPELINE_VERSION})",
         )
-        parser.add_argument(
-            "--mlx-vlm-url",
-            help="delegate VLM recognition to an external MLX-VLM server",
-        )
-        parser.add_argument(
-            "--memory-interval",
-            type=float,
-            default=0,
-            metavar="SECONDS",
-            help="periodic worker/system memory report interval; 0 disables reports",
-        )
-        parser.add_argument(
-            "--memory-abort-percent",
-            type=float,
-            metavar="PERCENT",
-            help="abort when system memory usage reaches this percentage",
-        )
+        add("--mlx-vlm-url", help="external MLX-VLM server URL")
+        add("--memory-interval", type=float, default=0, metavar="SECONDS")
+        add("--memory-abort-percent", type=float, metavar="PERCENT")
 
     def validate(self, args: argparse.Namespace) -> None:
-        if (
-            min(
-                args.threads,
-                args.page_batch_size,
-                args.layout_batch_size,
-                args.vlm_batch_size,
-            )
-            < 1
-        ):
+        limits = (args.threads, args.page_batch_size, args.layout_batch_size, args.vlm_batch_size)
+        if min(limits) < 1:
             raise ConversionError("Thread and batch limits must be at least 1.")
-        if (
-            args.engine == "transformers"
-            and args.device
-            and args.device.split(":", 1)[0] not in ("cpu", "gpu")
-        ):
-            raise ConversionError("--engine transformers supports only cpu or gpu devices.")
+        if args.engine == "transformers" and args.device:
+            if args.device.split(":", 1)[0] not in ("cpu", "gpu"):
+                raise ConversionError("--engine transformers supports only cpu or gpu devices.")
         _validate_memory_args(args)
         _validate_mlx_url(args.mlx_vlm_url)
         apply_thread_limit(args.threads)
@@ -367,12 +200,12 @@ class PaddleOcrVlBackend(Backend):
 
 
 def main() -> None:
-    if os.environ.pop(WORKER_ENV, None):
-        _prepare_worker_signals()
+    if os.environ.pop(supervisor.WORKER_ENV, None):
+        supervisor.prepare_worker_signals()
         sys.exit(execute(PaddleOcrVlBackend()))
     signal.signal(signal.SIGHUP, signal.default_int_handler)
     signal.signal(signal.SIGTERM, signal.default_int_handler)
-    sys.exit(_supervise(sys.argv[1:]))
+    sys.exit(supervisor.supervise(sys.argv[1:], PaddleOcrVlBackend(), Path(__file__).resolve()))
 
 
 if __name__ == "__main__":
