@@ -203,6 +203,7 @@ class PaddleOcrVlBackend(Backend):
 def main() -> None:
     if os.environ.pop(WORKER_ENV, None):
         sys.exit(execute(PaddleOcrVlBackend()))
+    signal.signal(signal.SIGHUP, signal.default_int_handler)
     signal.signal(signal.SIGTERM, signal.default_int_handler)
     sys.exit(_supervise(sys.argv[1:]))
 
