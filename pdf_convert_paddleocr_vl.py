@@ -93,6 +93,12 @@ def _terminate_process_group(worker: subprocess.Popen[bytes]) -> None:
     worker.wait()
 
 
+def _prepare_worker_signals() -> None:
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, TERMINATION_SIGNALS)
+    for signum in TERMINATION_SIGNALS:
+        signal.signal(signum, signal.default_int_handler)
+
+
 def _run_worker(argv: list[str], lock) -> int:
     env = os.environ.copy()
     env[WORKER_ENV] = "1"
@@ -218,6 +224,7 @@ class PaddleOcrVlBackend(Backend):
 
 def main() -> None:
     if os.environ.pop(WORKER_ENV, None):
+        _prepare_worker_signals()
         sys.exit(execute(PaddleOcrVlBackend()))
     signal.signal(signal.SIGHUP, signal.default_int_handler)
     signal.signal(signal.SIGTERM, signal.default_int_handler)
