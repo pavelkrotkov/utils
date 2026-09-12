@@ -44,6 +44,7 @@ from pdf_page_selection import PageSelectionError
 
 ENGINE_CHOICES = ("paddle", "transformers")
 PIPELINE_VERSION_CHOICES = ("v1", "v1.5", "v1.6")
+PIPELINE_ARGS = ("engine", "device", "pipeline_version")
 DEFAULT_THREADS = 4
 LOCK_PATH = Path(tempfile.gettempdir()) / f"pdf_convert_paddleocr_vl-{os.getuid()}.lock"
 WORKER_ENV = "PDF_CONVERT_PADDLEOCR_VL_WORKER"
@@ -114,6 +115,27 @@ def _supervise(argv: list[str]) -> int:
                 _terminate_process_group(worker)
 
 
+def _pipeline_kwargs(args: argparse.Namespace) -> dict[str, object]:
+    return {
+        name: getattr(args, name)
+        for name in PIPELINE_ARGS
+        if getattr(args, name) is not None
+    }
+
+
+def _input_pdf(request: ConversionRequest) -> Path:
+    if request.selection is None:
+        return request.pdf_path
+    try:
+        path = request.selection.as_extracted_pdf(
+            request.pdf_path, request.workspace / f"{request.pdf_path.stem}.pdf"
+        )
+    except PageSelectionError as exc:
+        raise ConversionError(str(exc)) from exc
+    print(f"INFO: Extracted {len(request.selection)} pages for parsing.")
+    return path
+
+
 class PaddleOcrVlBackend(Backend):
     name = "paddleocr_vl"
     description = "Convert a PDF to Markdown using PaddleOCR-VL."
@@ -152,26 +174,8 @@ class PaddleOcrVlBackend(Backend):
     def convert(self, request: ConversionRequest) -> Outcome:
         args = request.args
         paddleocr = require_module("paddleocr", "paddleocr[doc-parser]")
-
-        pipeline_kwargs: dict[str, object] = {}
-        if args.engine is not None:
-            pipeline_kwargs["engine"] = args.engine
-        if args.device is not None:
-            pipeline_kwargs["device"] = args.device
-        if args.pipeline_version is not None:
-            pipeline_kwargs["pipeline_version"] = args.pipeline_version
-
-        input_pdf = request.pdf_path
-        if request.selection is not None:
-            # PaddleOCR-VL takes no page argument, so the subset becomes its input.
-            try:
-                input_pdf = request.selection.as_extracted_pdf(
-                    request.pdf_path,
-                    request.workspace / f"{request.pdf_path.stem}.pdf",
-                )
-            except PageSelectionError as exc:
-                raise ConversionError(str(exc)) from exc
-            print(f"INFO: Extracted {len(request.selection)} pages for parsing.")
+        pipeline_kwargs = _pipeline_kwargs(args)
+        input_pdf = _input_pdf(request)
 
         try:
             pipeline = paddleocr.PaddleOCRVL(**pipeline_kwargs)
