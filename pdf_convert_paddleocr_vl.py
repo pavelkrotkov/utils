@@ -147,8 +147,19 @@ class PaddleOcrVlBackend(Backend):
             default=DEFAULT_PIPELINE_VERSION,
         )
         add("--mlx-vlm-url", help="external MLX-VLM server URL")
-        add("--memory-interval", type=float, default=0, metavar="SECONDS")
-        add("--memory-abort-percent", type=float, metavar="PERCENT")
+        add(
+            "--memory-interval",
+            type=float,
+            default=0,
+            metavar="SECONDS",
+            help="memory report interval; 0 disables reports; threshold alone polls every 5s",
+        )
+        add(
+            "--memory-abort-percent",
+            type=float,
+            metavar="PERCENT",
+            help="abort at this system-wide memory usage percentage",
+        )
 
     def validate(self, args: argparse.Namespace) -> None:
         limits = (args.threads, args.page_batch_size, args.layout_batch_size, args.vlm_batch_size)
