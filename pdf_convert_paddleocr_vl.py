@@ -48,10 +48,14 @@ DEFAULT_THREADS = 4  # PaddleOCR defaults CPU inference to 10.
 DEFAULT_BATCH_SIZE = 1  # PaddleX defaults page/layout batches to 64/8.
 # Thread pool sizes read by OpenMP, BLAS libraries, NumExpr, PaddlePaddle,
 # and Accelerate (macOS).
-THREAD_LIMIT_ENV_VARS = (
-    "OMP_NUM_THREADS OPENBLAS_NUM_THREADS MKL_NUM_THREADS NUMEXPR_NUM_THREADS "
-    "CPU_NUM VECLIB_MAXIMUM_THREADS"
-).split()
+THREAD_LIMIT_ENV_VARS = [
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "CPU_NUM",
+    "VECLIB_MAXIMUM_THREADS",
+]
 
 
 def apply_thread_limit(threads: int) -> None:
@@ -150,9 +154,12 @@ class PaddleOcrVlBackend(Backend):
         limits = (args.threads, args.page_batch_size, args.layout_batch_size, args.vlm_batch_size)
         if min(limits) < 1:
             raise ConversionError("Thread and batch limits must be at least 1.")
-        if args.engine == "transformers" and args.device:
-            if args.device.split(":", 1)[0] not in ("cpu", "gpu"):
-                raise ConversionError("--engine transformers supports only cpu or gpu devices.")
+        if (
+            args.engine == "transformers"
+            and args.device
+            and args.device.split(":", 1)[0] not in ("cpu", "gpu")
+        ):
+            raise ConversionError("--engine transformers supports only cpu or gpu devices.")
         _validate_memory_args(args)
         _validate_mlx_url(args.mlx_vlm_url)
         apply_thread_limit(args.threads)
