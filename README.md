@@ -101,14 +101,36 @@ PaddleOCR-VL (local vision-language parsing, downloads models on first run):
 uv run ./pdf_convert_paddleocr_vl.py input.pdf -o output.md
 uv run ./pdf_convert_paddleocr_vl.py input.pdf --page-range 1-5 --engine transformers
 uv run ./pdf_convert_paddleocr_vl.py input.pdf --page-batch-size 4 --layout-batch-size 4 --vlm-batch-size 4 --queues
+uv run ./pdf_convert_paddleocr_vl.py input.pdf --memory-interval 10 --memory-abort-percent 90
+uv run ./pdf_convert_paddleocr_vl.py input.pdf --mlx-vlm-url http://localhost:8111/
 ```
 
-Use `--engine transformers` for a torch-based backend (often faster on Apple Silicon).
-Defaults are conservative for a 16 GB Apple Silicon Mac: 4 CPU threads, page/layout/VLM
-batch sizes of 1, and asynchronous PaddleX queues disabled. `--threads` limits both
-PaddleOCR's CPU inference threads and OMP/BLAS thread pools; this reduces CPU contention
-but does not by itself cap memory. Raise batch sizes or enable `--queues` only explicitly
-on larger machines; PaddleX's asynchronous path can buffer up to 64 batches per stage.
+A normal run logs the resolved device, inference engine, Paddle CPU/CUDA support,
+model version, VLM backend, thread count, batch sizes, and queue setting before
+model initialization. `--engine transformers` selects the Transformers inference
+engine; it is not automatic Apple GPU acceleration.
+
+On Apple Silicon, the supported Apple GPU path delegates the VLM recognition stage
+to an external MLX-VLM service. Install `mlx-vlm>=0.3.11`, start
+`mlx_vlm.server --port 8111`, then pass `--mlx-vlm-url http://localhost:8111/`.
+The layout stage still runs locally through PaddlePaddle, which is normally CPU on
+the macOS CPU wheel. MLX uses Apple unified memory, so GPU allocations share the
+same physical RAM as the rest of the system.
+
+A conservative 16 GB M4 client command is:
+
+```bash
+uv run ./pdf_convert_paddleocr_vl.py input.pdf -o output.md --device cpu --mlx-vlm-url http://localhost:8111/ --threads 4 --memory-interval 10 --memory-abort-percent 90
+```
+
+Defaults remain page/layout/VLM batch sizes of 1 with asynchronous PaddleX queues
+disabled. `--threads` limits both PaddleOCR's CPU inference threads and OMP/BLAS
+thread pools; this reduces CPU contention but does not by itself cap memory.
+`--memory-interval` reports worker RSS plus system memory use periodically;
+`--memory-abort-percent` stops the worker when system usage reaches the configured
+percentage (and checks every 5 seconds when no report interval is set). Raise batch
+sizes or enable `--queues` only explicitly on larger machines; PaddleX's
+asynchronous path can buffer up to 64 batches per stage.
 
 MinerU (local; `pipeline` backend by default, `-b vlm-engine` for the MinerU 2.5
 Pro VLM):
