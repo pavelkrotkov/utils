@@ -73,11 +73,10 @@ def test_process_group_cleanup_reaches_descendants(tmp_path):
     worker = subprocess.Popen(
         [sys.executable, "-c", worker_code],
         stdout=subprocess.PIPE,
-        text=True,
         start_new_session=True,
     )
     assert worker.stdout is not None
-    assert worker.stdout.readline().strip() == "ready"
+    assert worker.stdout.readline().strip() == b"ready"
 
     paddle._terminate_process_group(worker)
     time.sleep(0.7)
