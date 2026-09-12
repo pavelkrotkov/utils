@@ -23,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import signal
 import sys
@@ -117,8 +118,8 @@ def _input_pdf(request: ConversionRequest) -> Path:
 
 
 def _validate_memory_args(args: argparse.Namespace) -> None:
-    if args.memory_interval < 0:
-        raise ConversionError("--memory-interval cannot be negative.")
+    if not math.isfinite(args.memory_interval) or args.memory_interval < 0:
+        raise ConversionError("--memory-interval must be finite and non-negative.")
     threshold = args.memory_abort_percent
     if threshold is not None and not 0 < threshold <= 100:
         raise ConversionError("--memory-abort-percent must be between 0 and 100.")
