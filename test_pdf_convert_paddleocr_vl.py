@@ -40,6 +40,50 @@ def test_safe_resource_defaults_reach_paddle():
     ) == (1, 1, 1)
 
 
+def test_mlx_backend_and_runtime_are_visible(capsys):
+    parser = argparse.ArgumentParser()
+    backend = paddle.PaddleOcrVlBackend()
+    backend.add_arguments(parser)
+    args = parser.parse_args(["--mlx-vlm-url", "http://localhost:8111/"])
+    paddle_runtime = mock.Mock()
+    paddle_runtime.device.is_compiled_with_cuda.return_value = False
+
+    kwargs = paddle._pipeline_kwargs(args)
+    paddle._log_runtime(paddle_runtime, args, "cpu")
+
+    assert kwargs["vl_rec_backend"] == "mlx-vlm-server"
+    assert kwargs["vl_rec_server_url"] == "http://localhost:8111/"
+    assert kwargs["vl_rec_api_model_name"] == "PaddlePaddle/PaddleOCR-VL-1.6"
+    log = capsys.readouterr().out
+    assert "device=cpu" in log
+    assert "engine=paddle" in log
+    assert "vlm_backend=mlx-vlm-server" in log
+    assert "paddle=cpu-only" in log
+    assert "model=PaddleOCR-VL-1.6" in log
+    assert "threads=4 batches=1/1/1 queues=off" in log
+
+
+def test_memory_threshold_aborts_worker(monkeypatch, capsys):
+    worker = mock.Mock(pid=42)
+    worker.wait.side_effect = subprocess.TimeoutExpired("worker", 1)
+    process = mock.Mock()
+    process.memory_info.return_value = argparse.Namespace(rss=2**30)
+    psutil = mock.Mock()
+    psutil.Process.return_value = process
+    psutil.virtual_memory.return_value = argparse.Namespace(percent=91.0, available=2**30)
+    psutil.NoSuchProcess = RuntimeError
+    monkeypatch.setattr(paddle, "require_module", lambda *_args: psutil)
+    args = argparse.Namespace(memory_interval=1, memory_abort_percent=90)
+
+    with pytest.raises(paddle.ConversionError, match="Memory abort threshold reached"):
+        paddle._wait_for_worker(worker, args)
+
+    captured = capsys.readouterr()
+    assert "worker_rss=1.00 GiB" in captured.out
+    assert "system=91.0% used" in captured.out
+    assert "WARNING: System memory reached 91.0%" in captured.err
+
+
 def test_streams_pages_without_retaining_results(tmp_path, monkeypatch):
     refs = []
 
