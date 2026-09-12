@@ -3,11 +3,17 @@ import subprocess
 import sys
 import time
 import weakref
+from pathlib import Path
 from unittest import mock
 
 import pytest
 
 import pdf_convert_paddleocr_vl as paddle
+import pdf_paddleocr_supervisor as supervisor
+
+
+def _supervise(argv):
+    return supervisor.supervise(argv, paddle.PaddleOcrVlBackend(), Path(paddle.__file__).resolve())
 
 
 def test_safe_resource_defaults_reach_paddle():
@@ -65,18 +71,19 @@ def test_mlx_backend_and_runtime_are_visible(capsys):
 
 def test_memory_threshold_aborts_worker(monkeypatch, capsys):
     worker = mock.Mock(pid=42)
-    worker.wait.side_effect = subprocess.TimeoutExpired("worker", 1)
+    worker.poll.return_value = None
     process = mock.Mock()
     process.memory_info.return_value = argparse.Namespace(rss=2**30)
     psutil = mock.Mock()
     psutil.Process.return_value = process
     psutil.virtual_memory.return_value = argparse.Namespace(percent=91.0, available=2**30)
     psutil.NoSuchProcess = RuntimeError
-    monkeypatch.setattr(paddle, "require_module", lambda *_args: psutil)
+    monkeypatch.setattr(supervisor, "require_module", lambda *_args: psutil)
+    monkeypatch.setattr(supervisor.time, "sleep", lambda _seconds: None)
     args = argparse.Namespace(memory_interval=1, memory_abort_percent=90)
 
     with pytest.raises(paddle.ConversionError, match="Memory abort threshold reached"):
-        paddle._wait_for_worker(worker, args)
+        supervisor.wait_for_worker(worker, args)
 
     captured = capsys.readouterr()
     assert "worker_rss=1.00 GiB" in captured.out
@@ -157,32 +164,32 @@ def test_interrupt_cleans_up_worker(tmp_path, monkeypatch):
     worker.wait.side_effect = KeyboardInterrupt
     worker.returncode = None
     cleanup = mock.Mock()
-    monkeypatch.setattr(paddle, "LOCK_PATH", tmp_path / "lock")
-    monkeypatch.setattr(paddle.subprocess, "Popen", mock.Mock(return_value=worker))
-    monkeypatch.setattr(paddle, "_terminate_process_group", cleanup)
+    monkeypatch.setattr(supervisor, "LOCK_PATH", tmp_path / "lock")
+    monkeypatch.setattr(supervisor.subprocess, "Popen", mock.Mock(return_value=worker))
+    monkeypatch.setattr(supervisor, "terminate_process_group", cleanup)
 
-    assert paddle._supervise(["input.pdf"]) == 130
+    assert _supervise(["input.pdf"]) == 130
     cleanup.assert_called_once_with(worker)
 
 
 def test_second_run_stops_before_spawning_worker(tmp_path, monkeypatch):
-    monkeypatch.setattr(paddle, "LOCK_PATH", tmp_path / "lock")
+    monkeypatch.setattr(supervisor, "LOCK_PATH", tmp_path / "lock")
     popen = mock.Mock()
-    monkeypatch.setattr(paddle.subprocess, "Popen", popen)
-    with paddle._conversion_lock():
-        assert paddle._supervise(["input.pdf"]) == 1
+    monkeypatch.setattr(supervisor.subprocess, "Popen", popen)
+    with supervisor.conversion_lock():
+        assert _supervise(["input.pdf"]) == 1
     popen.assert_not_called()
 
 
 def test_help_bypasses_active_lock(tmp_path, monkeypatch):
-    monkeypatch.setattr(paddle, "LOCK_PATH", tmp_path / "lock")
+    monkeypatch.setattr(supervisor, "LOCK_PATH", tmp_path / "lock")
     execute = mock.Mock(return_value=0)
     popen = mock.Mock()
-    monkeypatch.setattr(paddle, "execute", execute)
-    monkeypatch.setattr(paddle.subprocess, "Popen", popen)
-    with paddle._conversion_lock():
-        assert paddle._supervise(["--help"]) == 0
-        assert paddle._supervise(["--", "--help"]) == 1
+    monkeypatch.setattr(supervisor, "execute", execute)
+    monkeypatch.setattr(supervisor.subprocess, "Popen", popen)
+    with supervisor.conversion_lock():
+        assert _supervise(["--help"]) == 0
+        assert _supervise(["--", "--help"]) == 1
     execute.assert_called_once()
     popen.assert_not_called()
 
@@ -191,33 +198,37 @@ def test_worker_inherits_lock_fd(tmp_path, monkeypatch):
     worker = mock.Mock(returncode=0)
     worker.wait.return_value = 0
     popen = mock.Mock(return_value=worker)
-    monkeypatch.setattr(paddle, "LOCK_PATH", tmp_path / "lock")
-    monkeypatch.setattr(paddle.subprocess, "Popen", popen)
+    monkeypatch.setattr(supervisor, "LOCK_PATH", tmp_path / "lock")
+    monkeypatch.setattr(supervisor.subprocess, "Popen", popen)
 
-    assert paddle._supervise(["input.pdf"]) == 0
+    assert _supervise(["input.pdf"]) == 0
     assert len(popen.call_args.kwargs["pass_fds"]) == 1
 
 
 def test_worker_start_failure_is_clean_error(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(paddle, "LOCK_PATH", tmp_path / "lock")
-    monkeypatch.setattr(paddle.subprocess, "Popen", mock.Mock(side_effect=OSError("fork failed")))
+    monkeypatch.setattr(supervisor, "LOCK_PATH", tmp_path / "lock")
+    monkeypatch.setattr(
+        supervisor.subprocess, "Popen", mock.Mock(side_effect=OSError("fork failed"))
+    )
 
-    assert paddle._supervise(["input.pdf"]) == 1
+    assert _supervise(["input.pdf"]) == 1
     assert "ERROR: Failed to start PaddleOCR-VL worker: fork failed" in capsys.readouterr().err
 
 
 def test_worker_restores_termination_signals(monkeypatch):
     pthread_sigmask = mock.Mock()
     set_signal = mock.Mock()
-    monkeypatch.setattr(paddle.signal, "pthread_sigmask", pthread_sigmask)
-    monkeypatch.setattr(paddle.signal, "signal", set_signal)
+    monkeypatch.setattr(supervisor.signal, "pthread_sigmask", pthread_sigmask)
+    monkeypatch.setattr(supervisor.signal, "signal", set_signal)
 
-    paddle._prepare_worker_signals()
+    supervisor.prepare_worker_signals()
 
-    pthread_sigmask.assert_called_once_with(paddle.signal.SIG_UNBLOCK, paddle.TERMINATION_SIGNALS)
+    pthread_sigmask.assert_called_once_with(
+        supervisor.signal.SIG_UNBLOCK, supervisor.TERMINATION_SIGNALS
+    )
     assert set_signal.call_args_list == [
-        mock.call(signum, paddle.signal.default_int_handler)
-        for signum in paddle.TERMINATION_SIGNALS
+        mock.call(signum, supervisor.signal.default_int_handler)
+        for signum in supervisor.TERMINATION_SIGNALS
     ]
 
 
@@ -237,12 +248,13 @@ def test_lock_recovers_after_holder_is_killed(tmp_path, monkeypatch):
     try:
         assert holder.stdout is not None
         assert holder.stdout.readline().strip() == "locked"
-        monkeypatch.setattr(paddle, "LOCK_PATH", lock_path)
+        monkeypatch.setattr(supervisor, "LOCK_PATH", lock_path)
         with pytest.raises(paddle.ConversionError, match="already running"):
-            paddle._conversion_lock()
+            with supervisor.conversion_lock():
+                pass
         holder.kill()
         holder.wait()
-        with paddle._conversion_lock():
+        with supervisor.conversion_lock():
             pass
     finally:
         if holder.poll() is None:
@@ -269,7 +281,7 @@ def test_process_group_cleanup_reaches_descendants(tmp_path):
     assert worker.stdout is not None
     assert worker.stdout.readline().strip() == b"ready"
 
-    paddle._terminate_process_group(worker)
+    supervisor.terminate_process_group(worker)
     time.sleep(0.7)
 
     assert worker.poll() is not None
