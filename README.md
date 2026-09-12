@@ -100,11 +100,15 @@ PaddleOCR-VL (local vision-language parsing, downloads models on first run):
 ```bash
 uv run ./pdf_convert_paddleocr_vl.py input.pdf -o output.md
 uv run ./pdf_convert_paddleocr_vl.py input.pdf --page-range 1-5 --engine transformers
+uv run ./pdf_convert_paddleocr_vl.py input.pdf --page-batch-size 4 --layout-batch-size 4 --vlm-batch-size 4 --queues
 ```
 
 Use `--engine transformers` for a torch-based backend (often faster on Apple Silicon).
-Thread pools are forced to 4 by default (`--threads`) to keep CPU/memory usage bounded;
-raise it only on larger machines.
+Defaults are conservative for a 16 GB Apple Silicon Mac: 4 CPU threads, page/layout/VLM
+batch sizes of 1, and asynchronous PaddleX queues disabled. `--threads` limits both
+PaddleOCR's CPU inference threads and OMP/BLAS thread pools; this reduces CPU contention
+but does not by itself cap memory. Raise batch sizes or enable `--queues` only explicitly
+on larger machines; PaddleX's asynchronous path can buffer up to 64 batches per stage.
 
 MinerU (local; `pipeline` backend by default, `-b vlm-engine` for the MinerU 2.5
 Pro VLM):
