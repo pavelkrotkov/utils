@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # /// script
-# dependencies = ["paddlepaddle>=3.2", "paddleocr[doc-parser]>=3.3", "pypdf"]
+# dependencies = ["paddlepaddle>=3.2", "paddleocr[doc-parser]>=3.6", "pypdf"]
 # ///
 """
 Convert a local PDF to Markdown using PaddleOCR-VL.
