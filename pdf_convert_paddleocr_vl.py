@@ -22,8 +22,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import fcntl
 import os
+import signal
+import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
 from pdf_convert_run import (
     Backend,
@@ -39,6 +44,8 @@ from pdf_page_selection import PageSelectionError
 ENGINE_CHOICES = ("paddle", "transformers")
 PIPELINE_VERSION_CHOICES = ("v1", "v1.5", "v1.6")
 DEFAULT_THREADS = 4
+LOCK_PATH = Path(tempfile.gettempdir()) / f"pdf_convert_paddleocr_vl-{os.getuid()}.lock"
+WORKER_ENV = "PDF_CONVERT_PADDLEOCR_VL_WORKER"
 # Thread pool sizes read by OpenMP, BLAS libraries, NumExpr, PaddlePaddle,
 # and Accelerate (macOS).
 THREAD_LIMIT_ENV_VARS = (
@@ -55,6 +62,59 @@ def apply_thread_limit(threads: int) -> None:
     """Force numeric thread pools before the framework libraries load."""
     for env_var in THREAD_LIMIT_ENV_VARS:
         os.environ[env_var] = str(threads)
+
+
+def _conversion_lock():
+    lock = LOCK_PATH.open("a")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        lock.close()
+        raise ConversionError("Another PaddleOCR-VL conversion is already running.") from exc
+    return lock
+
+
+def _terminate_process_group(worker: subprocess.Popen[bytes]) -> None:
+    try:
+        os.killpg(worker.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        worker.wait(timeout=2)
+    except (subprocess.TimeoutExpired, KeyboardInterrupt):
+        pass
+    try:
+        os.killpg(worker.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    worker.wait()
+
+
+def _supervise(argv: list[str]) -> int:
+    try:
+        lock = _conversion_lock()
+    except ConversionError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    with lock:
+        env = os.environ.copy()
+        env[WORKER_ENV] = "1"
+        worker = subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), *argv],
+            env=env,
+            start_new_session=True,
+        )
+        previous_sigterm = signal.signal(signal.SIGTERM, signal.default_int_handler)
+        try:
+            try:
+                return worker.wait()
+            except KeyboardInterrupt:
+                return 130
+        finally:
+            signal.signal(signal.SIGTERM, previous_sigterm)
+            if worker.returncode != 0:
+                _terminate_process_group(worker)
 
 
 class PaddleOcrVlBackend(Backend):
@@ -147,7 +207,9 @@ class PaddleOcrVlBackend(Backend):
 
 
 def main() -> None:
-    sys.exit(execute(PaddleOcrVlBackend()))
+    if os.environ.pop(WORKER_ENV, None):
+        sys.exit(execute(PaddleOcrVlBackend()))
+    sys.exit(_supervise(sys.argv[1:]))
 
 
 if __name__ == "__main__":
