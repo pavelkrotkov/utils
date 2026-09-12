@@ -1,3 +1,4 @@
+import argparse
 import subprocess
 import sys
 import time
@@ -6,6 +7,46 @@ from unittest import mock
 import pytest
 
 import pdf_convert_paddleocr_vl as paddle
+
+
+def test_safe_resource_defaults_reach_paddle():
+    parser = argparse.ArgumentParser()
+    backend = paddle.PaddleOcrVlBackend()
+    backend.add_arguments(parser)
+    args = parser.parse_args([])
+    config = {
+        "batch_size": 64,
+        "SubModules": {
+            "LayoutDetection": {"batch_size": 8},
+            "VLRecognition": {"batch_size": -1},
+        },
+    }
+    paddlex = mock.Mock()
+    paddlex.load_pipeline_config.return_value = config
+
+    assert paddle._pipeline_kwargs(args) == {
+        "engine": None,
+        "device": None,
+        "pipeline_version": "v1.6",
+        "cpu_threads": 4,
+        "use_queues": False,
+    }
+    paddle._resource_config(paddlex, args)
+    assert (
+        config["batch_size"],
+        config["SubModules"]["LayoutDetection"]["batch_size"],
+        config["SubModules"]["VLRecognition"]["batch_size"],
+    ) == (1, 1, 1)
+
+
+def test_transformers_rejects_unsupported_device():
+    parser = argparse.ArgumentParser()
+    backend = paddle.PaddleOcrVlBackend()
+    backend.add_arguments(parser)
+    args = parser.parse_args(["--engine", "transformers", "--device", "npu"])
+
+    with pytest.raises(paddle.ConversionError, match="only cpu or gpu"):
+        backend.validate(args)
 
 
 def test_interrupt_cleans_up_worker(tmp_path, monkeypatch):
