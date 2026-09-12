@@ -30,6 +30,29 @@ def test_second_run_stops_before_spawning_worker(tmp_path, monkeypatch):
     popen.assert_not_called()
 
 
+def test_help_bypasses_active_lock(tmp_path, monkeypatch):
+    monkeypatch.setattr(paddle, "LOCK_PATH", tmp_path / "lock")
+    execute = mock.Mock(return_value=0)
+    popen = mock.Mock()
+    monkeypatch.setattr(paddle, "execute", execute)
+    monkeypatch.setattr(paddle.subprocess, "Popen", popen)
+    with paddle._conversion_lock():
+        assert paddle._supervise(["--help"]) == 0
+    execute.assert_called_once()
+    popen.assert_not_called()
+
+
+def test_worker_inherits_lock_fd(tmp_path, monkeypatch):
+    worker = mock.Mock(returncode=0)
+    worker.wait.return_value = 0
+    popen = mock.Mock(return_value=worker)
+    monkeypatch.setattr(paddle, "LOCK_PATH", tmp_path / "lock")
+    monkeypatch.setattr(paddle.subprocess, "Popen", popen)
+
+    assert paddle._supervise(["input.pdf"]) == 0
+    assert len(popen.call_args.kwargs["pass_fds"]) == 1
+
+
 def test_lock_recovers_after_holder_is_killed(tmp_path, monkeypatch):
     lock_path = tmp_path / "lock"
     holder = subprocess.Popen(
