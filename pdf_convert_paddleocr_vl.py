@@ -13,6 +13,7 @@ batch and queue limits are what bound memory-bearing concurrency.
 Usage:
     uv run ./pdf_convert_paddleocr_vl.py input.pdf
     uv run ./pdf_convert_paddleocr_vl.py input.pdf --page-range 1-5
+    uv run ./pdf_convert_paddleocr_vl.py input.pdf --page-batch-size 2 --layout-batch-size 2 --vlm-batch-size 2 --queues
     ./pdf_convert_paddleocr_vl.py input.pdf --threads 4 --device cpu
 """
 
