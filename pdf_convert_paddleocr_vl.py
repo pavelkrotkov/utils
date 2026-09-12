@@ -116,11 +116,7 @@ def _supervise(argv: list[str]) -> int:
 
 
 def _pipeline_kwargs(args: argparse.Namespace) -> dict[str, object]:
-    return {
-        name: getattr(args, name)
-        for name in PIPELINE_ARGS
-        if getattr(args, name) is not None
-    }
+    return {name: getattr(args, name) for name in PIPELINE_ARGS if getattr(args, name) is not None}
 
 
 def _input_pdf(request: ConversionRequest) -> Path:
