@@ -54,6 +54,14 @@ def test_worker_inherits_lock_fd(tmp_path, monkeypatch):
     assert len(popen.call_args.kwargs["pass_fds"]) == 1
 
 
+def test_worker_start_failure_is_clean_error(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(paddle, "LOCK_PATH", tmp_path / "lock")
+    monkeypatch.setattr(paddle.subprocess, "Popen", mock.Mock(side_effect=OSError("fork failed")))
+
+    assert paddle._supervise(["input.pdf"]) == 1
+    assert "ERROR: Failed to start PaddleOCR-VL worker: fork failed" in capsys.readouterr().err
+
+
 def test_worker_restores_termination_signals(monkeypatch):
     pthread_sigmask = mock.Mock()
     set_signal = mock.Mock()
