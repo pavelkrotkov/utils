@@ -249,9 +249,8 @@ def test_lock_recovers_after_holder_is_killed(tmp_path, monkeypatch):
         assert holder.stdout is not None
         assert holder.stdout.readline().strip() == "locked"
         monkeypatch.setattr(supervisor, "LOCK_PATH", lock_path)
-        with pytest.raises(paddle.ConversionError, match="already running"):
-            with supervisor.conversion_lock():
-                pass
+        with pytest.raises(paddle.ConversionError, match="already running"), supervisor.conversion_lock():
+            pass
         holder.kill()
         holder.wait()
         with supervisor.conversion_lock():
