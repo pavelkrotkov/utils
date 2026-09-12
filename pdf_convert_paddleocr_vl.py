@@ -5,8 +5,10 @@
 """
 Convert a local PDF to Markdown using PaddleOCR-VL.
 
-The first run downloads the layout and VLM models automatically. Resource
-limits default to values suitable for a 16 GB Apple Silicon Mac.
+The first run downloads the layout and VLM models automatically. Defaults are
+conservative for a 16 GB Apple Silicon Mac: 4 CPU threads, page/layout/VLM
+batches of 1, and asynchronous queues off. Thread limits reduce contention;
+batch and queue limits are what bound memory-bearing concurrency.
 
 Usage:
     uv run ./pdf_convert_paddleocr_vl.py input.pdf
@@ -46,10 +48,12 @@ PIPELINE_NAMES = {
 }
 HELP_FLAGS = frozenset(("-h", "--help"))
 TERMINATION_SIGNALS = (signal.SIGINT, signal.SIGHUP, signal.SIGTERM)
-DEFAULT_THREADS = 4
-DEFAULT_BATCH_SIZE = 1
+DEFAULT_THREADS = 4  # PaddleOCR defaults CPU inference to 10.
+DEFAULT_BATCH_SIZE = 1  # PaddleX defaults page/layout batches to 64/8.
 LOCK_PATH = Path.home() / ".pdf_convert_paddleocr_vl.lock"
 WORKER_ENV = "PDF_CONVERT_PADDLEOCR_VL_WORKER"
+# Thread pool sizes read by OpenMP, BLAS libraries, NumExpr, PaddlePaddle,
+# and Accelerate (macOS).
 THREAD_LIMIT_ENV_VARS = (
     "OMP_NUM_THREADS",
     "OPENBLAS_NUM_THREADS",
@@ -142,15 +146,15 @@ def _pipeline_kwargs(args: argparse.Namespace) -> dict[str, object]:
         "device": args.device,
         "pipeline_version": args.pipeline_version,
         "cpu_threads": args.threads,
-        "use_queues": args.queues,
+        "use_queues": args.queues,  # PaddleX defaults asynchronous queues on.
     }
 
 
 def _resource_config(paddlex, args: argparse.Namespace):
     config = paddlex.load_pipeline_config(PIPELINE_NAMES[args.pipeline_version])
-    config["batch_size"] = args.page_batch_size
-    config["SubModules"]["LayoutDetection"]["batch_size"] = args.layout_batch_size
-    config["SubModules"]["VLRecognition"]["batch_size"] = args.vlm_batch_size
+    config["batch_size"] = args.page_batch_size  # upstream: 64
+    config["SubModules"]["LayoutDetection"]["batch_size"] = args.layout_batch_size  # upstream: 8
+    config["SubModules"]["VLRecognition"]["batch_size"] = args.vlm_batch_size  # upstream: -1
     return config
 
 
@@ -185,6 +189,7 @@ class PaddleOcrVlBackend(Backend):
                 default=DEFAULT_BATCH_SIZE,
                 help=f"{label} batch size (default: {DEFAULT_BATCH_SIZE})",
             )
+        # ponytail: upstream exposes queue enablement but not its hard-coded 64-batch depth.
         parser.add_argument(
             "--queues",
             action="store_true",
