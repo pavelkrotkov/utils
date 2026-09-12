@@ -81,6 +81,7 @@ def test_streams_pages_without_retaining_results(tmp_path, monkeypatch):
 
     outcome = paddle.PaddleOcrVlBackend().convert(request)
 
+    assert isinstance(outcome, paddle.MarkdownDirectory)
     assert pipeline.predict_iter.call_args == mock.call(input=str(request.pdf_path))
     assert (outcome.directory / "input.md").read_text(encoding="utf-8").split("\n\n") == [
         "page 0 $x^2$",
