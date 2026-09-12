@@ -28,7 +28,6 @@ import os
 import signal
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 from pdf_convert_run import (
@@ -48,7 +47,7 @@ PIPELINE_ARGS = ("engine", "device", "pipeline_version")
 HELP_FLAGS = frozenset(("-h", "--help"))
 TERMINATION_SIGNALS = (signal.SIGINT, signal.SIGHUP, signal.SIGTERM)
 DEFAULT_THREADS = 4
-LOCK_PATH = Path(tempfile.gettempdir()) / f"pdf_convert_paddleocr_vl-{os.getuid()}.lock"
+LOCK_PATH = Path.home() / ".pdf_convert_paddleocr_vl.lock"
 WORKER_ENV = "PDF_CONVERT_PADDLEOCR_VL_WORKER"
 # Thread pool sizes read by OpenMP, BLAS libraries, NumExpr, PaddlePaddle,
 # and Accelerate (macOS).
@@ -105,12 +104,15 @@ def _run_worker(argv: list[str], lock) -> int:
     previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, TERMINATION_SIGNALS)
     worker = None
     try:
-        worker = subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve()), *argv],
-            env=env,
-            pass_fds=(lock.fileno(),),
-            start_new_session=True,
-        )
+        try:
+            worker = subprocess.Popen(
+                [sys.executable, str(Path(__file__).resolve()), *argv],
+                env=env,
+                pass_fds=(lock.fileno(),),
+                start_new_session=True,
+            )
+        except OSError as exc:
+            raise ConversionError(f"Failed to start PaddleOCR-VL worker: {exc}") from exc
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         return worker.wait()
     except KeyboardInterrupt:
@@ -128,11 +130,11 @@ def _supervise(argv: list[str]) -> int:
         return execute(PaddleOcrVlBackend())
     try:
         lock = _conversion_lock()
+        with lock:
+            return _run_worker(argv, lock)
     except ConversionError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-    with lock:
-        return _run_worker(argv, lock)
 
 
 def _pipeline_kwargs(args: argparse.Namespace) -> dict[str, object]:
