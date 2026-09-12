@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import fcntl
 import os
 import signal
@@ -79,14 +80,10 @@ def _terminate_process_group(worker: subprocess.Popen[bytes]) -> None:
         os.killpg(worker.pid, signal.SIGTERM)
     except ProcessLookupError:
         return
-    try:
+    with contextlib.suppress(subprocess.TimeoutExpired, KeyboardInterrupt):
         worker.wait(timeout=2)
-    except (subprocess.TimeoutExpired, KeyboardInterrupt):
-        pass
-    try:
+    with contextlib.suppress(ProcessLookupError):
         os.killpg(worker.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
     worker.wait()
 
 
