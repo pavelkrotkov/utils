@@ -18,7 +18,6 @@ import os
 import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 from pdf_convert_run import ConversionError, build_parser, execute, require_module
@@ -83,10 +82,11 @@ def wait_for_worker(worker: subprocess.Popen[bytes], args: argparse.Namespace) -
         return worker.wait()
     psutil = require_module("psutil", "psutil")
     process = psutil.Process(worker.pid)
-    while worker.poll() is None:
-        time.sleep(interval)
-        report_memory(psutil, process, args.memory_abort_percent)
-    return worker.returncode or 0
+    while True:
+        try:
+            return worker.wait(timeout=interval)
+        except subprocess.TimeoutExpired:
+            report_memory(psutil, process, args.memory_abort_percent)
 
 
 def run_worker(argv: list[str], lock, args: argparse.Namespace, script: Path) -> int:
