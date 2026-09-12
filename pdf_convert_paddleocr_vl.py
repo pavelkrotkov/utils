@@ -123,7 +123,8 @@ def _run_worker(argv: list[str], lock) -> int:
 
 
 def _supervise(argv: list[str]) -> int:
-    if HELP_FLAGS.intersection(argv):
+    help_args = argv[: argv.index("--")] if "--" in argv else argv
+    if HELP_FLAGS.intersection(help_args):
         return execute(PaddleOcrVlBackend())
     try:
         lock = _conversion_lock()
