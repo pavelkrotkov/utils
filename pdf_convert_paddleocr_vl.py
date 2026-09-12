@@ -255,12 +255,14 @@ class PaddleOcrVlBackend(Backend):
                 for result in pipeline.predict_iter(input=str(input_pdf)):
                     page_count += 1
                     markdown = result.markdown
-                    output.write(markdown["markdown_texts"])
-                    output.write("\n\n")
-                    for relative_path, image in markdown.get("markdown_images", {}).items():
+                    markdown_text = markdown["markdown_texts"]
+                    for image_ref, image in markdown.get("markdown_images", {}).items():
+                        relative_path = f"page_{page_count}/{image_ref}"
+                        markdown_text = markdown_text.replace(image_ref, relative_path)
                         image_path = save_dir / relative_path
                         image_path.parent.mkdir(parents=True, exist_ok=True)
                         image.save(image_path)
+                    output.write(markdown_text + "\n\n")
         except Exception as exc:
             raise ConversionError(f"PaddleOCR-VL conversion failed: {exc}") from exc
 
