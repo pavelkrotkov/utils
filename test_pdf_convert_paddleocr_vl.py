@@ -69,9 +69,7 @@ def test_mlx_backend_and_runtime_are_visible(capsys):
     assert "threads=4 batches=1/1/1 queues=off" in log
 
 
-def test_memory_threshold_aborts_worker(monkeypatch, capsys):
-    worker = mock.Mock(pid=42)
-    worker.poll.return_value = None
+def test_memory_monitor_samples_only_while_running(monkeypatch, capsys):
     process = mock.Mock()
     process.memory_info.return_value = argparse.Namespace(rss=2**30)
     psutil = mock.Mock()
@@ -79,9 +77,15 @@ def test_memory_threshold_aborts_worker(monkeypatch, capsys):
     psutil.virtual_memory.return_value = argparse.Namespace(percent=91.0, available=2**30)
     psutil.NoSuchProcess = RuntimeError
     monkeypatch.setattr(supervisor, "require_module", lambda *_args: psutil)
-    monkeypatch.setattr(supervisor.time, "sleep", lambda _seconds: None)
     args = argparse.Namespace(memory_interval=1, memory_abort_percent=90)
 
+    completed = mock.Mock(pid=41)
+    completed.wait.return_value = 0
+    assert supervisor.wait_for_worker(completed, args) == 0
+    psutil.virtual_memory.assert_not_called()
+
+    worker = mock.Mock(pid=42)
+    worker.wait.side_effect = subprocess.TimeoutExpired("worker", 1)
     with pytest.raises(paddle.ConversionError, match="Memory abort threshold reached"):
         supervisor.wait_for_worker(worker, args)
 
