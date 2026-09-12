@@ -44,14 +44,18 @@ def test_streams_pages_without_retaining_results(tmp_path, monkeypatch):
     refs = []
 
     class Image:
+        def __init__(self, data):
+            self.data = data
+
         def save(self, path):
-            path.write_bytes(b"png")
+            path.write_bytes(self.data)
 
     class Result:
         def __init__(self, index):
-            images = {"figures/first.png": Image()} if index == 0 else {}
+            images = {"figures/first.png": Image(str(index).encode())} if index < 2 else {}
+            image_ref = " ![figure](figures/first.png)" if images else ""
             self.markdown = {
-                "markdown_texts": f"page {index} $x^2$",
+                "markdown_texts": f"page {index} $x^2${image_ref}",
                 "markdown_images": images,
             }
 
@@ -84,13 +88,14 @@ def test_streams_pages_without_retaining_results(tmp_path, monkeypatch):
     assert isinstance(outcome, paddle.MarkdownDirectory)
     assert pipeline.predict_iter.call_args == mock.call(input=str(request.pdf_path))
     assert (outcome.directory / "input.md").read_text(encoding="utf-8").split("\n\n") == [
-        "page 0 $x^2$",
-        "page 1 $x^2$",
+        "page 0 $x^2$ ![figure](page_1/figures/first.png)",
+        "page 1 $x^2$ ![figure](page_2/figures/first.png)",
         "page 2 $x^2$",
         "page 3 $x^2$",
         "",
     ]
-    assert (outcome.directory / "figures/first.png").read_bytes() == b"png"
+    assert (outcome.directory / "page_1/figures/first.png").read_bytes() == b"0"
+    assert (outcome.directory / "page_2/figures/first.png").read_bytes() == b"1"
 
 
 def test_transformers_rejects_unsupported_device():
