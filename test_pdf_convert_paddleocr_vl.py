@@ -163,6 +163,16 @@ def test_transformers_rejects_unsupported_device():
         backend.validate(args)
 
 
+def test_rejects_nonfinite_memory_interval():
+    parser = argparse.ArgumentParser()
+    backend = paddle.PaddleOcrVlBackend()
+    backend.add_arguments(parser)
+    for value in ("nan", "inf"):
+        args = parser.parse_args(["--memory-interval", value])
+        with pytest.raises(paddle.ConversionError, match="finite and non-negative"):
+            backend.validate(args)
+
+
 def test_interrupt_cleans_up_worker(tmp_path, monkeypatch):
     worker = mock.Mock()
     worker.wait.side_effect = KeyboardInterrupt
