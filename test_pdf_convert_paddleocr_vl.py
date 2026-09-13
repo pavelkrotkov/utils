@@ -85,6 +85,19 @@ def test_mlx_model_override_is_forwarded():
     assert paddle._pipeline_kwargs(args)["vl_rec_api_model_name"] == "/models/PaddleOCR-VL-1.6"
 
 
+def test_mlx_model_default_supports_legacy_namespace():
+    args = argparse.Namespace(
+        engine=None,
+        device=None,
+        pipeline_version="v1.6",
+        threads=4,
+        queues=False,
+        mlx_vlm_url="http://localhost:8111/",
+    )
+
+    assert paddle._pipeline_kwargs(args)["vl_rec_api_model_name"] == "PaddlePaddle/PaddleOCR-VL-1.6"
+
+
 def test_memory_monitor_samples_only_while_running(monkeypatch, capsys):
     process = mock.Mock()
     process.memory_info.return_value = argparse.Namespace(rss=2**30)

@@ -79,7 +79,8 @@ def _pipeline_kwargs(args: argparse.Namespace) -> dict[str, object]:
             vl_rec_backend="mlx-vlm-server",
             vl_rec_server_url=mlx_vlm_url,
             vl_rec_api_model_name=(
-                args.mlx_vlm_model or f"PaddlePaddle/{PIPELINE_NAMES[args.pipeline_version]}"
+                getattr(args, "mlx_vlm_model", None)
+                or f"PaddlePaddle/{PIPELINE_NAMES[args.pipeline_version]}"
             ),
         )
     return kwargs
