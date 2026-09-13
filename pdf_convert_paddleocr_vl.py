@@ -78,7 +78,9 @@ def _pipeline_kwargs(args: argparse.Namespace) -> dict[str, object]:
         kwargs.update(
             vl_rec_backend="mlx-vlm-server",
             vl_rec_server_url=mlx_vlm_url,
-            vl_rec_api_model_name=f"PaddlePaddle/{PIPELINE_NAMES[args.pipeline_version]}",
+            vl_rec_api_model_name=(
+                args.mlx_vlm_model or f"PaddlePaddle/{PIPELINE_NAMES[args.pipeline_version]}"
+            ),
         )
     return kwargs
 
@@ -157,6 +159,10 @@ class PaddleOcrVlBackend(Backend):
             default=DEFAULT_PIPELINE_VERSION,
         )
         add("--mlx-vlm-url", help="external MLX-VLM server URL")
+        add(
+            "--mlx-vlm-model",
+            help="model ID/path sent to the external MLX-VLM server",
+        )
         add(
             "--memory-interval",
             type=float,

@@ -69,6 +69,22 @@ def test_mlx_backend_and_runtime_are_visible(capsys):
     assert "threads=4 batches=1/1/1 queues=off" in log
 
 
+def test_mlx_model_override_is_forwarded():
+    parser = argparse.ArgumentParser()
+    backend = paddle.PaddleOcrVlBackend()
+    backend.add_arguments(parser)
+    args = parser.parse_args(
+        [
+            "--mlx-vlm-url",
+            "http://localhost:8111/",
+            "--mlx-vlm-model",
+            "/models/PaddleOCR-VL-1.6",
+        ]
+    )
+
+    assert paddle._pipeline_kwargs(args)["vl_rec_api_model_name"] == "/models/PaddleOCR-VL-1.6"
+
+
 def test_memory_monitor_samples_only_while_running(monkeypatch, capsys):
     process = mock.Mock()
     process.memory_info.return_value = argparse.Namespace(rss=2**30)
