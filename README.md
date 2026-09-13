@@ -5,7 +5,7 @@ and TIDAL import.
 
 ## Overview
 
-- PDF to Markdown conversion (Mathpix SDK, Docling, LlamaParse, PyMuPDF4LLM, or local marker).
+- PDF to Markdown conversion (Mathpix SDK, Docling, LlamaParse, PyMuPDF4LLM, PaddleOCR-VL, or local marker).
 - Markdown splitting into per-section or per-subsection files.
 - Audiobook (M4B) conversion from folders of audio tracks, with chapters and cover art.
 - Audio transcription (OpenAI API, local whisper-cpp with optional pyannote diarization, or MLX VibeVoice-ASR on Apple Silicon).
@@ -111,11 +111,43 @@ model initialization. `--engine transformers` selects the Transformers inference
 engine; it is not automatic Apple GPU acceleration.
 
 On Apple Silicon, the supported Apple GPU path delegates the VLM recognition stage
-to an external MLX-VLM service. Install `mlx-vlm>=0.3.11`, start
-`mlx_vlm.server --port 8111`, then pass `--mlx-vlm-url http://localhost:8111/`.
-The layout stage still runs locally through PaddlePaddle, which is normally CPU on
-the macOS CPU wheel. MLX uses Apple unified memory, so GPU allocations share the
+to an external MLX-VLM service. The converter does not start that service, and the
+MLX dependency is intentionally optional. Install it and preload the local
+PaddleOCR-VL model in one terminal:
+
+```bash
+uv run --with 'mlx-vlm>=0.3.11' mlx_vlm.server \
+  --host 127.0.0.1 --port 8111 \
+  --model ~/.paddlex/official_models/PaddleOCR-VL-1.6 \
+  --trust-remote-code
+```
+
+Then run the converter in another terminal, passing the same model ID/path that
+the server was started with:
+
+```bash
+uv run ./pdf_convert_paddleocr_vl.py input.pdf -o output.md \
+  --device cpu \
+  --mlx-vlm-url http://127.0.0.1:8111/ \
+  --mlx-vlm-model ~/.paddlex/official_models/PaddleOCR-VL-1.6 \
+  --threads 4 --memory-interval 10 --memory-abort-percent 90
+```
+
+The local model path may differ if the PaddleX cache was relocated. When the
+server is preloaded from a local path, `--mlx-vlm-model` is important: without it,
+the converter sends the registry-style name `PaddlePaddle/PaddleOCR-VL-1.6`, which
+can make the server attempt another Hugging Face download. Keep the server model
+and `--pipeline-version v1.6` aligned.
+
+`device=cpu` in the converter log is expected for this setup: layout detection
+still runs through the local PaddlePaddle CPU wheel, while VLM recognition runs
+through MLX/Metal. MLX uses Apple unified memory, so GPU allocations share the
 same physical RAM as the rest of the system.
+
+In a warm-server two-page benchmark on a 16 GB Apple Silicon M4, this path took
+41.07 seconds versus 193.76 seconds for native Paddle CPU inference: 4.72x faster
+and 79% less elapsed time. The benchmark excludes one-time model preload and is
+workload-dependent.
 
 A conservative 16 GB M4 client command is:
 
@@ -155,7 +187,7 @@ tables). Single-paper benchmark; re-run before relying on the order.
 |---|---|---|---|
 | 1 | `pdf_convert_mathpix_sdk.py` | Mathpix API (paid) | Reference-quality LaTeX and table structure |
 | 2 | `pdf_convert_llamaparse.py` | LlamaCloud API (paid) | Complete output with clean display equations |
-| 3 | `pdf_convert_paddleocr_vl.py` | local | Clean math/tables (HTML); slow on CPU; jumbled author block |
+| 3 | `pdf_convert_paddleocr_vl.py` | local | Clean math/tables (HTML); native CPU is slow; optional MLX/Metal VLM path; jumbled author block |
 | 4 | `pdf_convert_mineru.py` | local | Good structure + display math; occasional table-cell OCR slips (`0(1)`); `-b vlm-engine` likely better on GPU |
 | 5 | `pdf_convert_docling.py` | local | Excellent prose/headings but silently drops display equations |
 | 6 | `pdf_convert_marker.py` | local | Usable, but misfiles an equation as a table row and drops one heading; current versions need `llama.cpp` (`brew install llama.cpp`) for their default layout/OCR models |
