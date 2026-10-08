@@ -59,6 +59,7 @@ public enum DependencyChecker {
             }
             items.append(variable("OPENAI_API_KEY", environment: environment))
         case .privateLocal, .privateLocalWithSpeakers:
+            items += localModuleItems(repoRoot: repoRoot)
             items += [executable("uv", environment: environment), executable("ffmpeg", environment: environment)]
             let whisper = ["whisper-cpp", "whisper-cli"]
                 .compactMap { ExecutableResolver.resolve($0, environment: environment) }.first
@@ -73,6 +74,7 @@ public enum DependencyChecker {
                 items.append(variable("HF_TOKEN", environment: environment))
             }
         case .appleSiliconLocal:
+            items += localModuleItems(repoRoot: repoRoot)
             items += [executable("uv", environment: environment), executable("ffmpeg", environment: environment)]
             #if arch(arm64)
             let supportedHardware = isAppleSilicon ?? true
@@ -87,6 +89,18 @@ public enum DependencyChecker {
             items.append(vibeVoiceModel(environment: environment))
         }
         return items
+    }
+
+    private static func localModuleItems(repoRoot: URL?) -> [Item] {
+        ["audio_common.py", "audio_segments.py", "audio_transcript.py"].map { name in
+            let path = repoRoot?.appendingPathComponent(name).path(percentEncoded: false)
+            return Item(
+                name: name,
+                isAvailable: path.map(readableFile) ?? false,
+                resolvedPath: path,
+                guidance: "Restore \(name) in the selected utils checkout, or clone the repository again."
+            )
+        }
     }
 
     private static func executable(_ name: String, environment: [String: String]) -> Item {

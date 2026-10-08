@@ -8,7 +8,7 @@ func selectedPresetsOnlyRequireTheirOwnToolsAndCredentials() {
     let speakers = DependencyChecker.check(preset: .privateLocalWithSpeakers, environment: [:], repoRoot: nil, osMajorVersion: 14)
     let cloud = DependencyChecker.check(preset: .fastCloud, environment: [:], repoRoot: nil, osMajorVersion: 14)
 
-    #expect(local.map(\.name) == ["audio_transcribe_whisper.py", "macOS 14+", "uv", "ffmpeg", "whisper-cpp / whisper-cli", "Whisper model"])
+    #expect(local.map(\.name) == ["audio_transcribe_whisper.py", "macOS 14+", "audio_common.py", "audio_segments.py", "audio_transcript.py", "uv", "ffmpeg", "whisper-cpp / whisper-cli", "Whisper model"])
     #expect(speakers.map(\.name) == local.map(\.name) + ["HF_TOKEN"])
     #expect(cloud.map(\.name) == ["audio_transcribe_openai.sh", "macOS 14+", "curl", "jq", "OPENAI_API_KEY"])
     #expect(local.first { $0.name == "Whisper model" }?.resolvedPath?.hasSuffix("ggml-large-v3-turbo-q8_0.bin") == true)
@@ -24,6 +24,7 @@ func whisperCliFallbackAndModelPathAreValidatedBeforeRun() throws {
         _ = try makeExecutable("uv", at: bin)
         _ = try makeExecutable("ffmpeg", at: bin)
         try "script".write(to: root.appendingPathComponent("audio_transcribe_whisper.py"), atomically: true, encoding: .utf8)
+        try installLocalModules(in: root)
         let model = root.appendingPathComponent("model.bin")
         try Data([1, 2, 3]).write(to: model)
         let env = ["PATH": bin.path]
@@ -33,6 +34,10 @@ func whisperCliFallbackAndModelPathAreValidatedBeforeRun() throws {
         ) }
 
         #expect(check().allSatisfy { $0.isAvailable })
+        let missingModule = root.appendingPathComponent("audio_segments.py")
+        try FileManager.default.removeItem(at: missingModule)
+        #expect(check().first { $0.name == "audio_segments.py" }?.isAvailable == false)
+        try Data([1]).write(to: missingModule)
         #expect(check().first { $0.name == "whisper-cpp / whisper-cli" }?.resolvedPath == cli.path)
         _ = try makeExecutable("whisper-cpp", at: bin)
         #expect(check().first { $0.name == "whisper-cpp / whisper-cli" }?.resolvedPath == bin.appendingPathComponent("whisper-cpp").path)
@@ -79,6 +84,7 @@ func vibeVoiceNeedsNativeAppleSiliconAndCompleteCachedWeights() throws {
         _ = try makeExecutable("uv", at: bin)
         _ = try makeExecutable("ffmpeg", at: bin)
         try "script".write(to: root.appendingPathComponent("audio_transcribe_vibevoice.py"), atomically: true, encoding: .utf8)
+        try installLocalModules(in: root)
         let hub = root.appendingPathComponent("huggingface/hub", isDirectory: true)
         let snapshot = hub.appendingPathComponent("models--mlx-community--VibeVoice-ASR-4bit/snapshots/test", isDirectory: true)
         try FileManager.default.createDirectory(at: snapshot, withIntermediateDirectories: true)
@@ -99,6 +105,12 @@ func vibeVoiceNeedsNativeAppleSiliconAndCompleteCachedWeights() throws {
         #expect(check(false).first { $0.name == "Apple Silicon" }?.isAvailable == false)
         try FileManager.default.removeItem(at: snapshot.appendingPathComponent("model-00002-of-00002.safetensors"))
         #expect(check(true).first { $0.name == "VibeVoice model (5.7 GB)" }?.isAvailable == false)
+    }
+}
+
+private func installLocalModules(in root: URL) throws {
+    for name in ["audio_common.py", "audio_segments.py", "audio_transcript.py"] {
+        try Data([1]).write(to: root.appendingPathComponent(name))
     }
 }
 

@@ -66,6 +66,11 @@ swift build
 swift test
 ```
 
+Pull requests parse Swift sources on Linux; this does not replace a native
+compile. To test and package on macOS, use the commands above and `make app`,
+or manually run **Actions → Swift → Run workflow** on GitHub. Native macOS
+jobs are not required for every PR.
+
 ## Building the app bundle
 
 The package builds a plain command-line executable; the `Makefile` wraps

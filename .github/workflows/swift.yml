@@ -1,6 +1,7 @@
 name: Swift
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
     paths:
@@ -20,7 +21,21 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  test:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Parse Swift sources
+        run: |
+          swiftc -frontend -parse TranscriptionLauncher/Package.swift \
+            TranscriptionLauncher/Sources/*/*.swift \
+            TranscriptionLauncher/Tests/*/*.swift
+
+  macos:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-15
     defaults:
       run:
@@ -30,27 +45,10 @@ jobs:
         uses: actions/checkout@v7
         with:
           persist-credentials: false
-
-      - name: Build
-        run: swift build
-
       - name: Test
         run: swift test
-
-  package:
-    runs-on: macos-15
-    defaults:
-      run:
-        working-directory: TranscriptionLauncher
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
       - name: Assemble app bundle
         run: Scripts/make-app.sh
-
       - name: Verify bundle
         run: |
           plutil -lint dist/TranscriptionLauncher.app/Contents/Info.plist

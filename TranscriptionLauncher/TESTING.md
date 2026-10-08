@@ -83,7 +83,8 @@ On an actual M1/macOS 14+ machine, **from Finder** (not `swift run`):
       creation; on a **warm** second run, verify the cached packages/model
       are reused (after explicitly confirming overwrite if necessary).
 - [ ] Select a nonexistent custom model path, remove/rename `whisper-cli`,
-      and remove the repo's Whisper script in turn; each must block **Run**
+      and remove the repo's Whisper script or `audio_segments.py` in turn;
+      each must block **Run**
       with an appropriate checklist item. Restore each before proceeding.
 - [ ] Select speaker diarization and cloud presets separately; verify
       `HF_TOKEN` is requested only for speakers and `OPENAI_API_KEY` only
@@ -92,5 +93,6 @@ On an actual M1/macOS 14+ machine, **from Finder** (not `swift run`):
       `hf download` command; verify missing and complete cached snapshots
       are distinguished, and the warm run does not fetch weights again.
 
-CI runs the automated checks but cannot establish actual Finder or network
-behavior on a clean user Mac; record those manual outcomes separately.
+PR CI parses Swift syntax on Linux; a native macOS build/test is on demand
+through the Swift workflow or locally. Neither substitutes for actual Finder
+cold/warm testing on a clean user Mac; record those outcomes separately.
