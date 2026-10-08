@@ -103,7 +103,9 @@ def test_merge_keeps_uncovered_words_at_hard_cut() -> None:
     )
     assert [s.text for s in merged] == ["missing", "end", "after"]
     assert [(s.start, s.end) for s in merged] == [
-        (297.5, 298.5), (299.5, 300.0), (300.5, 302.5),
+        (297.5, 298.5),
+        (299.5, 300.0),
+        (300.5, 302.5),
     ]
 
 

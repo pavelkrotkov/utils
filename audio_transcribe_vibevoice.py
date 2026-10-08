@@ -366,8 +366,7 @@ def merge_chunk_segments(
         if chunk.overlaps_previous:
             covered = [s for s in merged if s.end > chunk.start]
             shifted = [
-                s for s in shifted
-                if not any(p.start <= s.start <= s.end <= p.end for p in covered)
+                s for s in shifted if not any(p.start <= s.start <= s.end <= p.end for p in covered)
             ]
         merged.extend(shifted)
     merged.sort(key=lambda s: (s.start, s.end))
