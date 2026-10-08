@@ -48,7 +48,7 @@ struct TranscriptionLauncherApp: App {
                         runner: launcherModel.runner
                     )
                 } else {
-                    OnboardingView(repoRootStore: repoRootStore) {
+                    OnboardingView(repoRootStore: repoRootStore, model: launcherModel) {
                         onboardingState.markComplete()
                     }
                 }

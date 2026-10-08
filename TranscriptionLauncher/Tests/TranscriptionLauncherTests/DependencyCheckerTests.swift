@@ -3,115 +3,128 @@ import Testing
 import TranscriptionLauncherLib
 
 @Test
-func reportsEverythingMissingForEmptyEnvironment() {
-    let items = DependencyChecker.check(environment: [:])
+func selectedPresetsOnlyRequireTheirOwnToolsAndCredentials() {
+    let local = DependencyChecker.check(preset: .privateLocal, environment: [:], repoRoot: nil, osMajorVersion: 14)
+    let speakers = DependencyChecker.check(preset: .privateLocalWithSpeakers, environment: [:], repoRoot: nil, osMajorVersion: 14)
+    let cloud = DependencyChecker.check(preset: .fastCloud, environment: [:], repoRoot: nil, osMajorVersion: 14)
 
-    #expect(items.map(\.name) == ["ffmpeg", "uv", "whisper-cpp", "OPENAI_API_KEY", "HF_TOKEN"])
-    #expect(items.allSatisfy { !$0.isAvailable })
-    #expect(items.allSatisfy { $0.resolvedPath == nil })
+    #expect(local.map(\.name) == ["audio_transcribe_whisper.py", "macOS 14+", "audio_common.py", "audio_segments.py", "audio_transcript.py", "uv", "ffmpeg", "whisper-cpp / whisper-cli", "Whisper model"])
+    #expect(speakers.map(\.name) == local.map(\.name) + ["HF_TOKEN"])
+    #expect(cloud.map(\.name) == ["audio_transcribe_openai.sh", "macOS 14+", "curl", "jq", "OPENAI_API_KEY"])
+    #expect(local.first { $0.name == "Whisper model" }?.resolvedPath?.hasSuffix("ggml-large-v3-turbo-q8_0.bin") == true)
+    #expect(!local.contains { $0.name == "OPENAI_API_KEY" || $0.name == "HF_TOKEN" })
 }
 
 @Test
-func reportsExecutableFoundOnPathWithResolvedLocation() throws {
-    try withTemporaryDirectory { directoryURL in
-        let ffmpeg = directoryURL.appendingPathComponent("ffmpeg")
-        FileManager.default.createFile(
-            atPath: ffmpeg.path(percentEncoded: false),
-            contents: Data("#!/bin/sh\n".utf8),
-            attributes: [.posixPermissions: 0o755]
-        )
+func whisperCliFallbackAndModelPathAreValidatedBeforeRun() throws {
+    try withTemporaryDirectory { root in
+        let bin = root.appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let cli = try makeExecutable("whisper-cli", at: bin)
+        _ = try makeExecutable("uv", at: bin)
+        _ = try makeExecutable("ffmpeg", at: bin)
+        try "script".write(to: root.appendingPathComponent("audio_transcribe_whisper.py"), atomically: true, encoding: .utf8)
+        try installLocalModules(in: root)
+        let model = root.appendingPathComponent("model.bin")
+        try Data([1, 2, 3]).write(to: model)
+        let env = ["PATH": bin.path]
+        let check = { DependencyChecker.check(
+            preset: .privateLocal, environment: env, repoRoot: root,
+            whisperModelPath: model.path, osMajorVersion: 14
+        ) }
 
-        let items = DependencyChecker.check(
-            environment: ["PATH": directoryURL.path(percentEncoded: false)]
-        )
+        #expect(check().allSatisfy { $0.isAvailable })
+        let missingModule = root.appendingPathComponent("audio_segments.py")
+        try FileManager.default.removeItem(at: missingModule)
+        #expect(check().first { $0.name == "audio_segments.py" }?.isAvailable == false)
+        try Data([1]).write(to: missingModule)
+        #expect(check().first { $0.name == "whisper-cpp / whisper-cli" }?.resolvedPath == cli.path)
+        _ = try makeExecutable("whisper-cpp", at: bin)
+        #expect(check().first { $0.name == "whisper-cpp / whisper-cli" }?.resolvedPath == bin.appendingPathComponent("whisper-cpp").path)
 
-        let ffmpegItem = try #require(items.first { $0.name == "ffmpeg" })
-        #expect(ffmpegItem.isAvailable)
-        #expect(ffmpegItem.resolvedPath == ffmpeg.path(percentEncoded: false))
-        #expect(ffmpegItem.requirement == .localPresets)
-
-        let uvItem = try #require(items.first { $0.name == "uv" })
-        #expect(!uvItem.isAvailable)
+        try Data().write(to: model)
+        #expect(check().first { $0.name == "Whisper model" }?.isAvailable == false)
+        try FileManager.default.removeItem(at: model)
+        #expect(check().first { $0.name == "Whisper model" }?.isAvailable == false)
+        #expect(DependencyChecker.check(preset: .privateLocal, environment: env, repoRoot: root, whisperModelPath: "~/model.bin", osMajorVersion: 14)
+            .first { $0.name == "Whisper model" }?.isAvailable == false)
     }
 }
 
 @Test
-func reportsAPIKeyAvailableWhenSet() throws {
-    let items = DependencyChecker.check(environment: ["OPENAI_API_KEY": "sk-test"])
+func missingPresetScriptAndCloudLargeFileAreReported() throws {
+    try withTemporaryDirectory { root in
+        let script = root.appendingPathComponent("audio_transcribe_openai.sh")
+        try "#!/bin/sh\n".write(to: script, atomically: true, encoding: .utf8)
+        let cloud = { (file: URL?) in DependencyChecker.check(
+            preset: .fastCloud, environment: ["OPENAI_API_KEY": "key"],
+            repoRoot: root, inputFile: file, osMajorVersion: 14
+        ) }
+        #expect(cloud(nil).first { $0.name == "audio_transcribe_openai.sh" }?.isAvailable == false)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        #expect(cloud(nil).first { $0.name == "audio_transcribe_openai.sh" }?.isAvailable == true)
+        #expect(!cloud(nil).contains { $0.name == "ffmpeg" })
 
-    let keyItem = try #require(items.first { $0.name == "OPENAI_API_KEY" })
-    #expect(keyItem.isAvailable)
-    #expect(keyItem.requirement == .cloudPresets)
-    #expect(keyItem.resolvedPath == nil)
-}
-
-@Test
-func treatsBlankAPIKeyAsMissing() throws {
-    let items = DependencyChecker.check(environment: ["OPENAI_API_KEY": "  \n"])
-
-    let keyItem = try #require(items.first { $0.name == "OPENAI_API_KEY" })
-    #expect(!keyItem.isAvailable)
-}
-
-@Test
-func prefersWhisperCppWhenBothBinariesArePresent() throws {
-    try withTemporaryDirectory { directoryURL in
-        let whisperCpp = makeExecutable(named: "whisper-cpp", in: directoryURL)
-        _ = makeExecutable(named: "whisper-cli", in: directoryURL)
-
-        let items = DependencyChecker.check(
-            environment: ["PATH": directoryURL.path(percentEncoded: false)]
-        )
-
-        let whisperItem = try #require(items.first { $0.name == "whisper-cpp" })
-        #expect(whisperItem.isAvailable)
-        #expect(whisperItem.resolvedPath == whisperCpp.path(percentEncoded: false))
+        let input = root.appendingPathComponent("large.m4a")
+        #expect(FileManager.default.createFile(atPath: input.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: input)
+        try handle.truncate(atOffset: 26 * 1024 * 1024)
+        try handle.close()
+        #expect(cloud(input).contains { $0.name == "ffmpeg" && !$0.isAvailable })
+        #expect(DependencyChecker.check(preset: .privateLocal, environment: [:], repoRoot: root, osMajorVersion: 14)
+            .first { $0.name == "audio_transcribe_whisper.py" }?.isAvailable == false)
     }
 }
 
 @Test
-func fallsBackToWhisperCliWhenWhisperCppIsMissing() throws {
-    try withTemporaryDirectory { directoryURL in
-        let whisperCli = makeExecutable(named: "whisper-cli", in: directoryURL)
-
-        let items = DependencyChecker.check(
-            environment: ["PATH": directoryURL.path(percentEncoded: false)]
-        )
-
-        let whisperItem = try #require(items.first { $0.name == "whisper-cpp" })
-        #expect(whisperItem.isAvailable)
-        #expect(whisperItem.resolvedPath == whisperCli.path(percentEncoded: false))
-        #expect(whisperItem.requirement == .localPresets)
+func vibeVoiceNeedsNativeAppleSiliconAndCompleteCachedWeights() throws {
+    try withTemporaryDirectory { root in
+        let bin = root.appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        _ = try makeExecutable("uv", at: bin)
+        _ = try makeExecutable("ffmpeg", at: bin)
+        try "script".write(to: root.appendingPathComponent("audio_transcribe_vibevoice.py"), atomically: true, encoding: .utf8)
+        try installLocalModules(in: root)
+        let hub = root.appendingPathComponent("huggingface/hub", isDirectory: true)
+        let snapshot = hub.appendingPathComponent("models--mlx-community--VibeVoice-ASR-4bit/snapshots/test", isDirectory: true)
+        try FileManager.default.createDirectory(at: snapshot, withIntermediateDirectories: true)
+        let env = ["PATH": bin.path, "HF_HUB_CACHE": hub.path]
+        let check = { (arm: Bool) in DependencyChecker.check(
+            preset: .appleSiliconLocal, environment: env, repoRoot: root,
+            osMajorVersion: 14, isAppleSilicon: arm
+        ) }
+        #expect(check(true).first { $0.name == "VibeVoice model (5.7 GB)" }?.isAvailable == false)
+        let blobs = root.appendingPathComponent("blobs", isDirectory: true)
+        try FileManager.default.createDirectory(at: blobs, withIntermediateDirectories: true)
+        for name in ["config.json", "model.safetensors.index.json", "model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"] {
+            let blob = blobs.appendingPathComponent(name)
+            try Data([1]).write(to: blob)
+            try FileManager.default.createSymbolicLink(at: snapshot.appendingPathComponent(name), withDestinationURL: blob)
+        }
+        #expect(check(true).allSatisfy { $0.isAvailable })
+        #expect(check(false).first { $0.name == "Apple Silicon" }?.isAvailable == false)
+        try FileManager.default.removeItem(at: snapshot.appendingPathComponent("model-00002-of-00002.safetensors"))
+        #expect(check(true).first { $0.name == "VibeVoice model (5.7 GB)" }?.isAvailable == false)
     }
 }
 
-@Test
-func reportsHFTokenAsSpeakerDiarizationRequirement() throws {
-    let items = DependencyChecker.check(environment: ["HF_TOKEN": "hf_test"])
-
-    let tokenItem = try #require(items.first { $0.name == "HF_TOKEN" })
-    #expect(tokenItem.isAvailable)
-    #expect(tokenItem.requirement == .speakerDiarization)
-    #expect(tokenItem.resolvedPath == nil)
+private func installLocalModules(in root: URL) throws {
+    for name in ["audio_common.py", "audio_segments.py", "audio_transcript.py"] {
+        try Data([1]).write(to: root.appendingPathComponent(name))
+    }
 }
 
-private func makeExecutable(named name: String, in directoryURL: URL) -> URL {
-    let executableURL = directoryURL.appendingPathComponent(name)
-    FileManager.default.createFile(
-        atPath: executableURL.path(percentEncoded: false),
-        contents: Data("#!/bin/sh\n".utf8),
-        attributes: [.posixPermissions: 0o755]
-    )
-    return executableURL
+private func makeExecutable(_ name: String, at root: URL) throws -> URL {
+    let url = root.appendingPathComponent(name)
+    try "#!/bin/sh\n".write(to: url, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    return url
 }
 
 private func withTemporaryDirectory(_ body: (URL) throws -> Void) throws {
-    let directoryURL = FileManager.default.temporaryDirectory
-        .appendingPathComponent("DependencyCheckerTests-\(UUID().uuidString)", isDirectory: true)
-    try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-    defer {
-        try? FileManager.default.removeItem(at: directoryURL)
-    }
-
-    try body(directoryURL.standardizedFileURL)
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("DependencyChecker-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try body(root.standardizedFileURL)
 }

@@ -15,12 +15,16 @@ final class LauncherModel: ObservableObject {
     struct PendingRun: Equatable {
         let command: TranscriptionCommand
         let output: URL
+        let input: URL
+        let preset: TranscriptionPreset
+        let whisperModelPath: String?
     }
 
     @Published var inputFileURL: URL?
     @Published private(set) var lastOutputURL: URL?
     @Published var errorAlert: ErrorPresentation?
     @Published var pendingOverwriteRun: PendingRun?
+    @Published var pendingDownloadRun: PendingRun?
     /// True while the environment snapshot is being captured, before
     /// `runner.isRunning` flips; lets the UI show feedback for that phase.
     @Published private(set) var isPreparing = false
@@ -48,7 +52,7 @@ final class LauncherModel: ObservableObject {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         self.selectedPreset = defaults.string(forKey: DefaultsKeys.selectedPreset)
-            .flatMap(TranscriptionPreset.init(defaultsValue:)) ?? .fastCloud
+            .flatMap(TranscriptionPreset.init(defaultsValue:)) ?? .privateLocal
         self.whisperModelPath = defaults.string(forKey: DefaultsKeys.whisperModelPath) ?? ""
         self.vibevoiceContext = defaults.string(forKey: DefaultsKeys.vibevoiceContext) ?? ""
     }
@@ -106,12 +110,12 @@ final class LauncherModel: ObservableObject {
             return
         }
 
+        let modelPath = selectedPreset.usesWhisperModel ? nonEmpty(whisperModelPath) : nil
         let command = CommandBuilder.command(
             for: selectedPreset,
             input: input,
             repoRoot: repoRoot,
-            whisperModelPath: selectedPreset.usesWhisperModel
-                ? nonEmpty(whisperModelPath) : nil,
+            whisperModelPath: modelPath,
             vibevoiceContext: selectedPreset.usesVibeVoiceContext
                 ? nonEmpty(vibevoiceContext) : nil
         )
@@ -119,8 +123,27 @@ final class LauncherModel: ObservableObject {
             for: selectedPreset.outputPathPreset,
             input: input
         )
-        let run = PendingRun(command: command, output: output)
-        if FileManager.default.fileExists(atPath: output.path(percentEncoded: false)) {
+        let run = PendingRun(
+            command: command,
+            output: output,
+            input: input,
+            preset: selectedPreset,
+            whisperModelPath: modelPath
+        )
+        if selectedPreset == .fastCloud || selectedPreset == .bestCloud || selectedPreset == .compatibleCloud {
+            confirmOverwrite(run)
+        } else {
+            pendingDownloadRun = run
+        }
+    }
+
+    func approveLocalRun(_ run: PendingRun) {
+        pendingDownloadRun = nil
+        confirmOverwrite(run)
+    }
+
+    private func confirmOverwrite(_ run: PendingRun) {
+        if FileManager.default.fileExists(atPath: run.output.path(percentEncoded: false)) {
             pendingOverwriteRun = run
         } else {
             start(run)
@@ -154,7 +177,21 @@ final class LauncherModel: ObservableObject {
     private func perform(_ run: PendingRun) async {
         defer { isPreparing = false }
         do {
-            let environment = try await EnvironmentSnapshot.capture()
+            let environment = try await EnvironmentSnapshot.refresh()
+            let missing = DependencyChecker.check(
+                preset: run.preset,
+                environment: environment,
+                repoRoot: run.command.workingDirectory,
+                whisperModelPath: run.whisperModelPath,
+                inputFile: run.input
+            ).filter { !$0.isAvailable }
+            guard missing.isEmpty else {
+                errorAlert = ErrorPresentation(
+                    title: "Setup Required",
+                    message: missing.map { "\($0.name): \($0.guidance)" }.joined(separator: "\n\n")
+                )
+                return
+            }
             isPreparing = false
             let outputURL = try await runner.run(command: run.command, environment: environment)
             lastOutputURL = outputURL

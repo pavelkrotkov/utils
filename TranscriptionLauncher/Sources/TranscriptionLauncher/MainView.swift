@@ -6,6 +6,9 @@ struct MainView: View {
     @ObservedObject var model: LauncherModel
     @ObservedObject var runner: ProcessRunner
     @State private var isDropTargeted = false
+    @State private var isCheckingReadiness = true
+    @State private var readinessItems: [DependencyChecker.Item] = []
+    @State private var readinessError: String?
 
     private let metadata = AppMetadata()
 
@@ -13,6 +16,7 @@ struct MainView: View {
         VStack(alignment: .leading, spacing: 12) {
             dropTarget
             presetPicker
+            readinessSection
             controls
             progressSection
             logSection
@@ -22,9 +26,10 @@ struct MainView: View {
         .frame(minWidth: 520, minHeight: 460)
         .navigationTitle(metadata.displayName)
         .onAppear {
-            // Onboarding owns first-run prompting; if the user skipped repo
-            // selection there, don't force the panel open again here.
             repoRootStore.detectRepoRootIfNeeded()
+        }
+        .task(id: readinessKey) {
+            await refreshReadiness()
         }
         .alert(
             model.errorAlert?.title ?? "Error",
@@ -74,6 +79,57 @@ struct MainView: View {
         .disabled(runner.isRunning || model.isPreparing)
     }
 
+    private var readinessKey: String {
+        "\(model.selectedPreset.defaultsValue)|\(model.whisperModelPath)|" +
+        "\(repoRootStore.repoRootURL?.path ?? "")|\(model.inputFileURL?.path ?? "")"
+    }
+
+    private var readinessSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Readiness for \(model.selectedPreset.displayName)")
+                    .font(.headline)
+                Spacer()
+                Button("Recheck") {
+                    Task { await refreshReadiness(force: true) }
+                }
+                .disabled(isCheckingReadiness)
+            }
+            if isCheckingReadiness {
+                ProgressView("Checking requirements...")
+            } else if let readinessError {
+                Text(readinessError).foregroundStyle(.red).font(.caption)
+            } else {
+                ScrollView {
+                    ReadinessChecklist(items: readinessItems)
+                }
+                .frame(maxHeight: 165)
+            }
+        }
+    }
+
+    private func refreshReadiness(force: Bool = false) async {
+        isCheckingReadiness = true
+        readinessError = nil
+        do {
+            let environment = try await (force ? EnvironmentSnapshot.refresh() : EnvironmentSnapshot.capture())
+            guard !Task.isCancelled else { return }
+            readinessItems = DependencyChecker.check(
+                preset: model.selectedPreset,
+                environment: environment,
+                repoRoot: repoRootStore.repoRootURL,
+                whisperModelPath: model.whisperModelPath,
+                inputFile: model.inputFileURL
+            )
+        } catch {
+            if !Task.isCancelled {
+                readinessItems = []
+                readinessError = ErrorPresentation(error: error).message
+            }
+        }
+        isCheckingReadiness = false
+    }
+
     private var controls: some View {
         HStack {
             if runner.isRunning || model.isPreparing {
@@ -86,7 +142,7 @@ struct MainView: View {
                     model.requestRun(repoRoot: repoRootStore.repoRootURL)
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(model.inputFileURL == nil)
+                .disabled(model.inputFileURL == nil || isCheckingReadiness || readinessError != nil || readinessItems.contains { !$0.isAvailable })
             }
 
             Spacer()
@@ -97,6 +153,20 @@ struct MainView: View {
                 }
             }
         }
+        .confirmationDialog(
+            "Allow local Python setup?",
+            isPresented: downloadConfirmationPresented,
+            presenting: model.pendingDownloadRun
+        ) { run in
+            Button("Allow Downloads & Run") {
+                model.approveLocalRun(run)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("uv may download Python packages on first use (some are large). " +
+                 "Downloads and subsequent transcription progress appear in the log. " +
+                 "Installed packages are cached for later runs. No cloud API key is needed.")
+        }
     }
 
     @ViewBuilder
@@ -105,7 +175,7 @@ struct MainView: View {
             HStack(spacing: 8) {
                 ProgressView()
                     .controlSize(.small)
-                Text("Preparing environment...")
+                Text("Checking environment and model...")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -172,6 +242,17 @@ struct MainView: View {
             set: { isPresented in
                 if !isPresented {
                     model.errorAlert = nil
+                }
+            }
+        )
+    }
+
+    private var downloadConfirmationPresented: Binding<Bool> {
+        Binding(
+            get: { model.pendingDownloadRun != nil },
+            set: { isPresented in
+                if !isPresented {
+                    model.pendingDownloadRun = nil
                 }
             }
         )

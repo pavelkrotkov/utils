@@ -1,3 +1,4 @@
+import SwiftUI
 import TranscriptionLauncherLib
 
 extension TranscriptionPreset {
@@ -58,5 +59,32 @@ extension TranscriptionPreset {
             return nil
         }
         self = preset
+    }
+}
+
+struct ReadinessChecklist: View {
+    let items: [DependencyChecker.Item]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(items, id: \.name) { item in
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: item.isAvailable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(item.isAvailable ? .green : .orange)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(item.name).font(.system(.subheadline, design: .monospaced))
+                        if item.isAvailable {
+                            Text(item.resolvedPath.map { "Found: \($0)" } ?? "Ready")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text(item.guidance)
+                                .textSelection(.enabled)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .font(.caption)
+                }
+            }
+        }
     }
 }

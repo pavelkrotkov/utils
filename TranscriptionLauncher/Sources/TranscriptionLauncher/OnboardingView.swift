@@ -29,6 +29,7 @@ final class OnboardingState: ObservableObject {
 /// transcription scripts, then show an advisory dependency checklist.
 struct OnboardingView: View {
     @ObservedObject var repoRootStore: RepoRootStore
+    @ObservedObject var model: LauncherModel
     let onComplete: () -> Void
 
     private enum Step {
@@ -40,6 +41,7 @@ struct OnboardingView: View {
     @State private var step: Step = .capturingEnvironment
     @State private var capturedEnvironment: [String: String] = [:]
     @State private var environmentWarning: String?
+    @State private var isRefreshing = false
     @State private var dependencyItems: [DependencyChecker.Item] = []
 
     var body: some View {
@@ -57,8 +59,12 @@ struct OnboardingView: View {
         .onChange(of: repoRootStore.repoRootURL) { _, repoRootURL in
             if step == .locatingRepo, repoRootURL != nil {
                 advanceToDependencies()
+            } else if step == .reviewingDependencies {
+                updateDependencies()
             }
         }
+        .onChange(of: model.selectedPreset) { _, _ in updateDependencies() }
+        .onChange(of: model.whisperModelPath) { _, _ in updateDependencies() }
     }
 
     @ViewBuilder
@@ -80,7 +86,10 @@ struct OnboardingView: View {
         if repoRootStore.isDetectingRepoRoot {
             ProgressView("Looking for your transcription scripts...")
         } else {
-            Text("Select the folder containing your transcription scripts.")
+            Text("Choose the folder containing your utils transcription scripts.")
+            Text("If you don't have it, run in Terminal: git clone https://github.com/pavelkrotkov/utils.git")
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
 
             if let validationMessage = repoRootStore.repoRootValidationMessage {
                 Text(validationMessage)
@@ -104,64 +113,40 @@ struct OnboardingView: View {
         }
     }
 
-    @ViewBuilder
     private var dependenciesStep: some View {
-        Text("Here's what's available for the transcription presets:")
-
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(dependencyItems, id: \.name) { item in
-                dependencyRow(item)
+        VStack(alignment: .leading, spacing: 10) {
+            Picker("Preset to prepare", selection: $model.selectedPreset) {
+                ForEach(TranscriptionPreset.allCases, id: \.self) { preset in
+                    Text(preset.displayName).tag(preset)
+                }
             }
-        }
-
-        if let environmentWarning {
-            Label(environmentWarning, systemImage: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
+            if model.selectedPreset.usesWhisperModel {
+                TextField("Custom Whisper model absolute path (optional)", text: $model.whisperModelPath)
+                    .textFieldStyle(.roundedBorder)
+            }
+            Text("Setup is manual: run only the commands you approve in Terminal, where installation and model download progress is visible. Python packages are managed by uv, not pip.")
                 .font(.caption)
-        }
-
-        Text("Missing items only disable the matching presets — you can set them up later.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-
-        Button("Continue") {
-            onComplete()
-        }
-        .keyboardShortcut(.defaultAction)
-    }
-
-    private func dependencyRow(_ item: DependencyChecker.Item) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: item.isAvailable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(item.isAvailable ? .green : .orange)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.name)
-                    .font(.body.monospaced())
-
-                Text(detailText(for: item))
+                .foregroundStyle(.secondary)
+            ScrollView {
+                ReadinessChecklist(items: dependencyItems)
+            }
+            .frame(maxHeight: 260)
+            if let environmentWarning {
+                Label(environmentWarning, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+            }
+            HStack {
+                Button("Recheck") { Task { await refreshEnvironment() } }
+                    .disabled(isRefreshing)
+                if isRefreshing { ProgressView().controlSize(.small) }
+                Spacer()
+                Button(dependencyItems.allSatisfy(\.isAvailable) ? "Continue" : "Finish Setup Later") {
+                    onComplete()
+                }
+                .keyboardShortcut(.defaultAction)
             }
         }
-    }
-
-    private func detailText(for item: DependencyChecker.Item) -> String {
-        let purpose: String
-        switch item.requirement {
-        case .localPresets:
-            purpose = "Needed for local presets"
-        case .cloudPresets:
-            purpose = "Needed for cloud presets"
-        case .speakerDiarization:
-            purpose = "Needed for the speaker-labeled local preset"
-        }
-
-        if let resolvedPath = item.resolvedPath {
-            return "\(purpose) — found at \(resolvedPath)"
-        }
-
-        return item.isAvailable ? purpose : "\(purpose) — not found"
     }
 
     private func captureEnvironment() async {
@@ -181,8 +166,30 @@ struct OnboardingView: View {
         }
     }
 
+    private func refreshEnvironment() async {
+        isRefreshing = true
+        defer { isRefreshing = false }
+        do {
+            capturedEnvironment = try await EnvironmentSnapshot.refresh()
+            environmentWarning = nil
+        } catch {
+            environmentWarning = "Could not refresh login shell environment. Check ~/.zprofile."
+        }
+        updateDependencies()
+    }
+
     private func advanceToDependencies() {
-        dependencyItems = DependencyChecker.check(environment: capturedEnvironment)
         step = .reviewingDependencies
+        updateDependencies()
+    }
+
+    private func updateDependencies() {
+        guard step == .reviewingDependencies else { return }
+        dependencyItems = DependencyChecker.check(
+            preset: model.selectedPreset,
+            environment: capturedEnvironment,
+            repoRoot: repoRootStore.repoRootURL,
+            whisperModelPath: model.whisperModelPath
+        )
     }
 }
