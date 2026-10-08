@@ -66,10 +66,22 @@ swift build
 swift test
 ```
 
-Pull requests parse Swift sources on Linux; this does not replace a native
-compile. To test and package on macOS, use the commands above and `make app`,
-or manually run **Actions → Swift → Run workflow** on GitHub. Native macOS
-jobs are not required for every PR.
+Pull requests parse Swift sources on Linux; this is **syntax-only**, not a
+SwiftUI/AppKit build. Full native Swift tests and `.app` packaging run on the
+Apple Silicon (`macos-15`, M1/arm64) GitHub runner **on demand**, rather than
+blocking every PR. For launcher changes or before a release, run:
+
+```sh
+gh workflow run swift.yml --repo pavelkrotkov/utils --ref main
+```
+
+For an unmerged PR use `--ref <branch>`. Alternatively, open
+[Actions → Swift](https://github.com/pavelkrotkov/utils/actions/workflows/swift.yml),
+select **Run workflow**, choose the branch, and run it. Verify the `macos`
+job passes `swift test`, app assembly, `plutil` and `codesign`. Rerunning
+an existing job tests its original commit; dispatch a new workflow for the
+latest branch head. Locally, use `swift test && make app` from this directory;
+[Finder cold/warm validation](TESTING.md) remains a separate manual check.
 
 ## Building the app bundle
 

@@ -49,6 +49,19 @@ Single-test guidance:
   `./audio_transcribe_openai.sh sample.m4a sample.txt`
 - For quick syntax checks on Python scripts: run via `uv run` with `--help` or a small fixture input.
 
+Swift launcher (`TranscriptionLauncher/`):
+- PR CI parses Swift syntax on Linux; it does **not** compile SwiftUI/AppKit.
+- For launcher changes or periodic/release checks, run native `macos-15` (M1/arm64)
+  tests and app packaging on demand:
+  `gh workflow run swift.yml --repo pavelkrotkov/utils --ref main`
+  Use `--ref <branch>` to validate an unmerged PR branch.
+- GitHub UI: **Actions → Swift → Run workflow → select branch → Run workflow**.
+  Confirm the `macos` job completes `swift test`, `make-app.sh`, `plutil` and
+  `codesign` successfully. A rerun of an existing job checks its original SHA;
+  dispatch a **new** workflow to test the current branch head.
+- On a Mac, use `cd TranscriptionLauncher && swift test && make app`. Actual
+  Finder cold/warm use still needs manual verification (see `TranscriptionLauncher/TESTING.md`).
+
 -------------------------------------------------------------------------------
 Operational Notes (from existing docs)
 -------------------------------------------------------------------------------

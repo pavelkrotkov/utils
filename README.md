@@ -353,6 +353,23 @@ model through Hugging Face on first use. Use
 `--from-json <input>.vibevoice.json --format <fmt>` to convert an existing JSON
 transcript to any of the other formats without re-running ASR.
 
+### Transcription Launcher (macOS)
+
+The [TranscriptionLauncher](TranscriptionLauncher/README.md#development) app gets
+Swift syntax checks on Linux in PR CI; these do **not** compile SwiftUI/AppKit.
+For native validation of launcher changes or before a release, run the full
+Apple Silicon (`macos-15`) workflow against the branch you want to verify:
+
+```bash
+gh workflow run swift.yml --repo pavelkrotkov/utils --ref main
+```
+
+Or open [Actions → Swift](https://github.com/pavelkrotkov/utils/actions/workflows/swift.yml),
+select **Run workflow**, choose `main` (or your PR branch), then run it. Verify
+that the `macos` job passes Swift tests, app bundling, and signature checks.
+A rerun of an old job validates its **original commit**, not the latest branch
+head. See the linked launcher README for local validation.
+
 ## Notes
 
 - Scripts are standalone and run directly; no central build or test harness.
