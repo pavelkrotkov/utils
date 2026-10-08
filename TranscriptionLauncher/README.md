@@ -59,6 +59,14 @@ Hugging Face's model cache; the checklist provides an explicit `uvx ... hf
 download` command with progress. The app never starts a transcription with
 missing required items.
 
+Under **Settings → VibeVoice Processing**, single pass (default) lets VibeVoice
+track speakers across the recording. For low-memory machines, choose 1-, 2-,
+or 5-minute chunks; speaker labels reset at every boundary and cannot identify
+people consistently across the full recording. Shorter chunks reduce the
+per-pass memory demand, but even a 5-minute chunk may OOM on 16 GB. A full
+37-minute transcription on an M1/16 GB Mac has not yet been verified; that
+hardware check remains separate from unit tests.
+
 ## Development
 
 ```sh

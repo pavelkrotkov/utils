@@ -25,12 +25,11 @@ def test_plan_chunks_snaps_to_silence() -> None:
     # successive targets, so every cut snaps to silence: chunks butt-join with
     # no overlap anywhere.
     silences = [(289.0, 291.0), (589.0, 591.0)]
-    chunks = vv.plan_chunks(900.0, 300.0, silences, overlap=2.5)
-    assert [c.end for c in chunks] == pytest.approx([290.0, 590.0, 900.0])
+    chunks = vv.plan_chunks(880.0, 300.0, silences, overlap=2.5)
+    assert [c.end for c in chunks] == pytest.approx([290.0, 590.0, 880.0])
     assert all(not c.overlaps_previous for c in chunks)
     assert chunks[0].start == 0.0
-    # Chunks stay within the target size (+25% fold allowance).
-    assert all(c.end - c.start <= 300.0 * 1.25 + 2.5 for c in chunks)
+    assert all(c.end - c.start <= 300.0 for c in chunks)
 
 
 def test_plan_chunks_hard_cuts_with_overlap_without_silence() -> None:
@@ -39,17 +38,22 @@ def test_plan_chunks_hard_cuts_with_overlap_without_silence() -> None:
     assert chunks[0].end == pytest.approx(300.0)
     assert chunks[1].start == pytest.approx(297.5)
     assert chunks[1].overlaps_previous is True
-    # Remaining 402.5s still exceeds the fold threshold, so it splits once more.
     assert len(chunks) == 3
     assert [c.overlaps_previous for c in chunks] == [False, True, True]
     assert chunks[-1].end == pytest.approx(700.0)
-    assert max(c.end - c.start for c in chunks) <= 300.0 * 1.25 + 2.5
+    assert max(c.end - c.start for c in chunks) <= 300.0
 
 
-def test_plan_chunks_folds_short_tail() -> None:
+def test_plan_chunks_balances_short_tail() -> None:
     chunks = vv.plan_chunks(340.0, 300.0, [(299.0, 299.6)], overlap=2.5)
-    assert len(chunks) == 1
-    assert chunks[0].end == pytest.approx(340.0)
+    assert len(chunks) == 2
+    assert [c.end - c.start for c in chunks] == pytest.approx([190.0, 152.5])
+
+
+def test_plan_chunks_ignores_silence_beyond_limit() -> None:
+    chunks = vv.plan_chunks(660.0, 300.0, [(320.0, 322.0)], overlap=2.5)
+    assert chunks[0].end == 300.0
+    assert all(0 < c.end - c.start <= 300.0 for c in chunks)
 
 
 def test_plan_chunks_single_pass_shape_for_tiny_file() -> None:
@@ -89,6 +93,18 @@ def test_merge_dedupes_overlapped_seam_by_coverage() -> None:
     merged = vv.merge_chunk_segments([prev, nxt], chunks)
     assert [s.text for s in merged] == ["tail words", "fresh"]
     assert merged[1].start == pytest.approx(300.5)
+
+
+def test_merge_keeps_uncovered_words_at_hard_cut() -> None:
+    chunks = [vv.Chunk(0.0, 300.0), vv.Chunk(297.5, 597.5, True)]
+    merged = vv.merge_chunk_segments(
+        [[_seg(299.5, 300.0, "end")], [_seg(0.0, 1.0, "missing"), _seg(3.0, 5.0, "after")]],
+        chunks,
+    )
+    assert [s.text for s in merged] == ["missing", "end", "after"]
+    assert [(s.start, s.end) for s in merged] == [
+        (297.5, 298.5), (299.5, 300.0), (300.5, 302.5),
+    ]
 
 
 def test_merge_keeps_all_segments_without_overlap_flag() -> None:

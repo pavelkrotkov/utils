@@ -17,7 +17,7 @@ Usage:
     uv run ./audio_transcribe_vibevoice.py interview.m4a --format srt -o interview.srt
 
 Long files on memory-constrained Macs (16 GB can OOM during prefill):
-    uv run ./audio_transcribe_vibevoice.py long_interview.m4a --chunk-seconds 300
+    uv run ./audio_transcribe_vibevoice.py long_interview.m4a --chunk-seconds 120
 
 Chunking splits the input near natural silences into pieces of at most
 --chunk-seconds, transcribes each through the same single-pass model call, and
@@ -25,8 +25,8 @@ splices the per-chunk segments back onto one absolute timeline. Windows with no
 usable silence are hard-cut with a small overlap whose double-transcribed span
 is deduped at splice time. Known limitation: speaker labels reset at chunk
 boundaries ("Speaker 1" in chunk 2 is not necessarily "Speaker 1" in chunk 1).
-Chunking trades VibeVoice's cross-file speaker consistency for the ability to
-run at all on low memory; use it when you need *what* was said, not *who*.
+Chunking trades VibeVoice's cross-file speaker consistency for lower memory
+use. No chunk duration (including 300 seconds) guarantees success on 16 GB.
 """
 
 from __future__ import annotations
@@ -293,15 +293,7 @@ def plan_chunks(
     silences: list[tuple[float, float]],
     overlap: float,
 ) -> list[Chunk]:
-    """Split [0, duration] into chunks of at most ~chunk_seconds.
-
-    Boundaries snap to the midpoint of a detected silence inside a search band
-    around each target cut, so chunks butt-join cleanly with no overlap. A
-    window with no usable silence hard-cuts at the target and the next chunk
-    rewinds by `overlap` seconds (flagged overlaps_previous). A remainder of at
-    most 25% of chunk_seconds folds into the previous chunk instead of forming
-    a sliver tail.
-    """
+    """Split audio into bounded chunks, snapping cuts backward to silences."""
     search = chunk_seconds / 3.0
     midpoints = [(start + end) / 2.0 for start, end in silences]
     chunks: list[Chunk] = []
@@ -309,19 +301,15 @@ def plan_chunks(
     overlapped = False
     while True:
         remaining = duration - start
-        if remaining <= chunk_seconds * 1.25:
+        if remaining <= chunk_seconds:
             chunks.append(Chunk(start=start, end=duration, overlaps_previous=overlapped))
             break
-        target = start + chunk_seconds
-        band = [m for m in midpoints if target - search <= m <= target + search]
-        cut = min(band, key=lambda m: abs(m - target)) if band else target
+        target = min(start + chunk_seconds, duration - chunk_seconds / 2)
+        band = [m for m in midpoints if target - search <= m <= target]
+        cut = max(band, default=target)
         chunks.append(Chunk(start=start, end=cut, overlaps_previous=overlapped))
-        if band:
-            start = cut
-            overlapped = False
-        else:
-            start = max(cut - overlap, 0.0)
-            overlapped = True
+        start = cut if band else cut - overlap
+        overlapped = not band and overlap > 0
     return chunks
 
 
@@ -359,12 +347,10 @@ def merge_chunk_segments(
 ) -> list[TranscriptSegment]:
     """Splice per-chunk segments onto one absolute timeline.
 
-    Each chunk's local times are shifted by its start offset. Overlapping
-    (hard-cut) seams are deduped by coverage: leading segments of the later
-    chunk that end at or before the latest time already covered by earlier
-    chunks are dropped, so the double-transcribed span appears exactly once.
-    Text is not compared — VibeVoice's rendering of an overlap region differs
-    between passes, so dedupe is time-based.
+    Each chunk's local times are shifted by its start offset. A later segment
+    is dropped at an overlapping seam only when an earlier segment covers its
+    entire time range; uncovered segments survive. VibeVoice can phrase the
+    same audio differently across passes, so this is approximate time dedupe.
     """
     merged: list[TranscriptSegment] = []
     for segments, chunk in zip(chunk_segments, chunks, strict=True):
@@ -377,9 +363,12 @@ def merge_chunk_segments(
             )
             for segment in segments
         ]
-        if chunk.overlaps_previous and merged:
-            covered_until = max(segment.end for segment in merged)
-            shifted = [s for s in shifted if s.end > covered_until + 1e-6]
+        if chunk.overlaps_previous:
+            covered = [s for s in merged if s.end > chunk.start]
+            shifted = [
+                s for s in shifted
+                if not any(p.start <= s.start <= s.end <= p.end for p in covered)
+            ]
         merged.extend(shifted)
     merged.sort(key=lambda s: (s.start, s.end))
     return merged
@@ -501,11 +490,11 @@ def main() -> None:
     if not args.from_json and not args.input:
         parser.error("input is required unless --from-json is used")
 
-    if args.chunk_seconds < 0:
+    if not 0 <= args.chunk_seconds < float("inf"):
         parser.error("--chunk-seconds must be >= 0 (0 disables chunking)")
     if args.chunk_seconds and args.chunk_seconds < 10:
         parser.error("--chunk-seconds must be at least 10 seconds")
-    if args.chunk_overlap < 0:
+    if not 0 <= args.chunk_overlap < float("inf"):
         parser.error("--chunk-overlap must be >= 0")
     if args.chunk_seconds and args.chunk_overlap >= args.chunk_seconds / 2:
         parser.error("--chunk-overlap must be smaller than half of --chunk-seconds")
