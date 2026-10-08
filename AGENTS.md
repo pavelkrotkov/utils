@@ -1,8 +1,8 @@
 # Agents Guide for utils
 
-This repository is a small collection of standalone utility scripts. There is no
-single build system, no automated test suite, and no lint config. Use the notes
-below to run scripts safely and follow the established style.
+This repository contains standalone utility scripts and a macOS SwiftPM
+transcription launcher. Use the notes below to run and validate them safely
+and follow the established style.
 
 Project focus areas:
 - PDF to Markdown conversion for scientific papers (Mathpix SDK).
@@ -15,7 +15,7 @@ If you need broader project context, read `GEMINI.md`.
 Build / Lint / Test Commands
 -------------------------------------------------------------------------------
 
-There is no formal build step or repository-wide test suite. Scripts are executed directly; run Python scripts via `uv run` (avoid `python3` for normal runs).
+There is no repository-wide build step. Python scripts run via `uv run` (avoid `python3` for normal runs); the transcription launcher has its own SwiftPM build and tests.
 
 Linting (optional):
 - `ruff check .`
@@ -48,6 +48,20 @@ Single-test guidance:
 - Use a small fixture file to validate behavior, e.g.
   `./audio_transcribe_openai.sh sample.m4a sample.txt`
 - For quick syntax checks on Python scripts: run via `uv run` with `--help` or a small fixture input.
+
+-------------------------------------------------------------------------------
+Swift launcher validation:
+- `TranscriptionLauncher/` PRs run a Linux Swift syntax parse, not a native
+  SwiftUI/AppKit build. Do not treat that check as full macOS validation.
+- For native M1 validation, use GitHub **Actions → Swift → Run workflow**,
+  selecting the branch or `main` for merged changes; the `macos-15` job runs
+  `swift test`, assembles the app, and verifies `plutil`/`codesign`.
+- CLI equivalent: `gh workflow run swift.yml --repo pavelkrotkov/utils --ref main`;
+  check results with `gh run list --repo pavelkrotkov/utils --workflow swift.yml --limit 5`.
+  Rerunning a previous job checks its original commit, not the current head.
+- Local Mac: `cd TranscriptionLauncher && swift test && make app`.
+  Run native validation for substantive launcher changes or releases, not for
+  unrelated utility scripts. It is available on demand, not a required PR gate.
 
 -------------------------------------------------------------------------------
 Operational Notes (from existing docs)
