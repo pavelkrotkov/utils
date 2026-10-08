@@ -50,6 +50,14 @@ with `OPENAI_API_KEY`/`HF_TOKEN` configured and a few real recordings.
 - [ ] Log view scrolls and shows live output.
 - [ ] App remains responsive during transcription (no UI freezes).
 - [ ] Settings changes persist across app restarts.
+- [ ] A clean profile starts with **Private local**; switching to a cloud
+      preset shows the upload/API-cost alert, and Cancel retains the local
+      preset without saving a cloud choice.
+- [ ] After cloud approval, the chosen preset survives restart without
+      repeated alerts. An older saved cloud choice with no approval requires
+      consent when Run is requested; cancel must not start a cloud process.
+- [ ] Failed cloud API responses never dump raw response bodies or transcripts
+      into the log.
 - [ ] Refresh Environment picks up shell variables changed since launch.
 
 ### First-run

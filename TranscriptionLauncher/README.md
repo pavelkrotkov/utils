@@ -11,6 +11,11 @@ Homebrew tools or download models without your action. On first launch, choose
 click **Recheck**. Run only commands you approve in Terminal; the commands
 below display installation or download progress.
 
+Cloud presets upload audio to OpenAI, require your own separately configured
+`OPENAI_API_KEY`, and may incur API usage charges. The launcher explains this
+before allowing a cloud selection and remembers approval for later cloud runs.
+Previously saved cloud presets are retained, but require approval before upload.
+
 1. Install [Homebrew](https://brew.sh/) if needed, then prepare a checkout:
 
    ```sh
