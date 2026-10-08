@@ -30,7 +30,7 @@ jobs:
           persist-credentials: false
       - name: Parse Swift sources
         run: |
-          swiftc -frontend -parse TranscriptionLauncher/Package.swift \
+          swiftc -frontend -parse -enable-bare-slash-regex TranscriptionLauncher/Package.swift \
             TranscriptionLauncher/Sources/*/*.swift \
             TranscriptionLauncher/Tests/*/*.swift
 
