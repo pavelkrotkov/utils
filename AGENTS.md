@@ -50,18 +50,27 @@ Single-test guidance:
 - For quick syntax checks on Python scripts: run via `uv run` with `--help` or a small fixture input.
 
 -------------------------------------------------------------------------------
-Swift launcher validation:
-- `TranscriptionLauncher/` PRs run a Linux Swift syntax parse, not a native
-  SwiftUI/AppKit build. Do not treat that check as full macOS validation.
-- For native M1 validation, use GitHub **Actions → Swift → Run workflow**,
-  selecting the branch or `main` for merged changes; the `macos-15` job runs
-  `swift test`, assembles the app, and verifies `plutil`/`codesign`.
-- CLI equivalent: `gh workflow run swift.yml --repo pavelkrotkov/utils --ref main`;
-  check results with `gh run list --repo pavelkrotkov/utils --workflow swift.yml --limit 5`.
-  Rerunning a previous job checks its original commit, not the current head.
-- Local Mac: `cd TranscriptionLauncher && swift test && make app`.
-  Run native validation for substantive launcher changes or releases, not for
-  unrelated utility scripts. It is available on demand, not a required PR gate.
+Swift launcher validation (mandatory for app changes):
+- Whenever a PR changes the Swift app's source, tests, `Package.swift`, build
+  scripts, packaging, resources, or `.github/workflows/swift.yml`, **dispatch**
+  the native macOS Swift workflow for that PR branch and verify it before
+  merging. Do this even for small changes; documentation-only and unrelated
+  Python changes do not require native Swift validation.
+- Automatic PR CI only parses Swift syntax on Linux; it does not compile
+  SwiftUI/AppKit, run native tests, or verify the app bundle.
+- After pushing the complete patch, run
+  `gh workflow run swift.yml --repo pavelkrotkov/utils --ref YOUR_PR_BRANCH`
+  or select **Actions → Swift → Run workflow → PR branch** in GitHub.
+  Never use `--ref main` to validate unmerged PR code.
+- Inspect `gh run list --repo pavelkrotkov/utils --workflow swift.yml --limit 5`
+  and the new run's details. Confirm its `macos-15` (M1) job passes `swift test`,
+  `Scripts/make-app.sh`, `plutil` and `codesign`; record the run URL and
+  tested commit SHA in the PR. A rerun checks the **original** SHA: dispatch a
+  fresh workflow after any further app changes.
+- If workflow dispatch or native validation is unavailable, explain the blocker
+  and do **not** merge the app-changing PR based on syntax-only CI. A local
+  Mac can run `cd TranscriptionLauncher && swift test && make app`; actual
+  Finder cold/warm behavior still requires manual testing when relevant.
 
 -------------------------------------------------------------------------------
 Operational Notes (from existing docs)
@@ -254,7 +263,8 @@ Follow this sequence for every change, not just large ones.
      resolve it.
    Two cycles matter because the second catches reviews prompted by fixes
    pushed during the first.
-4. Merge once every thread is addressed and CI is green.
+4. Merge once every thread is addressed, CI is green, and any required native
+   Swift validation above has passed for the current PR head.
 
 Do not merge a pull request whose review threads are still open, and do not
 merge on a red or unverified head.

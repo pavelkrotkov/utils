@@ -66,10 +66,15 @@ swift build
 swift test
 ```
 
-Pull requests parse Swift sources on Linux; this does not replace a native
-compile. To test and package on macOS, use the commands above and `make app`,
-or manually run **Actions → Swift → Run workflow** on GitHub. Native macOS
-jobs are not required for every PR.
+PR CI parses Swift on Linux; this is **not** a native build. For every app
+source, test, build, or packaging change, agents must dispatch the `Swift`
+workflow on the current PR branch before merging, using
+`gh workflow run swift.yml --repo pavelkrotkov/utils --ref YOUR_PR_BRANCH`
+or **Actions → Swift → Run workflow**. Verify its M1 `macos-15` job passes
+native tests, app packaging, and signature checks. Re-dispatch after changes:
+rerunning an old job tests its original commit. Documentation-only and
+unrelated Python changes do not require native Swift validation. See
+[AGENTS.md](../AGENTS.md) for the merge rule.
 
 ## Building the app bundle
 

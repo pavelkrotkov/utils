@@ -60,9 +60,11 @@ swift test
 make app
 ```
 
-Use native validation for substantive launcher changes and before releases, not
-for unrelated Python utilities. Rerunning an old workflow job validates its
-original commit, **not** the current `main` revision. See
+Agents must dispatch the workflow on the **PR branch** and verify a successful
+native run before merging any Swift app source, test, build, or packaging change.
+This is on demand (not automatic PR CI); documentation-only and unrelated
+Python changes do not need a native run. Rerunning an old job validates its
+original commit, **not** the current branch head. See
 [TranscriptionLauncher/README.md](TranscriptionLauncher/README.md) for launcher setup.
 
 ## PDF Conversion
