@@ -36,6 +36,35 @@ Environment variables:
 - `HF_TOKEN` for optional pyannote diarization.
 - `GGML_METAL_PATH_RESOURCES` optional for whisper-cpp Metal support.
 
+## Swift Launcher Validation
+
+Pull requests touching `TranscriptionLauncher/` run a quick Swift syntax check on Linux.
+This does **not** type-check or build the macOS app. Full `swift test`, app packaging,
+and `plutil`/`codesign` verification run on demand on GitHub's `macos-15`
+Apple Silicon (M1) runner.
+
+In GitHub, open [Actions → Swift](https://github.com/pavelkrotkov/utils/actions/workflows/swift.yml),
+choose **Run workflow**, select `main` (or the branch to test), and run it.
+Or use the authenticated GitHub CLI:
+
+```bash
+gh workflow run swift.yml --repo pavelkrotkov/utils --ref main
+gh run list --repo pavelkrotkov/utils --workflow swift.yml --limit 5
+```
+
+To test locally on a Mac:
+
+```bash
+cd TranscriptionLauncher
+swift test
+make app
+```
+
+Use native validation for substantive launcher changes and before releases, not
+for unrelated Python utilities. Rerunning an old workflow job validates its
+original commit, **not** the current `main` revision. See
+[TranscriptionLauncher/README.md](TranscriptionLauncher/README.md) for launcher setup.
+
 ## PDF Conversion
 
 Mathpix (best for math-heavy PDFs):
