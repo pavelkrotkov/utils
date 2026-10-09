@@ -25,12 +25,13 @@ final class LauncherModel: ObservableObject {
     @Published var errorAlert: ErrorPresentation?
     @Published var pendingOverwriteRun: PendingRun?
     @Published var pendingDownloadRun: PendingRun?
+    @Published private(set) var pendingCloudPreset: TranscriptionPreset?
     /// True while the environment snapshot is being captured, before
     /// `runner.isRunning` flips; lets the UI show feedback for that phase.
     @Published private(set) var isPreparing = false
 
-    @Published var selectedPreset: TranscriptionPreset {
-        didSet { defaults.set(selectedPreset.defaultsValue, forKey: DefaultsKeys.selectedPreset) }
+    @Published private(set) var selectedPreset: TranscriptionPreset {
+        didSet { preferences.selectedPreset = selectedPreset }
     }
     @Published var whisperModelPath: String {
         didSet { defaults.set(whisperModelPath, forKey: DefaultsKeys.whisperModelPath) }
@@ -46,6 +47,7 @@ final class LauncherModel: ObservableObject {
 
     private let notifications = NotificationManager()
     private let defaults: UserDefaults
+    private let preferences: PresetPreferences
     /// The in-flight run, spanning environment capture and the process run.
     /// Guarding on this instead of `runner.isRunning` closes the window
     /// before `runner.run` starts, where a second Run click would otherwise
@@ -53,12 +55,32 @@ final class LauncherModel: ObservableObject {
     private var runTask: Task<Void, Never>?
 
     init(defaults: UserDefaults = .standard) {
+        let preferences = PresetPreferences(defaults: defaults)
         self.defaults = defaults
-        self.selectedPreset = defaults.string(forKey: DefaultsKeys.selectedPreset)
-            .flatMap(TranscriptionPreset.init(defaultsValue:)) ?? .privateLocal
+        self.preferences = preferences
+        self.selectedPreset = preferences.selectedPreset
         self.whisperModelPath = defaults.string(forKey: DefaultsKeys.whisperModelPath) ?? ""
         self.vibevoiceContext = defaults.string(forKey: DefaultsKeys.vibevoiceContext) ?? ""
         self.vibevoiceChunkSeconds = defaults.integer(forKey: DefaultsKeys.vibevoiceChunkSeconds)
+    }
+
+    func selectPreset(_ preset: TranscriptionPreset) {
+        if preferences.requiresConsent(for: preset) {
+            pendingCloudPreset = preset
+        } else {
+            selectedPreset = preset
+        }
+    }
+
+    func approveCloudSelection(_ preset: TranscriptionPreset) {
+        guard preset.isCloud else { return }
+        preferences.cloudUploadApproved = true
+        selectedPreset = preset
+        pendingCloudPreset = nil
+    }
+
+    func dismissCloudSelection() {
+        pendingCloudPreset = nil
     }
 
     /// Accepts the first dropped or Finder-opened file when it is an
@@ -114,6 +136,11 @@ final class LauncherModel: ObservableObject {
             return
         }
 
+        guard !preferences.requiresConsent(for: selectedPreset) else {
+            pendingCloudPreset = selectedPreset
+            return
+        }
+
         let modelPath = selectedPreset.usesWhisperModel ? nonEmpty(whisperModelPath) : nil
         let command = CommandBuilder.command(
             for: selectedPreset,
@@ -135,7 +162,7 @@ final class LauncherModel: ObservableObject {
             preset: selectedPreset,
             whisperModelPath: modelPath
         )
-        if selectedPreset == .fastCloud || selectedPreset == .bestCloud || selectedPreset == .compatibleCloud {
+        if selectedPreset.isCloud {
             confirmOverwrite(run)
         } else {
             pendingDownloadRun = run
@@ -157,6 +184,10 @@ final class LauncherModel: ObservableObject {
 
     func start(_ run: PendingRun) {
         guard runTask == nil else {
+            return
+        }
+        guard !preferences.requiresConsent(for: run.preset) else {
+            pendingCloudPreset = run.preset
             return
         }
 

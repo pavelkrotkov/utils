@@ -64,23 +64,31 @@ struct MainView: View {
     }
 
     private var presetPicker: some View {
-        Picker("Preset", selection: $model.selectedPreset) {
-            Section("Cloud") {
-                ForEach(TranscriptionPreset.cloudPresets, id: \.self) { preset in
-                    Text(preset.displayName).tag(preset)
+        VStack(alignment: .leading, spacing: 4) {
+            Picker("Preset", selection: Binding(
+                get: { model.selectedPreset },
+                set: { model.selectPreset($0) }
+            )) {
+                Section("Local — on device") {
+                    ForEach(TranscriptionPreset.localPresets, id: \.self) { preset in
+                        Text(preset.displayName).tag(preset)
+                    }
+                }
+                Section("OpenAI cloud — upload and charges") {
+                    ForEach(TranscriptionPreset.cloudPresets, id: \.self) { preset in
+                        Text(preset.displayName).tag(preset)
+                    }
                 }
             }
-            Section("Local") {
-                ForEach(TranscriptionPreset.localPresets, id: \.self) { preset in
-                    Text(preset.displayName).tag(preset)
-                }
-            }
+            Text(model.selectedPreset.privacyDescription)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .disabled(runner.isRunning || model.isPreparing)
     }
 
     private var readinessKey: String {
-        "\(model.selectedPreset.defaultsValue)|\(model.whisperModelPath)|" +
+        "\(model.selectedPreset.rawValue)|\(model.whisperModelPath)|" +
         "\(repoRootStore.repoRootURL?.path ?? "")|\(model.inputFileURL?.path ?? "")"
     }
 

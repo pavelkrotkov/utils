@@ -20,9 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 _ = try await EnvironmentSnapshot.capture()
             } catch {
-                environmentLogger.warning(
-                    "Unable to capture login shell environment: \(String(describing: error), privacy: .public)"
-                )
+                environmentLogger.warning("Unable to capture login shell environment")
             }
         }
     }
@@ -58,6 +56,23 @@ struct TranscriptionLauncherApp: App {
             // SwiftUI reopens or creates the window as needed.
             .onOpenURL { url in
                 launcherModel.acceptInputFiles([url])
+            }
+            .alert(
+                "Allow OpenAI Cloud Transcription?",
+                isPresented: Binding(
+                    get: { launcherModel.pendingCloudPreset != nil },
+                    set: { if !$0 { launcherModel.dismissCloudSelection() } }
+                ),
+                presenting: launcherModel.pendingCloudPreset
+            ) { preset in
+                Button("Allow Cloud Uploads") {
+                    launcherModel.approveCloudSelection(preset)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text("Cloud transcription uploads your audio or video to OpenAI. " +
+                     "You must configure your own OPENAI_API_KEY and OpenAI may charge for usage. " +
+                     "Choose a local preset to process audio on this Mac instead.")
             }
         }
         .commands {

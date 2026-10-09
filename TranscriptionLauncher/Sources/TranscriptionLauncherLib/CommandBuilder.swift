@@ -1,12 +1,19 @@
 import Foundation
 
-public enum TranscriptionPreset: CaseIterable, Equatable, Sendable {
+public enum TranscriptionPreset: String, CaseIterable, Equatable, Sendable {
     case fastCloud
     case bestCloud
     case compatibleCloud
     case privateLocal
     case privateLocalWithSpeakers
     case appleSiliconLocal
+
+    public var isCloud: Bool {
+        switch self {
+        case .fastCloud, .bestCloud, .compatibleCloud: true
+        case .privateLocal, .privateLocalWithSpeakers, .appleSiliconLocal: false
+        }
+    }
 }
 
 public struct TranscriptionCommand: Equatable, Sendable {

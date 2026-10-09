@@ -160,38 +160,18 @@ HTTP_STATUS=$(curl -sS -o "$RESPONSE_FILE" -w '%{http_code}' \
 
 if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
   echo "Error: OpenAI API request failed (HTTP ${HTTP_STATUS})." >&2
-  if command -v jq >/dev/null 2>&1 && jq -e . >/dev/null 2>&1 < "$RESPONSE_FILE"; then
-    ERROR_MESSAGE=$(jq -r '.error.message // empty' "$RESPONSE_FILE")
-    ERROR_TYPE=$(jq -r '.error.type // empty' "$RESPONSE_FILE")
-    if [ -n "$ERROR_MESSAGE" ]; then
-      if [ -n "$ERROR_TYPE" ]; then
-        echo "API error (${ERROR_TYPE}): ${ERROR_MESSAGE}" >&2
-      else
-        echo "API error: ${ERROR_MESSAGE}" >&2
-      fi
-    else
-      echo "Response body:" >&2
-      cat "$RESPONSE_FILE" >&2
-    fi
-  else
-    echo "Response body:" >&2
-    cat "$RESPONSE_FILE" >&2
-  fi
   exit 1
 fi
 
 if command -v jq >/dev/null 2>&1; then
   if ! jq -e . >/dev/null 2>&1 < "$RESPONSE_FILE"; then
     echo "Error: API returned non-JSON response." >&2
-    cat "$RESPONSE_FILE" >&2
     exit 1
   fi
 
   TRANSCRIPT=$(jq -r '.text // empty' "$RESPONSE_FILE")
   if [ -z "$TRANSCRIPT" ]; then
     echo "Error: API response did not contain a non-empty '.text' field." >&2
-    echo "Response body:" >&2
-    cat "$RESPONSE_FILE" >&2
     exit 1
   fi
 

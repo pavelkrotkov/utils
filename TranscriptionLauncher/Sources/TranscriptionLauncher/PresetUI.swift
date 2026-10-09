@@ -42,24 +42,12 @@ extension TranscriptionPreset {
         }
     }
 
-    /// Stable identifier used to persist the selection in `UserDefaults`.
-    var defaultsValue: String {
-        switch self {
-        case .fastCloud: "fastCloud"
-        case .bestCloud: "bestCloud"
-        case .compatibleCloud: "compatibleCloud"
-        case .privateLocal: "privateLocal"
-        case .privateLocalWithSpeakers: "privateLocalWithSpeakers"
-        case .appleSiliconLocal: "appleSiliconLocal"
-        }
+    var privacyDescription: String {
+        isCloud
+            ? "Cloud uploads audio to OpenAI. Your own API key is required and usage may cost money."
+            : "On-device transcription. Your audio stays on this Mac; no cloud API key is needed."
     }
 
-    init?(defaultsValue: String) {
-        guard let preset = Self.allCases.first(where: { $0.defaultsValue == defaultsValue }) else {
-            return nil
-        }
-        self = preset
-    }
 }
 
 struct ReadinessChecklist: View {

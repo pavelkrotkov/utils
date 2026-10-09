@@ -115,11 +115,24 @@ struct OnboardingView: View {
 
     private var dependenciesStep: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Picker("Preset to prepare", selection: $model.selectedPreset) {
-                ForEach(TranscriptionPreset.allCases, id: \.self) { preset in
-                    Text(preset.displayName).tag(preset)
+            Picker("Preset to prepare", selection: Binding(
+                get: { model.selectedPreset },
+                set: { model.selectPreset($0) }
+            )) {
+                Section("Local — on device") {
+                    ForEach(TranscriptionPreset.localPresets, id: \.self) { preset in
+                        Text(preset.displayName).tag(preset)
+                    }
+                }
+                Section("OpenAI cloud — upload and charges") {
+                    ForEach(TranscriptionPreset.cloudPresets, id: \.self) { preset in
+                        Text(preset.displayName).tag(preset)
+                    }
                 }
             }
+            Text(model.selectedPreset.privacyDescription)
+                .font(.caption)
+                .foregroundStyle(.secondary)
             if model.selectedPreset.usesWhisperModel {
                 TextField("Custom Whisper model absolute path (optional)", text: $model.whisperModelPath)
                     .textFieldStyle(.roundedBorder)
