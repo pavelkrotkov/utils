@@ -4,4 +4,5 @@ enum DefaultsKeys {
     static let hasCompletedOnboarding = "hasCompletedOnboarding"
     static let whisperModelPath = "whisperModelPath"
     static let vibevoiceContext = "vibevoiceContext"
+    static let vibevoiceChunkSeconds = "vibevoiceChunkSeconds"
 }

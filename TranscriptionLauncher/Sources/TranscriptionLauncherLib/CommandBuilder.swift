@@ -45,7 +45,8 @@ public enum CommandBuilder {
         input: URL,
         repoRoot: URL,
         whisperModelPath: String? = nil,
-        vibevoiceContext: String? = nil
+        vibevoiceContext: String? = nil,
+        vibevoiceChunkSeconds: Int = 0
     ) -> TranscriptionCommand {
         precondition(input.isFileURL, "Input URL must be a file URL")
         precondition(repoRoot.isFileURL, "Repository root URL must be a file URL")
@@ -92,7 +93,7 @@ public enum CommandBuilder {
                 whisperModelPath: whisperModelPath
             )
         case .appleSiliconLocal:
-            var options = ["--format", "txt"]
+            var options = ["--format", "txt", "--chunk-seconds", String(vibevoiceChunkSeconds)]
             if let vibevoiceContext {
                 options += ["--context", vibevoiceContext]
             }

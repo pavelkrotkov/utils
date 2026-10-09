@@ -90,6 +90,18 @@ struct SettingsView: View {
                 TextField("Hotwords or domain context", text: $model.vibevoiceContext)
                     .textFieldStyle(.roundedBorder)
             }
+            LabeledContent("VibeVoice Processing") {
+                Picker("Processing mode", selection: $model.vibevoiceChunkSeconds) {
+                    Text("Single pass").tag(0)
+                    Text("1-minute chunks").tag(60)
+                    Text("2-minute chunks").tag(120)
+                    Text("5-minute chunks").tag(300)
+                }
+            }
+            Text("Chunking lowers memory use but resets speaker identities at each chunk. " +
+                 "Even 5-minute chunks may exceed 16 GB; try shorter chunks if needed.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 

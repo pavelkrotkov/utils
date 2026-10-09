@@ -25,8 +25,8 @@ Previously saved cloud presets are retained, but require approval before upload.
 
    Homebrew installs `whisper-cli`, which the Python script uses automatically
    when `whisper-cpp` is absent. Use **Choose Folder** to select the cloned
-   `utils` directory. `uv` manages Python dependencies from each script's
-   PEP 723 metadata; no manual `pip install` is required.
+   `utils` directory. `uv` manages script dependencies; no manual `pip install`
+   is required.
 
 2. Download the default Whisper model (about **874 MB**), preserving an
    incomplete download as `.part` rather than treating it as a ready model:
@@ -42,10 +42,9 @@ Previously saved cloud presets are retained, but require approval before upload.
 3. Build and launch the Finder app (see below). Check that the checklist shows
    the script, `uv`, `ffmpeg`, `whisper-cli`/`whisper-cpp`, and model as ready.
    Drop a short audio file and choose **Run**. The app asks for consent before
-   `uv` runs; on cold start, it may fetch Python dependencies (including
-   PyTorch/pyannote even for plain Whisper, as declared by the existing
-   script). The log shows subprocess output. Repeated warm runs reuse `uv`'s
-   cache and the model file.
+   `uv` runs. Plain Whisper needs no additional Python packages; the speakers
+   preset installs pyannote and PyTorch on demand through `uv`. The log shows
+   subprocess output. Warm runs reuse `uv`'s cache and the model file.
 
 **Finder / Apple Silicon PATH:** If Terminal can find `uv` or `whisper-cli` but
 Finder cannot, ensure Homebrew's shell setup is in `~/.zprofile`:
@@ -64,6 +63,14 @@ Hugging Face's model cache; the checklist provides an explicit `uvx ... hf
 download` command with progress. The app never starts a transcription with
 missing required items.
 
+Under **Settings → VibeVoice Processing**, single pass (default) lets VibeVoice
+track speakers across the recording. For low-memory machines, choose 1-, 2-,
+or 5-minute chunks; speaker labels reset at every boundary and cannot identify
+people consistently across the full recording. Shorter chunks reduce the
+per-pass memory demand, but even a 5-minute chunk may OOM on 16 GB. A full
+37-minute transcription on an M1/16 GB Mac has not yet been verified; that
+hardware check remains separate from unit tests.
+
 ## Development
 
 ```sh
@@ -75,8 +82,11 @@ PR CI parses Swift on Linux; this is **not** a native build. For every app
 source, test, build, or packaging change, agents must dispatch the `Swift`
 workflow on the current PR branch before merging, using
 `gh workflow run swift.yml --repo pavelkrotkov/utils --ref YOUR_PR_BRANCH`
-or **Actions → Swift → Run workflow**. Verify its M1 `macos-15` job passes
-native tests, app packaging, and signature checks. Re-dispatch after changes:
+or **Actions → Swift → Run workflow**. Alternatively, mark a same-repo draft
+PR **Ready for review** to trigger native validation of its current head SHA
+(no CLI needed); re-draft and mark ready again after further changes.
+Verify its M1 `macos-15` job passes native tests, packaging, and signature checks.
+Re-dispatch after changes:
 rerunning an old job tests its original commit. Documentation-only and
 unrelated Python changes do not require native Swift validation. See
 [AGENTS.md](../AGENTS.md) for the merge rule.

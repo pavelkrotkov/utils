@@ -15,7 +15,7 @@ For deeper context, refer to the script headers and inline help.
 
 ## Setup
 
-Python dependencies are declared inline in each script (PEP 723) and resolved automatically by `uv run`.
+Python dependencies are managed by `uv run` through PEP 723 metadata; optional Whisper diarization adds pyannote only when requested.
 
 System tools (macOS via Homebrew):
 
@@ -45,6 +45,10 @@ Apple Silicon (M1) runner.
 
 In GitHub, open [Actions → Swift](https://github.com/pavelkrotkov/utils/actions/workflows/swift.yml),
 choose **Run workflow**, select `main` (or the branch to test), and run it.
+Or mark a same-repository draft PR **Ready for review** to run the same native
+checks on its exact head SHA. After later Swift changes, re-draft and mark
+ready again. Ordinary PR pushes continue to run syntax checks only.
+
 Or use the authenticated GitHub CLI:
 
 ```bash
@@ -356,6 +360,7 @@ uv run ./audio_transcribe_vibevoice.py interview.m4a
 uv run ./audio_transcribe_vibevoice.py interview.m4a --context "speaker names, acronyms"
 uv run ./audio_transcribe_vibevoice.py interview.m4a --format vtt -o interview.vtt
 uv run ./audio_transcribe_vibevoice.py interview.m4a --format txt -o interview.txt
+uv run ./audio_transcribe_vibevoice.py lecture.m4a --chunk-seconds 120
 
 # Re-format an existing JSON transcript without re-transcribing:
 uv run ./audio_transcribe_vibevoice.py --from-json interview.vibevoice.json --format vtt
@@ -369,6 +374,9 @@ Enable pyannote speaker diarization when speaker labels are needed:
 ```bash
 uv run ./audio_transcribe_whisper.py interview.m4a --diarization --num-speakers 2
 ```
+
+Plain local Whisper uses no Python packages beyond the standard library. With
+`--diarization`, `uv` installs pyannote and its PyTorch dependencies on demand.
 
 By default, the local script prints progress/ETA reports and writes `<input>.txt`.
 With `--diarization`, it writes `<input>.spk.txt`. Use `--no-progress` to silence
