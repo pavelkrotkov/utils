@@ -338,11 +338,26 @@ OpenAI API (cloud transcription, uploads audio to OpenAI):
 ```bash
 ./audio_transcribe_openai.sh recording.m4a output.txt
 ./audio_transcribe_openai.sh --model gpt-transcribe recording.m4a output.txt
+./audio_transcribe_openai.sh --chunk long-recording.m4a transcript.txt
 ```
 
 Defaults to `gpt-transcribe` with JSON response validation and plain-text output.
 As of October 2026, API pricing is **$0.0045/minute**; files have a **25 MB**
-upload limit (larger inputs are compressed using ffmpeg, or must be split).
+upload limit. Inputs over a conservative 24 MB threshold are downsampled first.
+If still too large, `--chunk` splits near silences into parts of at most 30 minutes
+(hard cuts overlap by 2.5 seconds), checks all parts are below 24 MB, and previews
+their time ranges and sizes **before prompting for consent**. Every part is sent
+to OpenAI's paid external API; `--yes` explicitly authorizes unattended uploads.
+Completed parts are stored in `<output>.parts/` keyed by model and audio for
+safe retries. Only a fully successful run replaces the final transcript; it
+labels each part, including overlap seams where recognition may repeat words.
+The original recording is never modified.
+
+Run offline fake-API coverage with `uv run pytest tests/test_audio_transcribe_openai.py`.
+Paid integration testing is **disabled by default**; enable it explicitly with
+`OPENAI_API_KEY` and `RUN_OPENAI_SMOKE=1 uv run pytest tests/test_transcribe_smoke.py -k openai`.
+Ordinary CI never uploads audio.
+
 Use `--model` for another compatible transcription model; the retired-in-2027
 models emit a deprecation warning. This path does **not** produce speaker labels,
 word timestamps, or subtitle metadata. Use a separately supported transcription
