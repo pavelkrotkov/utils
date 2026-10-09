@@ -338,15 +338,31 @@ OpenAI API (cloud transcription, uploads audio to OpenAI):
 ```bash
 ./audio_transcribe_openai.sh recording.m4a output.txt
 ./audio_transcribe_openai.sh --model gpt-transcribe recording.m4a output.txt
+./audio_transcribe_openai.sh --chunk long_recording.m4a output.txt
 ```
 
 Defaults to `gpt-transcribe` with JSON response validation and plain-text output.
 As of October 2026, API pricing is **$0.0045/minute**; files have a **25 MB**
-upload limit (larger inputs are compressed using ffmpeg, or must be split).
+upload limit (larger inputs are compressed with ffmpeg).
 Use `--model` for another compatible transcription model; the retired-in-2027
 models emit a deprecation warning. This path does **not** produce speaker labels,
 word timestamps, or subtitle metadata. Use a separately supported transcription
 path when that metadata is needed. [OpenAI file transcription guide](https://developers.openai.com/api/docs/guides/speech-to-text).
+
+When a recording still exceeds 25 MB after mono 16 kHz / 32 kbps compression,
+the default command prints a silence-aware plan (at most one hour per part)
+and stops **without uploading**. Inspect the proposed time boundaries, then
+rerun with `--chunk` to authorize separately billed uploads. Each extracted
+part is checked against the 25 MB limit before any request. The final transcript
+labels each chunk's time range and joins texts in order; these are separate
+recognition passes, not a continuous model transcript. If no suitable silence
+exists, a hard cut can split words. On failure, the original recording and
+existing output remain intact; validated partial transcripts under
+`output.txt.openai-chunks/` are reused when the source, model and plan match.
+
+Offline tests use a fake API (`uv run pytest tests/test_audio_transcribe_openai.py`).
+Paid integration tests run **only** when explicitly enabled with both
+`OPENAI_API_KEY` and `RUN_OPENAI_SMOKE=1`; normal CI makes no paid requests.
 
 Local whisper-cpp (plain transcript by default):
 
