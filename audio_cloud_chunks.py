@@ -31,29 +31,34 @@ def main() -> None:
     (target / "cache-key").write_text(digest.hexdigest(), encoding="ascii")
     for index, chunk in enumerate(chunks, 1):
         if extract:
-            subprocess.run(
-                [
-                    "ffmpeg",
-                    "-v",
-                    "error",
-                    "-y",
-                    "-ss",
-                    f"{chunk.start:.3f}",
-                    "-i",
-                    str(source),
-                    "-t",
-                    f"{chunk.end - chunk.start:.3f}",
-                    "-vn",
-                    "-ac",
-                    "1",
-                    "-ar",
-                    "16000",
-                    "-b:a",
-                    "32k",
-                    str(target / f"chunk-{index:04d}.m4a"),
-                ],
-                check=True,
-            )
+            try:
+                subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-v",
+                        "error",
+                        "-y",
+                        "-ss",
+                        f"{chunk.start:.3f}",
+                        "-i",
+                        str(source),
+                        "-t",
+                        f"{chunk.end - chunk.start:.3f}",
+                        "-vn",
+                        "-ac",
+                        "1",
+                        "-ar",
+                        "16000",
+                        "-b:a",
+                        "32k",
+                        str(target / f"chunk-{index:04d}.m4a"),
+                    ],
+                    check=True,
+                )
+            except subprocess.CalledProcessError as exc:
+                raise SystemExit(
+                    f"Error: ffmpeg chunk {index} failed (exit {exc.returncode})."
+                ) from exc
         print(f"{index:04d}\t{chunk.start:.3f}\t{chunk.end:.3f}")
 
 

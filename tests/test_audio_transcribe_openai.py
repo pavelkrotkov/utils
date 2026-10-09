@@ -193,6 +193,8 @@ args = sys.argv[1:]
 if '-af' in args:
     sys.stderr.write(os.environ.get('MOCK_SILENCE', 'silence_start: 3599\\nsilence_end: 3601\\n'))
 elif '-ss' in args:
+    if os.environ.get('MOCK_EXTRACT_FAIL') == '1':
+        sys.exit(7)
     chunk = Path(args[-1])
     with chunk.open('wb') as stream:
         if os.environ.get('MOCK_OVERSIZED_CHUNK') == '1':
@@ -286,3 +288,15 @@ def test_output_cannot_overwrite_audio(mocked_api):
     assert failed.returncode != 0
     assert "must not replace" in failed.stderr
     assert audio.read_bytes() == b"test audio"
+
+
+def test_failed_chunk_extraction_never_uploads_or_replaces_output(oversized_api):
+    audio, output, env, _ = oversized_api
+    output.write_text("previous transcript")
+    env["MOCK_EXTRACT_FAIL"] = "1"
+    failed = run_script(oversized_api, "--chunk")
+    assert failed.returncode != 0
+    assert "ffmpeg chunk 1 failed" in failed.stderr
+    assert not Path(env["MOCK_CALLS"]).exists()
+    assert output.read_text() == "previous transcript"
+    assert audio.stat().st_size == MAX_BYTES + 100
