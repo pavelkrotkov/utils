@@ -154,6 +154,40 @@ class MainMaxContextWiringTest(unittest.TestCase):
 
         self.assertEqual([64], captured_max_context)
 
+    def test_diarization_reexecs_uv_with_optional_packages(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / "input.m4a"
+            model_path = Path(temp_dir) / "model.bin"
+            input_path.touch()
+            model_path.touch()
+            argv = [
+                "audio_transcribe_whisper.py",
+                str(input_path),
+                "--large-model",
+                str(model_path),
+                "--diarization",
+            ]
+            with (
+                patch.object(sys, "argv", argv),
+                patch.dict(whisper.os.environ, {"_WHISPER_PYANNOTE_UV": ""}),
+                patch.object(whisper.os, "execvpe", side_effect=SystemExit) as reexec,
+                self.assertRaises(SystemExit),
+            ):
+                whisper.main()
+
+        executable, command, environment = reexec.call_args.args
+        self.assertEqual(executable, "uv")
+        self.assertEqual(command[:4], ["uv", "run", "--with", "pyannote.audio"])
+        self.assertEqual(command[4:], [str(Path(whisper.__file__).resolve()), *argv[1:]])
+        self.assertEqual(environment["_WHISPER_PYANNOTE_UV"], "1")
+
+        with (
+            patch.dict(whisper.os.environ, {"_WHISPER_PYANNOTE_UV": "1"}),
+            patch.object(whisper.os, "execvpe") as reexec,
+        ):
+            whisper.ensure_diarization_dependencies()
+            reexec.assert_not_called()
+
 
 class MergeAsrTurnsTest(unittest.TestCase):
     def test_labels_style_groups_segments_and_remaps_names(self) -> None:

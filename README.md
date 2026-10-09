@@ -15,7 +15,7 @@ For deeper context, refer to the script headers and inline help.
 
 ## Setup
 
-Python dependencies are declared inline in each script (PEP 723) and resolved automatically by `uv run`.
+Python dependencies are managed by `uv run` through PEP 723 metadata; optional Whisper diarization adds pyannote only when requested.
 
 System tools (macOS via Homebrew):
 
@@ -374,6 +374,9 @@ Enable pyannote speaker diarization when speaker labels are needed:
 ```bash
 uv run ./audio_transcribe_whisper.py interview.m4a --diarization --num-speakers 2
 ```
+
+Plain local Whisper uses no Python packages beyond the standard library. With
+`--diarization`, `uv` installs pyannote and its PyTorch dependencies on demand.
 
 By default, the local script prints progress/ETA reports and writes `<input>.txt`.
 With `--diarization`, it writes `<input>.spk.txt`. Use `--no-progress` to silence

@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 # /// script
-# dependencies = [
-#   "torch",
-#   "pyannote.audio",
-# ]
+# dependencies = []
 # ///
 """
 audio_transcribe_whisper.py - Robust whisper-cpp ASR with optional pyannote diarization
@@ -18,7 +15,7 @@ Metal acceleration on macOS.
 
 Dependencies:
   - ffmpeg, whisper-cpp (CLI binaries)
-  - Python: torch, pyannote.audio, argparse, json, pathlib, subprocess, tempfile, os, sys
+  - Python: standard library; pyannote.audio (including torch) only for --diarization
 
 Usage Examples:
   ./audio_transcribe_whisper.py input.m4a
@@ -191,11 +188,9 @@ def load_pyannote(model_name: str, hf_token: str | None, verbose: bool = False) 
     Returns: Pipeline instance or exits on failure.
     """
     try:
-        # Keep pyannote optional unless diarization is explicitly requested.
         from pyannote.audio import Pipeline
     except ImportError as e:
         print(f"ERROR: Missing required Python package: {e}", file=sys.stderr)
-        print("Install with: pip install torch pyannote.audio", file=sys.stderr)
         sys.exit(1)
 
     if verbose:
@@ -269,7 +264,6 @@ def run_diarization(
         from pyannote.core import Annotation
     except ImportError as e:
         print(f"ERROR: Missing required Python package: {e}", file=sys.stderr)
-        print("Install with: pip install torch pyannote.audio", file=sys.stderr)
         sys.exit(1)
 
     kwargs: dict[str, int] = {}
@@ -556,6 +550,19 @@ def run_whisper(
         sys.exit(1)
 
 
+def ensure_diarization_dependencies() -> None:
+    if os.environ.get("_WHISPER_PYANNOTE_UV") == "1":
+        return
+    try:
+        os.execvpe(
+            "uv",
+            ["uv", "run", "--with", "pyannote.audio", str(Path(__file__).resolve()), *sys.argv[1:]],
+            {**os.environ, "_WHISPER_PYANNOTE_UV": "1"},
+        )
+    except FileNotFoundError:
+        sys.exit("ERROR: --diarization requires uv in PATH.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Robust whisper-cpp transcription with optional pyannote diarization",
@@ -664,6 +671,9 @@ def main() -> None:
     if not args.large_model.exists():
         print(f"ERROR: Whisper model not found: {args.large_model}", file=sys.stderr)
         sys.exit(1)
+
+    if args.diarization:
+        ensure_diarization_dependencies()
 
     if args.output:
         output_path = args.output
