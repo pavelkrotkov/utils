@@ -15,7 +15,7 @@ The integration matrix from issue #64 is verified in two layers:
 
 | Matrix item | Test |
 | --- | --- |
-| All six presets produce the right transcript next to the input | `endToEndEveryPresetWritesItsTranscriptNextToInput` |
+| All four presets produce the right transcript next to the input | `endToEndEveryPresetWritesItsTranscriptNextToInput` |
 | Filenames with spaces, unicode, no extension, multiple dots | `endToEndEdgeCaseFilenames` (plus `OutputPathResolverTests`) |
 | Existing output is replaced after confirmation | `endToEndExistingOutputIsOverwritten` |
 | Cancel during cloud run → process stops, no partial output | `endToEndCancelledCloudRunLeavesNoOutput` |
@@ -32,10 +32,11 @@ The integration matrix from issue #64 is verified in two layers:
 
 Run on a real Mac (`make app`, launch `dist/TranscriptionLauncher.app`)
 with `OPENAI_API_KEY`/`HF_TOKEN` configured and a few real recordings.
+Paid OpenAI smoke tests require explicit `RUN_OPENAI_SMOKE=1` opt-in.
 
 ### Real-backend runs
 
-- [ ] Each of the six presets transcribes a short real recording and the
+- [ ] Each of the four presets transcribes a short real recording and the
       transcript appears next to the input with the expected suffix
       (`.txt`, `.spk.txt`, `.vibevoice.txt`).
 - [ ] Large file (>25MB) triggers the OpenAI script's ffmpeg downsampling

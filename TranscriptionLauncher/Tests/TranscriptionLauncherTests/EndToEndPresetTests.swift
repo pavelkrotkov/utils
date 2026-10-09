@@ -19,9 +19,7 @@ private struct PresetExpectation: Sendable, CustomTestStringConvertible {
 }
 
 @Test(arguments: [
-    PresetExpectation(preset: .fastCloud, expectedName: "meeting.txt"),
-    PresetExpectation(preset: .bestCloud, expectedName: "meeting.txt"),
-    PresetExpectation(preset: .compatibleCloud, expectedName: "meeting.txt"),
+    PresetExpectation(preset: .cloud, expectedName: "meeting.txt"),
     PresetExpectation(preset: .privateLocal, expectedName: "meeting.txt"),
     PresetExpectation(preset: .privateLocalWithSpeakers, expectedName: "meeting.spk.txt"),
     PresetExpectation(preset: .appleSiliconLocal, expectedName: "meeting.vibevoice.txt"),
@@ -61,8 +59,8 @@ private struct FilenameExpectation: Sendable, CustomTestStringConvertible {
 }
 
 // Cover both execution paths: the shell script invoked directly
-// (fastCloud) and the Python script wrapped in `uv run` (privateLocal).
-@Test(arguments: [TranscriptionPreset.fastCloud, .privateLocal], [
+// (cloud) and the Python script wrapped in `uv run` (privateLocal).
+@Test(arguments: [TranscriptionPreset.cloud, .privateLocal], [
     FilenameExpectation(input: "my recording (1).m4a", output: "my recording (1).txt"),
     FilenameExpectation(input: "café interview.m4a", output: "café interview.txt"),
     FilenameExpectation(input: "recording", output: "recording.txt"),
@@ -105,7 +103,7 @@ func endToEndExistingOutputIsOverwritten() async throws {
             .appendingPathComponent("meeting.txt", isDirectory: false)
         try "stale transcript".write(to: output, atomically: true, encoding: .utf8)
         let command = CommandBuilder.command(
-            for: .fastCloud,
+            for: .cloud,
             input: input,
             repoRoot: fixture.repoRoot
         )
@@ -134,7 +132,7 @@ func endToEndCancelledCloudRunLeavesNoOutput() async throws {
         let input = try fixture.makeInput(named: "meeting.m4a")
         let runner = ProcessRunner()
         let command = CommandBuilder.command(
-            for: .fastCloud,
+            for: .cloud,
             input: input,
             repoRoot: fixture.repoRoot
         )
@@ -226,7 +224,7 @@ private struct FailureScenario: Sendable, CustomTestStringConvertible {
 // message (ErrorPresentation).
 @Test(arguments: [
     FailureScenario(
-        preset: .fastCloud,
+        preset: .cloud,
         script: "audio_transcribe_openai.sh",
         stderr: "Error: OPENAI_API_KEY is not set.",
         expected: .missingAPIKey("OPENAI_API_KEY")
@@ -318,7 +316,7 @@ func endToEndAPIErrorSurfacedWithDetail() async throws {
         )
         let input = try fixture.makeInput(named: "meeting.m4a")
         let command = CommandBuilder.command(
-            for: .fastCloud,
+            for: .cloud,
             input: input,
             repoRoot: fixture.repoRoot
         )

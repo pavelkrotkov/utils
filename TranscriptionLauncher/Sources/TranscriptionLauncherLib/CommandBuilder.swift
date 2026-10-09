@@ -1,16 +1,14 @@
 import Foundation
 
 public enum TranscriptionPreset: String, CaseIterable, Equatable, Sendable {
-    case fastCloud
-    case bestCloud
-    case compatibleCloud
+    case cloud
     case privateLocal
     case privateLocalWithSpeakers
     case appleSiliconLocal
 
     public var isCloud: Bool {
         switch self {
-        case .fastCloud, .bestCloud, .compatibleCloud: true
+        case .cloud: true
         case .privateLocal, .privateLocalWithSpeakers, .appleSiliconLocal: false
         }
     }
@@ -55,23 +53,9 @@ public enum CommandBuilder {
         let outputPath = Self.outputPath(for: preset, input: input)
 
         switch preset {
-        case .fastCloud:
+        case .cloud:
             return openAICommand(
-                model: "gpt-4o-mini-transcribe",
-                inputPath: inputPath,
-                outputPath: outputPath,
-                repoRoot: repoRoot
-            )
-        case .bestCloud:
-            return openAICommand(
-                model: "gpt-4o-transcribe",
-                inputPath: inputPath,
-                outputPath: outputPath,
-                repoRoot: repoRoot
-            )
-        case .compatibleCloud:
-            return openAICommand(
-                model: "whisper-1",
+                model: "gpt-transcribe",
                 inputPath: inputPath,
                 outputPath: outputPath,
                 repoRoot: repoRoot
@@ -117,7 +101,7 @@ public enum CommandBuilder {
             suffix = ".spk.txt"
         case .appleSiliconLocal:
             suffix = ".vibevoice.txt"
-        case .fastCloud, .bestCloud, .compatibleCloud, .privateLocal:
+        case .cloud, .privateLocal:
             suffix = ".txt"
         }
         return input.deletingPathExtension().path + suffix

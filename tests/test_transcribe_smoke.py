@@ -31,6 +31,12 @@ EXPECTED_KEYWORDS = ["quick", "brown", "fox"]
 # ---------------------------------------------------------------------------
 
 _has_openai_key = bool(os.environ.get("OPENAI_API_KEY"))
+_openai_opted_in = _has_openai_key and os.environ.get("RUN_OPENAI_SMOKE", "").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
 _whisper_bin = shutil.which("whisper-cpp") or shutil.which("whisper-cli")
 _has_ffmpeg = bool(shutil.which("ffmpeg")) and bool(shutil.which("ffprobe"))
 _default_model = Path(
@@ -46,7 +52,9 @@ _vibevoice_opted_in = _is_apple_silicon and os.environ.get("RUN_VIBEVOICE_SMOKE"
     "on",
 )
 
-skip_no_openai = pytest.mark.skipif(not _has_openai_key, reason="OPENAI_API_KEY not set")
+skip_no_openai = pytest.mark.skipif(
+    not _openai_opted_in, reason="Set OPENAI_API_KEY and RUN_OPENAI_SMOKE=1 for paid API tests"
+)
 skip_no_whisper = pytest.mark.skipif(
     not _has_whisper,
     reason=(
@@ -112,13 +120,9 @@ def _run(cmd: list[str], cwd: Path | None = None, timeout: int = 120) -> None:
 
 
 @skip_no_openai
-@pytest.mark.parametrize(
-    "model",
-    ["whisper-1", "gpt-4o-mini-transcribe", "gpt-4o-transcribe"],
-)
-def test_openai_model(model: str, tmp_path: Path) -> None:
+def test_openai_model(tmp_path: Path) -> None:
     out = tmp_path / "transcript.txt"
-    _run([str(OPENAI_SCRIPT), "--model", model, str(FIXTURE), str(out)])
+    _run([str(OPENAI_SCRIPT), str(FIXTURE), str(out)])
     assert out.exists() and out.stat().st_size > 0, "Output file is missing or empty"
     _assert_keywords(_read_transcript(out))
 
@@ -207,8 +211,8 @@ def test_spaces_in_filename(tmp_path: Path) -> None:
 
     spaced_output = spaced_dir / "my transcript.txt"
 
-    if _has_openai_key:
-        _run([str(OPENAI_SCRIPT), "--model", "whisper-1", str(spaced_input), str(spaced_output)])
+    if _openai_opted_in:
+        _run([str(OPENAI_SCRIPT), str(spaced_input), str(spaced_output)])
         assert spaced_output.exists() and spaced_output.stat().st_size > 0
         _assert_keywords(_read_transcript(spaced_output))
     elif _has_whisper:

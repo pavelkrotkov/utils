@@ -7,7 +7,7 @@ public enum OutputPathResolver {
     public static func outputPath(for preset: Preset, input: URL) -> URL {
         let suffix: String
         switch preset {
-        case .fastCloud, .bestCloud, .compatibleCloud, .privateLocal:
+        case .cloud, .privateLocal:
             suffix = "txt"
         case .privateLocalWithSpeakers:
             suffix = "spk.txt"

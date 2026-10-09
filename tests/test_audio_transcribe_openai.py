@@ -26,6 +26,8 @@ args = sys.argv
 Path(args[args.index('-o') + 1]).write_bytes(os.environ.get('MOCK_BODY', '').encode())
 if os.environ.get('MOCK_MARKER'):
     Path(os.environ['MOCK_MARKER']).touch()
+if os.environ.get('MOCK_ARGS'):
+    Path(os.environ['MOCK_ARGS']).write_text('\\n'.join(args))
 print(os.environ.get('MOCK_STATUS', '200'), end='')
 sys.exit(int(os.environ.get('MOCK_EXIT', '0')))
 """
@@ -37,10 +39,10 @@ sys.exit(int(os.environ.get('MOCK_EXIT', '0')))
     return audio, tmp_path / "transcript.txt", env, bin_dir
 
 
-def run_script(mocked_api):
+def run_script(mocked_api, *args):
     audio, output, env, _ = mocked_api
     return subprocess.run(
-        [str(SCRIPT), str(audio), str(output)], env=env, capture_output=True, text=True
+        [str(SCRIPT), *args, str(audio), str(output)], env=env, capture_output=True, text=True
     )
 
 
@@ -120,3 +122,29 @@ def test_missing_jq_fails_before_upload(mocked_api):
     assert "jq is required" in failed.stderr
     assert not output.exists()
     assert not marker.exists()
+
+
+@pytest.mark.skipif(not shutil.which("jq"), reason="jq required")
+def test_default_and_explicit_model_request_json(mocked_api):
+    _, output, env, _ = mocked_api
+    env["MOCK_BODY"] = '{"text":"spoken words"}'
+    args_file = output.parent / "args"
+    env["MOCK_ARGS"] = str(args_file)
+    for options in ((), ("--model", "gpt-transcribe")):
+        result = run_script(mocked_api, *options)
+        assert result.returncode == 0, result.stderr
+        arguments = args_file.read_text().splitlines()
+        assert "model=gpt-transcribe" in arguments
+        assert "response_format=json" in arguments
+        assert "spoken words" in output.read_text()
+
+
+@pytest.mark.skipif(not shutil.which("jq"), reason="jq required")
+def test_legacy_model_warns(mocked_api):
+    _, output, env, _ = mocked_api
+    env["MOCK_BODY"] = '{"text":"spoken words"}'
+    result = run_script(mocked_api, "--model", "whisper-1")
+    assert result.returncode == 0, result.stderr
+    assert "deprecated" in result.stderr
+    assert "2027-02-26" in result.stderr
+    assert output.read_text().strip() == "spoken words"

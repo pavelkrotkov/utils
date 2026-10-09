@@ -6,11 +6,9 @@ import TranscriptionLauncherLib
 func openAIOutputReplacesExtension() {
     let input = URL(fileURLWithPath: "/tmp/rec.m4a")
 
-    for preset: Preset in [.fastCloud, .bestCloud, .compatibleCloud] {
-        let output = OutputPathResolver.outputPath(for: preset, input: input)
+    let output = OutputPathResolver.outputPath(for: .cloud, input: input)
 
-        #expect(output.path == "/tmp/rec.txt")
-    }
+    #expect(output.path == "/tmp/rec.txt")
 }
 
 @Test
@@ -44,7 +42,7 @@ func vibevoiceOutputUsesVibevoiceSuffix() {
 func fileWithNoExtension() {
     let input = URL(fileURLWithPath: "/tmp/recording")
 
-    let output = OutputPathResolver.outputPath(for: .fastCloud, input: input)
+    let output = OutputPathResolver.outputPath(for: .cloud, input: input)
 
     #expect(output.path == "/tmp/recording.txt")
 }
@@ -53,7 +51,7 @@ func fileWithNoExtension() {
 func fileWithMultipleDots() {
     let input = URL(fileURLWithPath: "/tmp/my.podcast.ep3.m4a")
 
-    let output = OutputPathResolver.outputPath(for: .fastCloud, input: input)
+    let output = OutputPathResolver.outputPath(for: .cloud, input: input)
 
     #expect(output.path == "/tmp/my.podcast.ep3.txt")
 }
@@ -62,7 +60,7 @@ func fileWithMultipleDots() {
 func fileWithSpacesInName() {
     let input = URL(fileURLWithPath: "/tmp/my recording (1).m4a")
 
-    let output = OutputPathResolver.outputPath(for: .fastCloud, input: input)
+    let output = OutputPathResolver.outputPath(for: .cloud, input: input)
 
     #expect(output.path == "/tmp/my recording (1).txt")
 }
@@ -85,7 +83,7 @@ func relativeInputProducesAbsoluteOutput() {
     let baseURL = URL(fileURLWithPath: "/tmp", isDirectory: true)
     let input = URL(fileURLWithPath: "rec.m4a", relativeTo: baseURL)
 
-    let output = OutputPathResolver.outputPath(for: .fastCloud, input: input)
+    let output = OutputPathResolver.outputPath(for: .cloud, input: input)
 
     #expect(output.path == "/tmp/rec.txt")
     #expect(output.lastPathComponent == "rec.txt")

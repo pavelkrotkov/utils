@@ -6,7 +6,7 @@ import TranscriptionLauncherLib
 func selectedPresetsOnlyRequireTheirOwnToolsAndCredentials() {
     let local = DependencyChecker.check(preset: .privateLocal, environment: [:], repoRoot: nil, osMajorVersion: 14)
     let speakers = DependencyChecker.check(preset: .privateLocalWithSpeakers, environment: [:], repoRoot: nil, osMajorVersion: 14)
-    let cloud = DependencyChecker.check(preset: .fastCloud, environment: [:], repoRoot: nil, osMajorVersion: 14)
+    let cloud = DependencyChecker.check(preset: .cloud, environment: [:], repoRoot: nil, osMajorVersion: 14)
 
     #expect(local.map(\.name) == ["audio_transcribe_whisper.py", "macOS 14+", "audio_common.py", "audio_segments.py", "audio_transcript.py", "uv", "ffmpeg", "whisper-cpp / whisper-cli", "Whisper model"])
     #expect(speakers.map(\.name) == local.map(\.name) + ["HF_TOKEN"])
@@ -57,7 +57,7 @@ func missingPresetScriptAndCloudLargeFileAreReported() throws {
         let script = root.appendingPathComponent("audio_transcribe_openai.sh")
         try "#!/bin/sh\n".write(to: script, atomically: true, encoding: .utf8)
         let cloud = { (file: URL?) in DependencyChecker.check(
-            preset: .fastCloud, environment: ["OPENAI_API_KEY": "key"],
+            preset: .cloud, environment: ["OPENAI_API_KEY": "key"],
             repoRoot: root, inputFile: file, osMajorVersion: 14
         ) }
         #expect(cloud(nil).first { $0.name == "audio_transcribe_openai.sh" }?.isAvailable == false)

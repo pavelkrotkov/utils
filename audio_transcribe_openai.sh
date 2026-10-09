@@ -15,32 +15,27 @@ cleanup() {
 
 trap cleanup EXIT
 
-# Models supported by /v1/audio/transcriptions
-SUPPORTED_MODELS=(
-  "whisper-1"
-  "gpt-4o-transcribe"
-  "gpt-4o-mini-transcribe"
-)
-
-# Default model
-MODEL="${SUPPORTED_MODELS[0]}"
+# Recommended model for file transcription
+MODEL="gpt-transcribe"
 
 show_help() {
   cat <<EOF
 Usage: $0 [--model MODEL] input.m4a [output.txt]
 
 Transcribe an audio file using the OpenAI Audio API (/v1/audio/transcriptions).
+Audio is uploaded to OpenAI; API usage is billed. Output is plain transcript text.
 
 Options:
-  -m, --model MODEL   Transcription model to use (default: ${MODEL})
-  -h, --help          Show this help and list supported models.
+  -m, --model MODEL   Model to use (default: ${MODEL}); requires JSON .text output.
+  -h, --help          Show this help.
 
-Supported models for /v1/audio/transcriptions:
-$(for m in "${SUPPORTED_MODELS[@]}"; do echo "  - $m"; done)
+Recommended model: ${MODEL}
+Legacy models whisper-1, gpt-4o-transcribe, and gpt-4o-mini-transcribe
+are deprecated and scheduled for removal on February 26, 2027.
 
 Examples:
   $0 recording.m4a
-  $0 --model gpt-4o-mini-transcribe recording.m4a transcript.txt
+  $0 --model gpt-transcribe recording.m4a transcript.txt
 EOF
 }
 
@@ -96,11 +91,15 @@ fi
 # If output not provided, derive from input
 OUTPUT="${OUTPUT:-"${INPUT%.*}.txt"}"
 
-# Optional: warn if model is not in known list (but still try)
-if ! printf '%s\n' "${SUPPORTED_MODELS[@]}" | grep -qx "$MODEL"; then
-  echo "Warning: '$MODEL' is not in the known list of speech-to-text models for /v1/audio/transcriptions." >&2
-  echo "Known models: ${SUPPORTED_MODELS[*]}" >&2
-fi
+case "$MODEL" in
+  whisper-1|gpt-4o-transcribe|gpt-4o-mini-transcribe|gpt-4o-transcribe-diarize)
+    echo "Warning: '$MODEL' is deprecated and scheduled for removal on 2027-02-26; use gpt-transcribe." >&2
+    ;;
+  gpt-transcribe) ;;
+  *)
+    echo "Warning: '$MODEL' is not the recommended gpt-transcribe model; it must support JSON .text output." >&2
+    ;;
+esac
 
 if [ ! -f "$INPUT" ]; then
   echo "Error: file not found: $INPUT" >&2
@@ -159,6 +158,7 @@ if ! HTTP_STATUS=$(curl -sS -o "$RESPONSE_FILE" -w '%{http_code}' \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -F "file=@${FILE_TO_SEND}" \
   -F "model=${MODEL}" \
+  -F "response_format=json" \
   https://api.openai.com/v1/audio/transcriptions); then
   echo "Error: OpenAI API request failed (network error)." >&2
   exit 1

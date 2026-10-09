@@ -29,7 +29,7 @@ public enum DependencyChecker {
     ) -> [Item] {
         let script: String
         switch preset {
-        case .fastCloud, .bestCloud, .compatibleCloud: script = "audio_transcribe_openai.sh"
+        case .cloud: script = "audio_transcribe_openai.sh"
         case .privateLocal, .privateLocalWithSpeakers: script = "audio_transcribe_whisper.py"
         case .appleSiliconLocal: script = "audio_transcribe_vibevoice.py"
         }
@@ -51,7 +51,7 @@ public enum DependencyChecker {
         ))
 
         switch preset {
-        case .fastCloud, .bestCloud, .compatibleCloud:
+        case .cloud:
             items += [executable("curl", environment: environment), executable("jq", environment: environment)]
             if let inputFile,
                ((try? inputFile.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) > 25 * 1024 * 1024 {
