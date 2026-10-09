@@ -56,12 +56,15 @@ Swift launcher validation (mandatory for app changes):
   the native macOS Swift workflow for that PR branch and verify it before
   merging. Do this even for small changes; documentation-only and unrelated
   Python changes do not require native Swift validation.
-- Automatic PR CI only parses Swift syntax on Linux; it does not compile
+- Ordinary PR pushes only parse Swift syntax on Linux; they do not compile
   SwiftUI/AppKit, run native tests, or verify the app bundle.
 - After pushing the complete patch, run
   `gh workflow run swift.yml --repo pavelkrotkov/utils --ref YOUR_PR_BRANCH`
   or select **Actions → Swift → Run workflow → PR branch** in GitHub.
-  Never use `--ref main` to validate unmerged PR code.
+  Alternatively, transition a same-repo draft PR to **Ready for review** to
+  run the native job on its exact head SHA; connected GitHub agents can do
+  this without CLI or workflow-dispatch access. Re-draft and mark ready again
+  after any later Swift changes. Never use `--ref main` for unmerged PR code.
 - Inspect `gh run list --repo pavelkrotkov/utils --workflow swift.yml --limit 5`
   and the new run's details. Confirm its `macos-15` (M1) job passes `swift test`,
   `Scripts/make-app.sh`, `plutil` and `codesign`; record the run URL and

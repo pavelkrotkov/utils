@@ -45,6 +45,10 @@ Apple Silicon (M1) runner.
 
 In GitHub, open [Actions → Swift](https://github.com/pavelkrotkov/utils/actions/workflows/swift.yml),
 choose **Run workflow**, select `main` (or the branch to test), and run it.
+Or mark a same-repository draft PR **Ready for review** to run the same native
+checks on its exact head SHA. After later Swift changes, re-draft and mark
+ready again. Ordinary PR pushes continue to run syntax checks only.
+
 Or use the authenticated GitHub CLI:
 
 ```bash
