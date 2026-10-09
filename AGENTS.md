@@ -22,7 +22,7 @@ Linting (optional):
 - `ruff format --check .`
 
 Python environment setup:
-- Dependencies are declared inline (PEP 723) and resolved automatically by `uv run`. No manual install needed.
+- Dependencies use PEP 723 and `uv run`; Whisper adds pyannote only for `--diarization`. No manual install needed.
 
 System dependencies (manual):
 - `brew install ffmpeg whisper-cpp jq`

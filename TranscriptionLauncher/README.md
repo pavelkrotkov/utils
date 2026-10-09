@@ -20,8 +20,8 @@ below display installation or download progress.
 
    Homebrew installs `whisper-cli`, which the Python script uses automatically
    when `whisper-cpp` is absent. Use **Choose Folder** to select the cloned
-   `utils` directory. `uv` manages Python dependencies from each script's
-   PEP 723 metadata; no manual `pip install` is required.
+   `utils` directory. `uv` manages script dependencies; no manual `pip install`
+   is required.
 
 2. Download the default Whisper model (about **874 MB**), preserving an
    incomplete download as `.part` rather than treating it as a ready model:
@@ -37,10 +37,9 @@ below display installation or download progress.
 3. Build and launch the Finder app (see below). Check that the checklist shows
    the script, `uv`, `ffmpeg`, `whisper-cli`/`whisper-cpp`, and model as ready.
    Drop a short audio file and choose **Run**. The app asks for consent before
-   `uv` runs; on cold start, it may fetch Python dependencies (including
-   PyTorch/pyannote even for plain Whisper, as declared by the existing
-   script). The log shows subprocess output. Repeated warm runs reuse `uv`'s
-   cache and the model file.
+   `uv` runs. Plain Whisper needs no additional Python packages; the speakers
+   preset installs pyannote and PyTorch on demand through `uv`. The log shows
+   subprocess output. Warm runs reuse `uv`'s cache and the model file.
 
 **Finder / Apple Silicon PATH:** If Terminal can find `uv` or `whisper-cli` but
 Finder cannot, ensure Homebrew's shell setup is in `~/.zprofile`:
