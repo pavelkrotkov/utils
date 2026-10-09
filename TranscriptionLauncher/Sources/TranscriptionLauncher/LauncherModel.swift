@@ -38,6 +38,9 @@ final class LauncherModel: ObservableObject {
     @Published var vibevoiceContext: String {
         didSet { defaults.set(vibevoiceContext, forKey: DefaultsKeys.vibevoiceContext) }
     }
+    @Published var vibevoiceChunkSeconds: Int {
+        didSet { defaults.set(vibevoiceChunkSeconds, forKey: DefaultsKeys.vibevoiceChunkSeconds) }
+    }
 
     let runner = ProcessRunner()
 
@@ -55,6 +58,7 @@ final class LauncherModel: ObservableObject {
             .flatMap(TranscriptionPreset.init(defaultsValue:)) ?? .privateLocal
         self.whisperModelPath = defaults.string(forKey: DefaultsKeys.whisperModelPath) ?? ""
         self.vibevoiceContext = defaults.string(forKey: DefaultsKeys.vibevoiceContext) ?? ""
+        self.vibevoiceChunkSeconds = defaults.integer(forKey: DefaultsKeys.vibevoiceChunkSeconds)
     }
 
     /// Accepts the first dropped or Finder-opened file when it is an
@@ -117,7 +121,8 @@ final class LauncherModel: ObservableObject {
             repoRoot: repoRoot,
             whisperModelPath: modelPath,
             vibevoiceContext: selectedPreset.usesVibeVoiceContext
-                ? nonEmpty(vibevoiceContext) : nil
+                ? nonEmpty(vibevoiceContext) : nil,
+            vibevoiceChunkSeconds: selectedPreset.usesVibeVoiceContext ? vibevoiceChunkSeconds : 0
         )
         let output = OutputPathResolver.outputPath(
             for: selectedPreset.outputPathPreset,

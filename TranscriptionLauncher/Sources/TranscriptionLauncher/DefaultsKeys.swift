@@ -5,4 +5,5 @@ enum DefaultsKeys {
     static let selectedPreset = "selectedPreset"
     static let whisperModelPath = "whisperModelPath"
     static let vibevoiceContext = "vibevoiceContext"
+    static let vibevoiceChunkSeconds = "vibevoiceChunkSeconds"
 }
