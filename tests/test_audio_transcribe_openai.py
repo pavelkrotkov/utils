@@ -66,7 +66,7 @@ def test_success_writes_utf8_text_atomically(mocked_api):
         ("{}", "non-empty '.text'"),
         ('{"text":123}', "non-empty '.text'"),
         ('{"text":"  \\n "}', "non-empty '.text'"),
-        ('null', "non-empty '.text'"),
+        ("null", "non-empty '.text'"),
     ],
 )
 def test_bad_responses_never_replace_or_create_transcript(mocked_api, body, error):
