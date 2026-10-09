@@ -119,7 +119,7 @@ for chunk in plan_chunks(duration, 1800.0, silences, overlap=2.5):
     print(f"{chunk.start:.3f}\t{chunk.end:.3f}\t{chunk.end - chunk.start:.3f}\t{int(chunk.overlaps_previous)}")
 PY
   then
-    echo "Error: unable to plan chunks. Requires python3, ffmpeg and ffprobe." >&2
+    echo "Error: unable to plan chunks. Check python3, ffmpeg/ffprobe and the local audio_common.py/audio_transcribe_vibevoice.py modules." >&2
     return 1
   fi
 

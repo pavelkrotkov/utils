@@ -13,10 +13,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "audio_transcribe_openai.sh"
 def mocked_api(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for name in (
-        "bash", "grep", "stat", "mktemp", "rm", "mv", "jq", "python3",
-        "cat", "cut", "shasum", "mkdir", "dirname",
-    ):
+    for name in "bash grep stat mktemp rm mv jq python3 cat cut shasum mkdir dirname".split():
         executable = shutil.which(name)
         if executable:
             (bin_dir / name).symlink_to(executable)
@@ -227,14 +224,18 @@ def test_chunks_upload_in_order_resume_without_overwriting_failed_result(oversiz
     assert output.read_text() == "previous transcript"
     assert len(list((output.parent / "transcript.txt.parts").glob("*.txt"))) == 1
     assert [s.split()[0] for s in log.read_text().splitlines()] == [
-        "chunk-0001.m4a", "chunk-0002.m4a"
+        "chunk-0001.m4a",
+        "chunk-0002.m4a",
     ]
     env.pop("MOCK_FAIL_AT")
     completed = run_script(oversized_audio, "--chunk", "--yes")
     assert completed.returncode == 0, completed.stderr
     assert "Reusing completed chunk 1/3" in completed.stdout
     assert [s.split()[0] for s in log.read_text().splitlines()] == [
-        "chunk-0001.m4a", "chunk-0002.m4a", "chunk-0002.m4a", "chunk-0003.m4a"
+        "chunk-0001.m4a",
+        "chunk-0002.m4a",
+        "chunk-0002.m4a",
+        "chunk-0003.m4a",
     ]
     assert all(int(s.split()[1]) < 24_000_000 for s in log.read_text().splitlines())
     result = output.read_text()
@@ -280,7 +281,7 @@ def test_hard_cut_overlap_is_visible_in_transcript(oversized_audio):
 
 @pytest.mark.skipif(not shutil.which("jq"), reason="jq required")
 def test_cache_is_model_specific(oversized_audio):
-    _, output, env, _ = oversized_audio
+    _, _, env, _ = oversized_audio
     log = Path(env["MOCK_UPLOAD_LOG"])
     assert run_script(oversized_audio, "--chunk", "--yes").returncode == 0
     assert run_script(oversized_audio, "--chunk", "--yes", "--model", "whisper-1").returncode == 0
