@@ -11,10 +11,14 @@ Homebrew tools or download models without your action. On first launch, choose
 click **Recheck**. Run only commands you approve in Terminal; the commands
 below display installation or download progress.
 
-Cloud presets upload audio to OpenAI, require your own separately configured
-`OPENAI_API_KEY`, and may incur API usage charges. The launcher explains this
-before allowing a cloud selection and remembers approval for later cloud runs.
-Previously saved cloud presets are retained, but require approval before upload.
+The **OpenAI cloud** preset uses `gpt-transcribe` for plain-text transcripts;
+it uploads audio, requires your own `OPENAI_API_KEY`, and is billed by OpenAI
+(about **$0.0045/minute** as of October 2026). Files are limited to 25 MB per
+request; the script first compresses oversized files with ffmpeg. The launcher
+requests consent before the first cloud upload and remembers approval.
+Previously saved fast/best/compatible cloud choices migrate to this single cloud
+preset, preserving the consent requirement. Speaker labels and timestamps are
+not provided by this preset.
 
 1. Install [Homebrew](https://brew.sh/) if needed, then prepare a checkout:
 

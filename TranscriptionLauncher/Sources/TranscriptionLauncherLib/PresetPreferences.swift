@@ -9,8 +9,11 @@ public struct PresetPreferences {
 
     public var selectedPreset: TranscriptionPreset {
         get {
-            defaults.string(forKey: "selectedPreset")
-                .flatMap(TranscriptionPreset.init(rawValue:)) ?? .privateLocal
+            let saved = defaults.string(forKey: "selectedPreset")
+            if ["fastCloud", "bestCloud", "compatibleCloud"].contains(saved ?? "") {
+                return .cloud
+            }
+            return saved.flatMap(TranscriptionPreset.init(rawValue:)) ?? .privateLocal
         }
         nonmutating set { defaults.set(newValue.rawValue, forKey: "selectedPreset") }
     }

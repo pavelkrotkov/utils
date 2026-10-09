@@ -333,11 +333,20 @@ pipeline, module map, and implementation invariants.
 
 ## Audio Transcription
 
-OpenAI API (simple transcription):
+OpenAI API (cloud transcription, uploads audio to OpenAI):
 
 ```bash
 ./audio_transcribe_openai.sh recording.m4a output.txt
+./audio_transcribe_openai.sh --model gpt-transcribe recording.m4a output.txt
 ```
+
+Defaults to `gpt-transcribe` with JSON response validation and plain-text output.
+As of October 2026, API pricing is **$0.0045/minute**; files have a **25 MB**
+upload limit (larger inputs are compressed using ffmpeg, or must be split).
+Use `--model` for another compatible transcription model; the retired-in-2027
+models emit a deprecation warning. This path does **not** produce speaker labels,
+word timestamps, or subtitle metadata. Use a separately supported transcription
+path when that metadata is needed. [OpenAI file transcription guide](https://developers.openai.com/api/docs/guides/speech-to-text).
 
 Local whisper-cpp (plain transcript by default):
 

@@ -6,38 +6,12 @@ private let repoRoot = URL(fileURLWithPath: "/Users/me/utils", isDirectory: true
 private let input = URL(fileURLWithPath: "/Users/me/Recordings/meeting.m4a")
 
 @Test
-func testFastCloudPreset() {
-    let command = CommandBuilder.command(for: .fastCloud, input: input, repoRoot: repoRoot)
+func testCloudPreset() {
+    let command = CommandBuilder.command(for: .cloud, input: input, repoRoot: repoRoot)
 
     #expect(command.executable == "/Users/me/utils/audio_transcribe_openai.sh")
     #expect(command.arguments == [
-        "--model", "gpt-4o-mini-transcribe",
-        "/Users/me/Recordings/meeting.m4a",
-        "/Users/me/Recordings/meeting.txt",
-    ])
-    #expect(command.workingDirectory == repoRoot)
-}
-
-@Test
-func testBestCloudPreset() {
-    let command = CommandBuilder.command(for: .bestCloud, input: input, repoRoot: repoRoot)
-
-    #expect(command.executable == "/Users/me/utils/audio_transcribe_openai.sh")
-    #expect(command.arguments == [
-        "--model", "gpt-4o-transcribe",
-        "/Users/me/Recordings/meeting.m4a",
-        "/Users/me/Recordings/meeting.txt",
-    ])
-    #expect(command.workingDirectory == repoRoot)
-}
-
-@Test
-func testCompatibleCloudPreset() {
-    let command = CommandBuilder.command(for: .compatibleCloud, input: input, repoRoot: repoRoot)
-
-    #expect(command.executable == "/Users/me/utils/audio_transcribe_openai.sh")
-    #expect(command.arguments == [
-        "--model", "whisper-1",
+        "--model", "gpt-transcribe",
         "/Users/me/Recordings/meeting.m4a",
         "/Users/me/Recordings/meeting.txt",
     ])
@@ -95,10 +69,10 @@ func testSpacesInFilename() {
     // Arguments are an array, not a shell string — spaces are safe
     let spacedInput = URL(fileURLWithPath: "/Users/me/My Recordings/team sync.m4a")
 
-    let command = CommandBuilder.command(for: .fastCloud, input: spacedInput, repoRoot: repoRoot)
+    let command = CommandBuilder.command(for: .cloud, input: spacedInput, repoRoot: repoRoot)
 
     #expect(command.arguments == [
-        "--model", "gpt-4o-mini-transcribe",
+        "--model", "gpt-transcribe",
         "/Users/me/My Recordings/team sync.m4a",
         "/Users/me/My Recordings/team sync.txt",
     ])
@@ -146,7 +120,7 @@ func testVibevoiceContextOmittedWhenNil() {
 
 @Test
 func testOutputFileMatchesOutputArgument() {
-    let fast = CommandBuilder.command(for: .fastCloud, input: input, repoRoot: repoRoot)
+    let fast = CommandBuilder.command(for: .cloud, input: input, repoRoot: repoRoot)
     let speakers = CommandBuilder.command(
         for: .privateLocalWithSpeakers,
         input: input,

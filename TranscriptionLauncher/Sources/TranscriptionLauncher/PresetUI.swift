@@ -2,17 +2,14 @@ import SwiftUI
 import TranscriptionLauncherLib
 
 extension TranscriptionPreset {
-    /// Picker groups, in the order the epic lists them.
-    static let cloudPresets: [TranscriptionPreset] = [.fastCloud, .bestCloud, .compatibleCloud]
+    static let cloudPresets: [TranscriptionPreset] = [.cloud]
     static let localPresets: [TranscriptionPreset] = [
         .privateLocal, .privateLocalWithSpeakers, .appleSiliconLocal,
     ]
 
     var displayName: String {
         switch self {
-        case .fastCloud: "Fast cloud"
-        case .bestCloud: "Best cloud"
-        case .compatibleCloud: "Compatible cloud"
+        case .cloud: "OpenAI cloud"
         case .privateLocal: "Private local"
         case .privateLocalWithSpeakers: "Private local with speakers"
         case .appleSiliconLocal: "Apple Silicon local"
@@ -33,9 +30,7 @@ extension TranscriptionPreset {
     /// The `OutputPathResolver` counterpart of this preset.
     var outputPathPreset: Preset {
         switch self {
-        case .fastCloud: .fastCloud
-        case .bestCloud: .bestCloud
-        case .compatibleCloud: .compatibleCloud
+        case .cloud: .cloud
         case .privateLocal: .privateLocal
         case .privateLocalWithSpeakers: .privateLocalWithSpeakers
         case .appleSiliconLocal: .appleSiliconLocal

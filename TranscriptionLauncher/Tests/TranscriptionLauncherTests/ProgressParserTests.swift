@@ -72,7 +72,7 @@ func parsesInfoMessage() {
 
 @Test
 func ignoresNonProgressLine() {
-    let event = ProgressParser.parse("Transcribing with OpenAI model: gpt-4o-transcribe...")
+    let event = ProgressParser.parse("Transcribing with OpenAI model: gpt-transcribe...")
 
     #expect(event == nil)
 }
