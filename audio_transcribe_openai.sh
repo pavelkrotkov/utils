@@ -5,14 +5,12 @@ MAX_MB=25
 MAX_BYTES=$((MAX_MB * 1024 * 1024))
 TMP_FILE=""
 RESPONSE_FILE=""
+OUTPUT_TMP=""
 
 cleanup() {
-  if [ -n "${TMP_FILE:-}" ]; then
-    rm -f "$TMP_FILE"
-  fi
-  if [ -n "${RESPONSE_FILE:-}" ]; then
-    rm -f "$RESPONSE_FILE"
-  fi
+  for file in "$TMP_FILE" "$RESPONSE_FILE" "$OUTPUT_TMP"; do
+    if [ -n "$file" ]; then rm -f "$file"; fi
+  done
 }
 
 trap cleanup EXIT
@@ -114,6 +112,11 @@ if [ -z "${OPENAI_API_KEY:-}" ]; then
   exit 1
 fi
 
+if ! command -v jq >/dev/null 2>&1; then
+  echo "Error: jq is required to parse OpenAI transcription responses." >&2
+  exit 1
+fi
+
 # Get file size (portable: macOS + Linux)
 if stat -f%z "$INPUT" >/dev/null 2>&1; then
   SIZE_BYTES=$(stat -f%z "$INPUT")
@@ -152,33 +155,42 @@ fi
 echo "Transcribing with OpenAI model: ${MODEL}..."
 
 RESPONSE_FILE=$(mktemp /tmp/transcribe-response-XXXXXX.json)
-HTTP_STATUS=$(curl -sS -o "$RESPONSE_FILE" -w '%{http_code}' \
+if ! HTTP_STATUS=$(curl -sS -o "$RESPONSE_FILE" -w '%{http_code}' \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
   -F "file=@${FILE_TO_SEND}" \
   -F "model=${MODEL}" \
-  https://api.openai.com/v1/audio/transcriptions)
-
-if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
-  echo "Error: OpenAI API request failed (HTTP ${HTTP_STATUS})." >&2
+  https://api.openai.com/v1/audio/transcriptions); then
+  echo "Error: OpenAI API request failed (network error)." >&2
   exit 1
 fi
 
-if command -v jq >/dev/null 2>&1; then
-  if ! jq -e . >/dev/null 2>&1 < "$RESPONSE_FILE"; then
-    echo "Error: API returned non-JSON response." >&2
-    exit 1
+if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+  echo "Error: OpenAI API request failed (HTTP ${HTTP_STATUS})." >&2
+  ERROR_MESSAGE=$(jq -r '.error.message? // empty' "$RESPONSE_FILE" 2>/dev/null || true)
+  ERROR_TYPE=$(jq -r '.error.type? // empty' "$RESPONSE_FILE" 2>/dev/null || true)
+  if [ -n "$ERROR_MESSAGE" ]; then
+    ERROR_MESSAGE="${ERROR_MESSAGE//"$OPENAI_API_KEY"/[REDACTED]}"
+    ERROR_TYPE="${ERROR_TYPE//"$OPENAI_API_KEY"/[REDACTED]}"
+    if [ -n "$ERROR_TYPE" ]; then
+      echo "API error (${ERROR_TYPE}): ${ERROR_MESSAGE}" >&2
+    else
+      echo "API error: ${ERROR_MESSAGE}" >&2
+    fi
   fi
-
-  TRANSCRIPT=$(jq -r '.text // empty' "$RESPONSE_FILE")
-  if [ -z "$TRANSCRIPT" ]; then
-    echo "Error: API response did not contain a non-empty '.text' field." >&2
-    exit 1
-  fi
-
-  printf '%s\n' "$TRANSCRIPT" > "$OUTPUT"
-else
-  # Fallback: save raw JSON
-  cat "$RESPONSE_FILE" > "$OUTPUT"
+  exit 1
 fi
+
+if ! jq -se 'length == 1' "$RESPONSE_FILE" >/dev/null 2>&1; then
+  echo "Error: OpenAI API returned invalid JSON." >&2
+  exit 1
+fi
+
+OUTPUT_TMP=$(mktemp "${OUTPUT}.XXXXXX")
+if ! jq -er '.text | strings | select(test("\\S"))' "$RESPONSE_FILE" > "$OUTPUT_TMP"; then
+  echo "Error: API response did not contain a non-empty '.text' string." >&2
+  exit 1
+fi
+mv -f "$OUTPUT_TMP" "$OUTPUT"
+OUTPUT_TMP=""
 
 echo "Saved transcript to: $OUTPUT"
