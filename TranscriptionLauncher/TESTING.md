@@ -111,6 +111,8 @@ On an actual M1/macOS 14+ machine, **from Finder** (not `swift run`):
       confirm the app has a stapled notarization ticket and Developer ID signature.
 - [ ] First-run checklist finds bundled scripts, identifies missing Homebrew
       tools and model, and runs a real short local transcription after setup.
+- [ ] Recheck `codesign --verify --strict /Applications/TranscriptionLauncher.app`
+      after the Python run; generated caches must not alter the signed bundle.
 - [ ] Verify first cold and subsequent warm `uv` runs, local-file permissions,
       model download, output location, cancellation, and cloud consent.
 - [ ] Record Mac model, OS version, release tag/SHA, and outcomes.

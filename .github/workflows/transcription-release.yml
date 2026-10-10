@@ -77,7 +77,8 @@ jobs:
           spctl --assess --type execute --verbose=4 "$APP"
           rm "$ZIP"
           ditto -c -k --keepParent "$APP" "$ZIP"
-          shasum -a 256 "$ZIP" > "$ZIP.sha256"
+          ( cd dist && shasum -a 256 "$(basename "$ZIP")" ) > "$ZIP.sha256"
+          ( cd dist && shasum -a 256 -c "$(basename "$ZIP").sha256" )
       - name: Publish verified release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -86,3 +87,8 @@ jobs:
           gh release create "$GITHUB_REF_NAME" "$ZIP" "$ZIP.sha256" --verify-tag \
             --title "TranscriptionLauncher $APP_VERSION" \
             --notes "macOS 14+ / Apple Silicon. Signed, notarized, and stapled. Includes version-matched MIT transcription scripts; local tools and speech models are installed separately. OpenAI cloud transcription requires explicit consent and may incur charges."
+      - name: Remove temporary signing keychain
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/transcription-signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/developer-id.p12"

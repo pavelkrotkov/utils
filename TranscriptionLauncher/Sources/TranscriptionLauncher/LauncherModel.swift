@@ -237,7 +237,7 @@ final class LauncherModel: ObservableObject {
     private func perform(_ run: PendingRun) async {
         defer { isPreparing = false }
         do {
-            let environment = try await EnvironmentSnapshot.refresh()
+            var environment = try await EnvironmentSnapshot.refresh()
             let missing = DependencyChecker.check(
                 preset: run.preset,
                 environment: environment,
@@ -253,6 +253,7 @@ final class LauncherModel: ObservableObject {
                 return
             }
             isPreparing = false
+            environment["PYTHONDONTWRITEBYTECODE"] = "1"
             let outputURL = try await runner.run(command: run.command, environment: environment)
             lastOutputURL = outputURL
             if NSApp.isActive {
