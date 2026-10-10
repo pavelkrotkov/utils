@@ -13,6 +13,11 @@ and TIDAL import.
 
 For deeper context, refer to the script headers and inline help.
 
+## Reuse and distribution
+
+See [distribution and transcription data](docs/distribution.md) for licensing
+status, launcher assets, upstream model terms, and local versus cloud uploads.
+
 ## Setup
 
 Python dependencies are managed by `uv run` through PEP 723 metadata; optional Whisper diarization adds pyannote only when requested.
