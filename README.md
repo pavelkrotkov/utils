@@ -15,8 +15,9 @@ For deeper context, refer to the script headers and inline help.
 
 ## Reuse and distribution
 
-See [distribution and transcription data](docs/distribution.md) for licensing
-status, launcher assets, upstream model terms, and local versus cloud uploads.
+Original code and launcher icon: [MIT license](LICENSE). See
+[distribution and transcription data](docs/distribution.md) for third-party
+terms and local versus cloud uploads.
 
 ## Setup
 

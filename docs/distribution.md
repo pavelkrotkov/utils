@@ -2,23 +2,22 @@
 
 ## Code and contributions
 
-`utils` has no root `LICENSE` yet. A public GitHub repository is not itself a
-grant to modify or redistribute its original code or packaged launcher. Before
-publishing a reusable release, the maintainer must approve a license, confirm
-the copyright holder/year, and confirm ownership of the app icon artwork.
-Until then, do not assume redistribution permission.
+Original repository code and the generated launcher icon are licensed under
+[MIT](../LICENSE), copyright (c) 2026 Pavel Krotkov. When reusing, modifying,
+or redistributing them, retain the copyright and permission notice. MIT does
+not supersede the separate terms of third-party tools, libraries, services,
+or model weights.
 
-Follow [CONTRIBUTING.md](../CONTRIBUTING.md) for changes, and identify any
-third-party code or assets in a PR. A future repository license will not
-override the separate terms of tools, libraries, model weights, or services.
+Follow [CONTRIBUTING.md](../CONTRIBUTING.md) for changes. Document the origin
+and applicable terms of any third-party code or assets contributed.
 
 ## What's in the macOS app
 
 `TranscriptionLauncher/Scripts/make-app.sh` packages the Swift executable,
 `Info.plist`, `PkgInfo`, and `AppIcon.icns`. SwiftPM declares **no external
-package dependencies**. The icon is made from committed PNGs drawn by
-`Scripts/generate_icon.py` using Pillow; the script references no external
-artwork. The maintainer must still confirm the artwork's provenance.
+package dependencies**. The icon PNGs are generated from drawing primitives
+in `Scripts/generate_icon.py` using Pillow, without imported artwork. The
+generator and PNGs were introduced together in [commit `167b192`](https://github.com/pavelkrotkov/utils/commit/167b192043eaa97569219a1913682593d294191e).
 
 The `.app` **does not include** the Python scripts, `uv`, `ffmpeg`, `jq`,
 `whisper.cpp`, Python packages, or model weights. Users choose a separate
