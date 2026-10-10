@@ -25,26 +25,32 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var repoRootSection: some View {
-        LabeledContent("Repository Root") {
-            HStack(spacing: 8) {
+        if repoRootStore.usesBundledScripts {
+            LabeledContent("Transcription Scripts") {
                 Text(repoRootStore.repoRootDisplayPath)
-                    .foregroundStyle(repoRootStore.repoRootURL == nil ? .secondary : .primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-
-                Button("Change...") {
-                    repoRootStore.chooseRepoRoot()
-                }
-                Button("Auto-detect") {
-                    repoRootStore.autoDetectRepoRoot()
-                }
             }
-            .disabled(repoRootStore.isDetectingRepoRoot || repoRootStore.isChoosingRepoRoot)
-        }
+        } else {
+            LabeledContent("Repository Root") {
+                HStack(spacing: 8) {
+                    Text(repoRootStore.repoRootDisplayPath)
+                        .foregroundStyle(repoRootStore.repoRootURL == nil ? .secondary : .primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
 
-        if let validationMessage = repoRootStore.repoRootValidationMessage {
-            Text(validationMessage)
-                .foregroundStyle(.red)
+                    Button("Change...") {
+                        repoRootStore.chooseRepoRoot()
+                    }
+                    Button("Auto-detect") {
+                        repoRootStore.autoDetectRepoRoot()
+                    }
+                }
+                .disabled(repoRootStore.isDetectingRepoRoot || repoRootStore.isChoosingRepoRoot)
+            }
+
+            if let validationMessage = repoRootStore.repoRootValidationMessage {
+                Text(validationMessage)
+                    .foregroundStyle(.red)
+            }
         }
     }
 

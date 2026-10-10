@@ -3,6 +3,16 @@
 A macOS SwiftUI app for launching the audio-transcription scripts in this
 repository (drag-and-drop input, preset picker, live progress log).
 
+## Download and install (macOS 14+, Apple Silicon)
+
+Download `TranscriptionLauncher-<version>-macos-arm64.zip` from
+[GitHub Releases](https://github.com/pavelkrotkov/utils/releases),
+open it in Finder, move `TranscriptionLauncher.app` to Applications, and
+double-click to launch. Published releases are Developer ID signed and
+notarized; no Swift build or utils checkout is required. If Gatekeeper
+rejects the app, verify the file came from the official release rather than
+bypassing the warning. You still install local tools/models separately.
+
 ## Outputs
 
 Choose **Format** alongside the preset. Cloud supports plain text and Markdown;
@@ -27,11 +37,11 @@ a later run does not touch an existing saved JSON.
 
 ## First local transcription (macOS 14+, Apple Silicon)
 
-The app runs scripts from a separate `utils` checkout. It does **not** install
-Homebrew tools or download models without your action. On first launch, choose
-**Private local** (the default), follow the preset-specific checklist, then
-click **Recheck**. Run only commands you approve in Terminal; the commands
-below display installation or download progress.
+The released app contains the transcription scripts from its own versioned build.
+It does **not** install Homebrew tools or download models without your action.
+On first launch, choose **Private local** (the default), follow the preset-specific
+checklist, then click **Recheck**. Run only commands you approve in Terminal;
+the commands below display installation or download progress.
 
 The **OpenAI cloud** preset uses `gpt-transcribe` for plain-text transcripts;
 it uploads audio, requires your own `OPENAI_API_KEY`, and is billed by OpenAI
@@ -42,17 +52,15 @@ Previously saved fast/best/compatible cloud choices migrate to this single cloud
 preset, preserving the consent requirement. Speaker labels and timestamps are
 not provided by this preset.
 
-1. Install [Homebrew](https://brew.sh/) if needed, then prepare a checkout:
+1. Install [Homebrew](https://brew.sh/) if needed, then the local tools:
 
    ```sh
-   git clone https://github.com/pavelkrotkov/utils.git
    brew install uv ffmpeg whisper.cpp
    ```
 
    Homebrew installs `whisper-cli`, which the Python script uses automatically
-   when `whisper-cpp` is absent. Use **Choose Folder** to select the cloned
-   `utils` directory. `uv` manages script dependencies; no manual `pip install`
-   is required.
+   when `whisper-cpp` is absent. `uv` manages script dependencies; no manual
+   `pip install` or repository checkout is required.
 
 2. Download the default Whisper model (about **874 MB**), preserving an
    incomplete download as `.part` rather than treating it as a ready model:
@@ -65,8 +73,8 @@ not provided by this preset.
    Or use **Settings → Whisper Model** to select an existing readable `.bin`
    file by absolute path. **Private local** requires no API key or HF token.
 
-3. Build and launch the Finder app (see below). Check that the checklist shows
-   the script, `uv`, `ffmpeg`, `whisper-cli`/`whisper-cpp`, and model as ready.
+3. Open the installed app from Finder. Check that the checklist shows
+   the bundled script, `uv`, `ffmpeg`, `whisper-cli`/`whisper-cpp`, and model as ready.
    Drop a short audio file and choose **Run**. The app asks for consent before
    `uv` runs. Plain Whisper needs no additional Python packages; the speakers
    preset installs pyannote and PyTorch on demand through `uv`. The log shows
@@ -139,7 +147,27 @@ Scripts/make-app.sh debug      # debug build (or: make app CONFIGURATION=debug)
 The script builds with SwiftPM, assembles `dist/TranscriptionLauncher.app`
 with `Packaging/Info.plist` and an `AppIcon.icns` generated from
 `Packaging/AppIcon.appiconset`, and applies an ad-hoc code signature —
-sufficient for local use without notarization.
+sufficient for local development without notarization. The app includes
+the seven transcription scripts and the root MIT license in
+`Contents/Resources`; it does not bundle CLI tools, Python packages, or
+model weights. Development builds can still select a source checkout.
+
+## Publishing a notarized release
+
+Configure the repository Actions secrets `APPLE_CERTIFICATE_P12` (base64
+Developer ID Application .p12), `APPLE_CERTIFICATE_PASSWORD`,
+`APPLE_CODESIGN_IDENTITY` (full Developer ID Application identity),
+`APPLE_NOTARY_APPLE_ID`, `APPLE_NOTARY_PASSWORD` (app-specific password),
+and `APPLE_TEAM_ID`. Protect release tags and the signing credentials.
+After merging and verifying native Swift CI, tag the intended main commit
+`transcription-vX.Y.Z` and push that tag. The release workflow cross-builds
+arm64, signs with hardened runtime, notarizes and staples the app, verifies
+Gatekeeper, and only then publishes the versioned ZIP and SHA-256 checksum.
+A failing check publishes nothing. The default `make app` remains ad-hoc
+signed and is **not** a public distribution artifact.
+
+Before announcing a release, run the clean-Mac Finder checks in
+[TESTING.md](TESTING.md); CI does not emulate a nondeveloper macOS profile.
 
 Packaging decisions:
 

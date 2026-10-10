@@ -238,7 +238,10 @@ struct MainView: View {
     @ViewBuilder
     private var repoRootSummary: some View {
         Group {
-            if let repoRootURL = repoRootStore.repoRootURL {
+            if repoRootStore.usesBundledScripts {
+                Text("Transcription scripts included with app")
+                    .foregroundStyle(.secondary)
+            } else if let repoRootURL = repoRootStore.repoRootURL {
                 Text("Repository: \(repoRootURL.path(percentEncoded: false))")
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
