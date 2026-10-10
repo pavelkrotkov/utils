@@ -73,6 +73,17 @@ def run_script(mocked_api, *args):
 
 
 @pytest.mark.skipif(not shutil.which("jq"), reason="jq is needed to parse valid responses")
+def test_markdown_wraps_exact_cloud_transcript(mocked_api):
+    _, output, env, _ = mocked_api
+    env["MOCK_BODY"] = json.dumps({"text": "Words unchanged"})
+    result = run_script(mocked_api, "--format", "md")
+    assert result.returncode == 0, result.stderr
+    assert output.read_text() == (
+        "# Transcript\n\nAudio: [Open source](<sample audio.m4a>)\n\nWords unchanged\n"
+    )
+
+
+@pytest.mark.skipif(not shutil.which("jq"), reason="jq is needed to parse valid responses")
 def test_success_writes_utf8_text_atomically(mocked_api):
     _, output, env, _ = mocked_api
     output.write_text("previous transcript")

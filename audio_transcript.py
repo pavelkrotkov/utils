@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
+from pathlib import Path
+from urllib.parse import quote
 
 
 @dataclass(frozen=True)
@@ -38,7 +40,7 @@ def emit_srt(segments: Sequence[TranscriptSegment]) -> str:
                     str(index),
                     f"{_format_srt_timestamp(segment.start)} --> "
                     f"{_format_srt_timestamp(segment.end)}",
-                    text,
+                    f"{segment.speaker}: {text}" if segment.speaker else text,
                 ]
             )
         )
@@ -61,7 +63,7 @@ def emit_vtt(segments: Sequence[TranscriptSegment]) -> str:
                 [
                     f"{_format_vtt_timestamp(segment.start)} --> "
                     f"{_format_vtt_timestamp(segment.end)}",
-                    text,
+                    f"{segment.speaker}: {text}" if segment.speaker else text,
                 ]
             )
         )
@@ -134,6 +136,30 @@ def emit_diarized_breaks(segments: Sequence[TranscriptSegment]) -> str:
     return "\n".join(lines)
 
 
+def emit_markdown(
+    segments: Sequence[TranscriptSegment],
+    speaker_names: SpeakerNames = None,
+    source: Path | None = None,
+) -> str:
+    """Emit a faithful, timestamped transcript with an optional source link."""
+    lines = ["# Transcript", ""]
+    if source:
+        kind = "Source JSON" if source.suffix.lower() == ".json" else "Audio"
+        lines.extend([f"{kind}: [Open source]({quote(source.name)})", ""])
+    for segment in segments:
+        content = segment.text.strip()
+        if not content:
+            continue
+        labels = []
+        if segment.end > segment.start:
+            labels.append(f"[{_format_vtt_timestamp(segment.start)}]")
+        if segment.speaker:
+            labels.append(f"{_display_speaker(segment.speaker, speaker_names)}:")
+        prefix = f"**{' '.join(labels)}** " if labels else ""
+        lines.extend([prefix + content, ""])
+    return "\n".join(lines).rstrip()
+
+
 _NO_SPEAKER = object()
 
 
@@ -141,18 +167,21 @@ def emit_transcript(
     segments: Sequence[TranscriptSegment],
     output_format: str,
     speaker_names: SpeakerNames = None,
+    source: Path | None = None,
 ) -> str:
     """Dispatch to a transcript emitter by CLI format name."""
     if output_format == "txt":
         return emit_txt(segments)
     if output_format == "srt":
-        return emit_srt(segments)
+        return emit_srt(remap_speakers(segments, speaker_names))
     if output_format == "vtt":
-        return emit_vtt(segments)
+        return emit_vtt(remap_speakers(segments, speaker_names))
     if output_format == "diarized-txt":
         return emit_diarized_txt(segments, speaker_names)
     if output_format == "diarized-breaks":
         return emit_diarized_breaks(segments)
+    if output_format == "md":
+        return emit_markdown(segments, speaker_names, source)
     raise ValueError(f"Unsupported transcript format: {output_format}")
 
 

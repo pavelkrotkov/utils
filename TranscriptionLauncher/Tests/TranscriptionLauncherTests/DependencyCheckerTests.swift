@@ -108,6 +108,27 @@ func vibeVoiceNeedsNativeAppleSiliconAndCompleteCachedWeights() throws {
     }
 }
 
+@Test
+func vibeVoiceJSONReexportNeedsNoModelOrGPU() throws {
+    try withTemporaryDirectory { root in
+        let bin = root.appendingPathComponent("bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        _ = try makeExecutable("python3", at: bin)
+        try "script".write(to: root.appendingPathComponent("audio_transcribe_vibevoice.py"),
+            atomically: true, encoding: .utf8)
+        try installLocalModules(in: root)
+        let json = root.appendingPathComponent("meeting.vibevoice.json")
+        let checks = DependencyChecker.check(
+            preset: .appleSiliconLocal, environment: ["PATH": bin.path],
+            repoRoot: root, inputFile: json, osMajorVersion: 14, isAppleSilicon: false
+        )
+        #expect(checks.allSatisfy { $0.isAvailable })
+        #expect(checks.map(\.name).contains("python3"))
+        #expect(!checks.contains { $0.name == "VibeVoice model (5.7 GB)" ||
+            $0.name == "Apple Silicon" || $0.name == "ffmpeg" || $0.name == "uv" })
+    }
+}
+
 private func installLocalModules(in root: URL) throws {
     for name in ["audio_common.py", "audio_segments.py", "audio_transcript.py"] {
         try Data([1]).write(to: root.appendingPathComponent(name))

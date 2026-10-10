@@ -3,6 +3,28 @@
 A macOS SwiftUI app for launching the audio-transcription scripts in this
 repository (drag-and-drop input, preset picker, live progress log).
 
+## Outputs
+
+Choose **Format** alongside the preset. Cloud supports plain text and Markdown;
+Whisper adds SRT/VTT subtitles; Whisper with speakers and VibeVoice also offer
+speaker-labeled text. Markdown records the original words, available timestamps
+and speakers, and a relative link to the source audio (or source JSON). It
+does **not** invent summaries or study notes. Copy the audio alongside the
+Markdown file if moving both into an Obsidian vault.
+
+For VibeVoice, enable **Keep structured JSON** to save
+`<recording>.vibevoice.json` alongside the selected reading format. A
+single-pass run preserves the native model JSON; a chunked run saves normalized
+merged segments, with speaker identities resetting at chunk boundaries.
+To export again without transcription, drop the saved `.vibevoice.json` in
+the launcher and select another format. Re-export uses Python's standard
+library, without VibeVoice model weights or Apple Silicon.
+
+Output names distinguish formats (`.srt`, `.vtt`, `.md`,
+`.spk.txt`, `.vibevoice.spk.txt`). The launcher confirms before replacing
+any existing output, including optional JSON. Without **Keep structured JSON**,
+a later run does not touch an existing saved JSON.
+
 ## First local transcription (macOS 14+, Apple Silicon)
 
 The app runs scripts from a separate `utils` checkout. It does **not** install

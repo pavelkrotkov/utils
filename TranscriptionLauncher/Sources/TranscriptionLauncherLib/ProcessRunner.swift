@@ -136,8 +136,10 @@ public final class ProcessRunner: ObservableObject {
             )
         }
 
-        guard FileManager.default.fileExists(atPath: command.outputFile.path) else {
-            throw ProcessRunnerError.outputFileMissing(command.outputFile)
+        if let missing = command.outputFiles.first(where: {
+            !FileManager.default.fileExists(atPath: $0.path)
+        }) {
+            throw ProcessRunnerError.outputFileMissing(missing)
         }
 
         return command.outputFile

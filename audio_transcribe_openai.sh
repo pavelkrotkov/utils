@@ -22,15 +22,16 @@ MODEL="gpt-transcribe"
 
 show_help() {
   cat <<EOF
-Usage: $0 [--model MODEL] [--chunk] input.m4a [output.txt]
+Usage: $0 [--model MODEL] [--format txt|md] [--chunk] input.m4a [output.txt]
 
 Transcribe an audio file using the OpenAI Audio API (/v1/audio/transcriptions).
-Audio is uploaded to OpenAI; API usage is billed. Output is plain transcript text.
+Audio is uploaded to OpenAI; API usage is billed. Output is plain text or Markdown.
 Files still above 25 MB after compression show a chunk plan without uploading.
 Rerun with --chunk to consent to paid uploads of all planned chunks.
 
 Options:
   -m, --model MODEL   Model to use (default: ${MODEL}); requires JSON .text output.
+  --format txt|md     Plain text or source-linked Markdown (default: txt).
   --chunk             Upload oversized recordings as separate, silence-aligned chunks.
   -h, --help          Show this help.
 
@@ -49,6 +50,7 @@ EOF
 INPUT=""
 OUTPUT=""
 ALLOW_CHUNKS=false
+FORMAT=txt
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -63,6 +65,14 @@ while [ "$#" -gt 0 ]; do
     --chunk)
       ALLOW_CHUNKS=true
       shift
+      ;;
+    --format)
+      if [ "${2:-}" != "txt" ] && [ "${2:-}" != "md" ]; then
+        echo "Error: --format must be txt or md." >&2
+        exit 1
+      fi
+      FORMAT="$2"
+      shift 2
       ;;
     -h|--help)
       show_help
@@ -99,7 +109,7 @@ if [ -z "$INPUT" ]; then
 fi
 
 # If output not provided, derive from input
-OUTPUT="${OUTPUT:-"${INPUT%.*}.txt"}"
+OUTPUT="${OUTPUT:-"${INPUT%.*}.${FORMAT}"}"
 
 case "$MODEL" in
   whisper-1|gpt-4o-transcribe|gpt-4o-mini-transcribe|gpt-4o-transcribe-diarize)
@@ -242,6 +252,16 @@ else
   mv -f "$OUTPUT_TMP" "$OUTPUT"
   OUTPUT_TMP=""
   echo "Chunk transcripts retained in: $CACHE_DIR"
+fi
+
+if [ "$FORMAT" = "md" ]; then
+  OUTPUT_TMP=$(mktemp "${OUTPUT}.XXXXXX")
+  {
+    printf '# Transcript\n\nAudio: [Open source](<%s>)\n\n' "${INPUT##*/}"
+    cat "$OUTPUT"
+  } > "$OUTPUT_TMP"
+  mv -f "$OUTPUT_TMP" "$OUTPUT"
+  OUTPUT_TMP=""
 fi
 
 echo "Saved transcript to: $OUTPUT"

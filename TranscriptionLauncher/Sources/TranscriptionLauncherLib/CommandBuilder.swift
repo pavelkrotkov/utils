@@ -14,6 +14,39 @@ public enum TranscriptionPreset: String, CaseIterable, Equatable, Sendable {
     }
 }
 
+public enum TranscriptFormat: String, CaseIterable, Equatable, Sendable {
+    case plainText = "txt"
+    case srt
+    case vtt
+    case speakerText = "diarized-txt"
+    case markdown = "md"
+
+    public var displayName: String {
+        switch self {
+        case .plainText: "Plain text"
+        case .srt: "Subtitles (SRT)"
+        case .vtt: "Subtitles (VTT)"
+        case .speakerText: "Speaker-labeled text"
+        case .markdown: "Markdown (Obsidian)"
+        }
+    }
+}
+
+extension TranscriptionPreset {
+    public var supportedFormats: [TranscriptFormat] {
+        switch self {
+        case .cloud: [.plainText, .markdown]
+        case .privateLocal: [.plainText, .srt, .vtt, .markdown]
+        case .privateLocalWithSpeakers: [.speakerText, .srt, .vtt, .markdown]
+        case .appleSiliconLocal: [.plainText, .speakerText, .srt, .vtt, .markdown]
+        }
+    }
+
+    public var defaultFormat: TranscriptFormat {
+        self == .privateLocalWithSpeakers ? .speakerText : .plainText
+    }
+}
+
 public struct TranscriptionCommand: Equatable, Sendable {
     /// Absolute path, or a bare command name (e.g. `uv`) that the process
     /// runner must resolve against the captured login-shell PATH.
@@ -23,17 +56,22 @@ public struct TranscriptionCommand: Equatable, Sendable {
     /// File the command writes the transcript to; the process runner
     /// verifies it exists after a successful exit.
     public let outputFile: URL
+    public let additionalOutputFiles: [URL]
+
+    public var outputFiles: [URL] { [outputFile] + additionalOutputFiles }
 
     public init(
         executable: String,
         arguments: [String],
         workingDirectory: URL,
-        outputFile: URL
+        outputFile: URL,
+        additionalOutputFiles: [URL] = []
     ) {
         self.executable = executable
         self.arguments = arguments
         self.workingDirectory = workingDirectory
         self.outputFile = outputFile
+        self.additionalOutputFiles = additionalOutputFiles
     }
 }
 
@@ -44,13 +82,31 @@ public enum CommandBuilder {
         repoRoot: URL,
         whisperModelPath: String? = nil,
         vibevoiceContext: String? = nil,
-        vibevoiceChunkSeconds: Int = 0
+        vibevoiceChunkSeconds: Int = 0,
+        format: TranscriptFormat? = nil,
+        keepVibeVoiceJSON: Bool = false
     ) -> TranscriptionCommand {
         precondition(input.isFileURL, "Input URL must be a file URL")
         precondition(repoRoot.isFileURL, "Repository root URL must be a file URL")
 
+        let chosenFormat = format ?? preset.defaultFormat
+        let output = OutputPathResolver.outputPath(for: preset, input: input, format: chosenFormat)
         let inputPath = input.path
-        let outputPath = Self.outputPath(for: preset, input: input)
+        let outputPath = output.path
+
+        if OutputPathResolver.isVibeVoiceJSON(input) {
+            precondition(preset == .appleSiliconLocal, "JSON re-export requires VibeVoice")
+            return TranscriptionCommand(
+                executable: "python3",
+                arguments: [
+                    repoRoot.appendingPathComponent("audio_transcribe_vibevoice.py").path,
+                    "--from-json", inputPath, "--format", chosenFormat.rawValue,
+                    "-o", outputPath,
+                ],
+                workingDirectory: repoRoot,
+                outputFile: output
+            )
+        }
 
         switch preset {
         case .cloud:
@@ -58,11 +114,12 @@ public enum CommandBuilder {
                 model: "gpt-transcribe",
                 inputPath: inputPath,
                 outputPath: outputPath,
-                repoRoot: repoRoot
+                repoRoot: repoRoot,
+                format: chosenFormat
             )
         case .privateLocal:
             return whisperCommand(
-                options: ["--format", "txt"],
+                options: ["--format", chosenFormat.rawValue],
                 inputPath: inputPath,
                 outputPath: outputPath,
                 repoRoot: repoRoot,
@@ -70,52 +127,44 @@ public enum CommandBuilder {
             )
         case .privateLocalWithSpeakers:
             return whisperCommand(
-                options: ["--diarization"],
+                options: ["--diarization", "--format", chosenFormat.rawValue],
                 inputPath: inputPath,
                 outputPath: outputPath,
                 repoRoot: repoRoot,
                 whisperModelPath: whisperModelPath
             )
         case .appleSiliconLocal:
-            var options = ["--format", "txt", "--chunk-seconds", String(vibevoiceChunkSeconds)]
+            var options = ["--format", chosenFormat.rawValue, "--chunk-seconds", String(vibevoiceChunkSeconds)]
             if let vibevoiceContext {
                 options += ["--context", vibevoiceContext]
+            }
+            if keepVibeVoiceJSON {
+                options.append("--keep-json")
             }
             return uvCommand(
                 scriptName: "audio_transcribe_vibevoice.py",
                 options: options,
                 inputPath: inputPath,
                 outputPath: outputPath,
-                repoRoot: repoRoot
+                repoRoot: repoRoot,
+                additionalOutputFiles: keepVibeVoiceJSON
+                    ? [OutputPathResolver.structuredOutputPath(for: input)] : []
             )
         }
-    }
-
-    /// Must stay in sync with the OutputPathResolver naming rules (#58):
-    /// `.txt` for plain transcripts, `.spk.txt` for diarized output,
-    /// `.vibevoice.txt` for VibeVoice output.
-    private static func outputPath(for preset: TranscriptionPreset, input: URL) -> String {
-        let suffix: String
-        switch preset {
-        case .privateLocalWithSpeakers:
-            suffix = ".spk.txt"
-        case .appleSiliconLocal:
-            suffix = ".vibevoice.txt"
-        case .cloud, .privateLocal:
-            suffix = ".txt"
-        }
-        return input.deletingPathExtension().path + suffix
     }
 
     private static func openAICommand(
         model: String,
         inputPath: String,
         outputPath: String,
-        repoRoot: URL
+        repoRoot: URL,
+        format: TranscriptFormat
     ) -> TranscriptionCommand {
         TranscriptionCommand(
             executable: repoRoot.appendingPathComponent("audio_transcribe_openai.sh").path,
-            arguments: ["--model", model, inputPath, outputPath],
+            arguments: ["--model", model]
+                + (format == .markdown ? ["--format", "md"] : [])
+                + [inputPath, outputPath],
             workingDirectory: repoRoot,
             outputFile: URL(fileURLWithPath: outputPath, isDirectory: false)
         )
@@ -146,7 +195,8 @@ public enum CommandBuilder {
         options: [String],
         inputPath: String,
         outputPath: String,
-        repoRoot: URL
+        repoRoot: URL,
+        additionalOutputFiles: [URL] = []
     ) -> TranscriptionCommand {
         var arguments = [
             "run", repoRoot.appendingPathComponent(scriptName).path,
@@ -158,7 +208,8 @@ public enum CommandBuilder {
             executable: "uv",
             arguments: arguments,
             workingDirectory: repoRoot,
-            outputFile: URL(fileURLWithPath: outputPath, isDirectory: false)
+            outputFile: URL(fileURLWithPath: outputPath, isDirectory: false),
+            additionalOutputFiles: additionalOutputFiles
         )
     }
 }

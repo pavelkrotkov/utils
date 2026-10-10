@@ -27,16 +27,6 @@ extension TranscriptionPreset {
         self == .appleSiliconLocal
     }
 
-    /// The `OutputPathResolver` counterpart of this preset.
-    var outputPathPreset: Preset {
-        switch self {
-        case .cloud: .cloud
-        case .privateLocal: .privateLocal
-        case .privateLocalWithSpeakers: .privateLocalWithSpeakers
-        case .appleSiliconLocal: .appleSiliconLocal
-        }
-    }
-
     var privacyDescription: String {
         isCloud
             ? "Cloud uploads audio to OpenAI. Your own API key is required and usage may cost money."

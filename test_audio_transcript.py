@@ -1,9 +1,11 @@
 import unittest
+from pathlib import Path
 
 from audio_transcript import (
     TranscriptSegment,
     emit_diarized_breaks,
     emit_diarized_txt,
+    emit_markdown,
     emit_srt,
     emit_transcript,
     emit_txt,
@@ -18,6 +20,19 @@ class TranscriptEmitterTests(unittest.TestCase):
         self.assertEqual(emit_srt([]), "")
         self.assertEqual(emit_vtt([]), "WEBVTT")
         self.assertEqual(emit_diarized_txt([]), "")
+
+    def test_markdown_preserves_words_speakers_and_source(self) -> None:
+        segments = [
+            TranscriptSegment(1.234, 2.0, "Words unchanged", "SPEAKER_00"),
+            TranscriptSegment(0.0, 0.0, "Untimed text"),
+        ]
+        result = emit_markdown(segments, ["Alice"], Path("/tmp/my recording.m4a"))
+        self.assertEqual(
+            result,
+            "# Transcript\n\nAudio: [Open source](my%20recording.m4a)\n\n"
+            "**[00:00:01.234] Alice:** Words unchanged\n\nUntimed text",
+        )
+        self.assertNotIn("Summary", result)
 
     def test_single_segment_txt(self) -> None:
         segments = [TranscriptSegment(1.0, 2.0, " hello ")]
@@ -46,6 +61,12 @@ class TranscriptEmitterTests(unittest.TestCase):
             "00:01:01.250 --> 00:01:02.750\n"
             "World",
         )
+
+    def test_subtitles_preserve_speaker_labels(self) -> None:
+        segments = [TranscriptSegment(1.0, 2.0, "Hello", "SPEAKER_00")]
+        self.assertIn("SPEAKER_00: Hello", emit_srt(segments))
+        self.assertIn("SPEAKER_00: Hello", emit_vtt(segments))
+        self.assertIn("Alice: Hello", emit_transcript(segments, "srt", ["Alice"]))
 
     def test_diarized_txt_groups_speaker_labels(self) -> None:
         segments = [

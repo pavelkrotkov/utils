@@ -16,6 +16,7 @@ struct MainView: View {
         VStack(alignment: .leading, spacing: 12) {
             dropTarget
             presetPicker
+            outputControls
             readinessSection
             controls
             progressSection
@@ -50,7 +51,10 @@ struct MainView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: { run in
-            Text("\"\(run.output.lastPathComponent)\" already exists. Running will replace it.")
+            let existing = run.command.outputFiles.filter {
+                FileManager.default.fileExists(atPath: $0.path(percentEncoded: false))
+            }.map(\.lastPathComponent).joined(separator: ", ")
+            Text("Running will replace: \(existing).")
         }
     }
 
@@ -83,6 +87,22 @@ struct MainView: View {
             Text(model.selectedPreset.privacyDescription)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+        .disabled(runner.isRunning || model.isPreparing
+            || (model.inputFileURL.map(OutputPathResolver.isVibeVoiceJSON) ?? false))
+    }
+
+    private var outputControls: some View {
+        HStack {
+            Picker("Format", selection: $model.selectedFormat) {
+                ForEach(model.selectedPreset.supportedFormats, id: \.self) { format in
+                    Text(format.displayName).tag(format)
+                }
+            }
+            if model.selectedPreset == .appleSiliconLocal
+                && !(model.inputFileURL.map(OutputPathResolver.isVibeVoiceJSON) ?? false) {
+                Toggle("Keep structured JSON", isOn: $model.keepVibeVoiceJSON)
+            }
         }
         .disabled(runner.isRunning || model.isPreparing)
     }

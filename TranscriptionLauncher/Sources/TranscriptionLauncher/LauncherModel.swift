@@ -14,7 +14,6 @@ final class LauncherModel: ObservableObject {
     /// actually executes.
     struct PendingRun: Equatable {
         let command: TranscriptionCommand
-        let output: URL
         let input: URL
         let preset: TranscriptionPreset
         let whisperModelPath: String?
@@ -31,7 +30,18 @@ final class LauncherModel: ObservableObject {
     @Published private(set) var isPreparing = false
 
     @Published private(set) var selectedPreset: TranscriptionPreset {
-        didSet { preferences.selectedPreset = selectedPreset }
+        didSet {
+            preferences.selectedPreset = selectedPreset
+            if !selectedPreset.supportedFormats.contains(selectedFormat) {
+                selectedFormat = selectedPreset.defaultFormat
+            }
+        }
+    }
+    @Published var selectedFormat: TranscriptFormat {
+        didSet { defaults.set(selectedFormat.rawValue, forKey: DefaultsKeys.transcriptFormat) }
+    }
+    @Published var keepVibeVoiceJSON: Bool {
+        didSet { defaults.set(keepVibeVoiceJSON, forKey: DefaultsKeys.keepVibeVoiceJSON) }
     }
     @Published var whisperModelPath: String {
         didSet { defaults.set(whisperModelPath, forKey: DefaultsKeys.whisperModelPath) }
@@ -58,13 +68,24 @@ final class LauncherModel: ObservableObject {
         let preferences = PresetPreferences(defaults: defaults)
         self.defaults = defaults
         self.preferences = preferences
-        self.selectedPreset = preferences.selectedPreset
+        let preset = preferences.selectedPreset
+        self.selectedPreset = preset
+        let savedFormat = defaults.string(forKey: DefaultsKeys.transcriptFormat)
+            .flatMap(TranscriptFormat.init(rawValue:))
+        self.selectedFormat = savedFormat.flatMap {
+            preset.supportedFormats.contains($0) ? $0 : nil
+        } ?? preset.defaultFormat
+        self.keepVibeVoiceJSON = defaults.bool(forKey: DefaultsKeys.keepVibeVoiceJSON)
         self.whisperModelPath = defaults.string(forKey: DefaultsKeys.whisperModelPath) ?? ""
         self.vibevoiceContext = defaults.string(forKey: DefaultsKeys.vibevoiceContext) ?? ""
         self.vibevoiceChunkSeconds = defaults.integer(forKey: DefaultsKeys.vibevoiceChunkSeconds)
     }
 
     func selectPreset(_ preset: TranscriptionPreset) {
+        if let inputFileURL, OutputPathResolver.isVibeVoiceJSON(inputFileURL),
+           preset != .appleSiliconLocal {
+            return
+        }
         if preferences.requiresConsent(for: preset) {
             pendingCloudPreset = preset
         } else {
@@ -99,14 +120,18 @@ final class LauncherModel: ObservableObject {
             return false
         }
 
-        guard Self.isAudioOrVideoFile(url) else {
+        let isJSON = OutputPathResolver.isVibeVoiceJSON(url)
+        guard isJSON || Self.isAudioOrVideoFile(url) else {
             errorAlert = ErrorPresentation(
                 title: "Unsupported File Type",
-                message: "\(url.lastPathComponent) is not an audio or video file."
+                message: "\(url.lastPathComponent) is not audio, video, or VibeVoice JSON."
             )
             return false
         }
 
+        if isJSON {
+            selectedPreset = .appleSiliconLocal
+        }
         inputFileURL = url
         lastOutputURL = nil
         return true
@@ -149,20 +174,17 @@ final class LauncherModel: ObservableObject {
             whisperModelPath: modelPath,
             vibevoiceContext: selectedPreset.usesVibeVoiceContext
                 ? nonEmpty(vibevoiceContext) : nil,
-            vibevoiceChunkSeconds: selectedPreset.usesVibeVoiceContext ? vibevoiceChunkSeconds : 0
-        )
-        let output = OutputPathResolver.outputPath(
-            for: selectedPreset.outputPathPreset,
-            input: input
+            vibevoiceChunkSeconds: selectedPreset.usesVibeVoiceContext ? vibevoiceChunkSeconds : 0,
+            format: selectedFormat,
+            keepVibeVoiceJSON: selectedPreset == .appleSiliconLocal && keepVibeVoiceJSON
         )
         let run = PendingRun(
             command: command,
-            output: output,
             input: input,
             preset: selectedPreset,
             whisperModelPath: modelPath
         )
-        if selectedPreset.isCloud {
+        if selectedPreset.isCloud || OutputPathResolver.isVibeVoiceJSON(input) {
             confirmOverwrite(run)
         } else {
             pendingDownloadRun = run
@@ -175,7 +197,9 @@ final class LauncherModel: ObservableObject {
     }
 
     private func confirmOverwrite(_ run: PendingRun) {
-        if FileManager.default.fileExists(atPath: run.output.path(percentEncoded: false)) {
+        if run.command.outputFiles.contains(where: {
+            FileManager.default.fileExists(atPath: $0.path(percentEncoded: false))
+        }) {
             pendingOverwriteRun = run
         } else {
             start(run)

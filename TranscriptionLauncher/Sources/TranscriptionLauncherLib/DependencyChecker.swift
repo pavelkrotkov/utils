@@ -75,6 +75,10 @@ public enum DependencyChecker {
             }
         case .appleSiliconLocal:
             items += localModuleItems(repoRoot: repoRoot)
+            if let inputFile, OutputPathResolver.isVibeVoiceJSON(inputFile) {
+                items.append(executable("python3", environment: environment))
+                return items
+            }
             items += [executable("uv", environment: environment), executable("ffmpeg", environment: environment)]
             #if arch(arm64)
             let supportedHardware = isAppleSilicon ?? true
