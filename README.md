@@ -13,6 +13,12 @@ and TIDAL import.
 
 For deeper context, refer to the script headers and inline help.
 
+## Reuse and distribution
+
+Original code and launcher icon: [MIT license](LICENSE). See
+[distribution and transcription data](docs/distribution.md) for third-party
+terms and local versus cloud uploads.
+
 ## Setup
 
 Python dependencies are managed by `uv run` through PEP 723 metadata; optional Whisper diarization adds pyannote only when requested.
