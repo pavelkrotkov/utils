@@ -42,7 +42,7 @@ public enum DependencyChecker {
                     && (script.hasSuffix(".py") || FileManager.default.isExecutableFile(atPath: $0))
             } ?? false,
             resolvedPath: scriptPath,
-            guidance: "Clone https://github.com/pavelkrotkov/utils.git in Terminal, then choose that folder as Repository Root in Settings."
+            guidance: "Reinstall the app to restore bundled scripts, or restore your selected utils checkout."
         )]
         items.append(Item(
             name: "macOS 14+",
@@ -102,7 +102,7 @@ public enum DependencyChecker {
                 name: name,
                 isAvailable: path.map(readableFile) ?? false,
                 resolvedPath: path,
-                guidance: "Restore \(name) in the selected utils checkout, or clone the repository again."
+                guidance: "Reinstall the app or restore \(name) in the selected utils checkout."
             )
         }
     }

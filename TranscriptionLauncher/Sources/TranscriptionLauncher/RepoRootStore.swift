@@ -14,6 +14,9 @@ final class RepoRootStore: ObservableObject {
 
     private let defaults: UserDefaults
     private let detectorStartURL: URL
+    private let bundledScriptsURL: URL?
+
+    var usesBundledScripts: Bool { bundledScriptsURL != nil }
     private var detectionTask: Task<URL?, Never>?
 
     init(
@@ -22,10 +25,14 @@ final class RepoRootStore: ObservableObject {
     ) {
         self.defaults = defaults
         self.detectorStartURL = detectorStartURL
-        self.repoRootURL = Self.loadRepoRoot(defaults: defaults)
+        let bundledURL = Bundle.main.resourceURL?.appendingPathComponent("Scripts", isDirectory: true)
+        let bundledScripts = bundledURL.flatMap { RepoDetector.isRepoRoot($0) ? $0 : nil }
+        self.bundledScriptsURL = bundledScripts
+        self.repoRootURL = bundledScripts ?? Self.loadRepoRoot(defaults: defaults)
     }
 
     var repoRootDisplayPath: String {
+        if usesBundledScripts { return "Included with app" }
         if let repoRootURL {
             return repoRootURL.path(percentEncoded: false)
         }
@@ -46,6 +53,7 @@ final class RepoRootStore: ObservableObject {
     /// Runs `RepoDetector` and saves the result, replacing any previously
     /// configured root; reports a validation message when nothing is found.
     func autoDetectRepoRoot() {
+        guard !usesBundledScripts else { return }
         runDetection(reportFailure: true)
     }
 
@@ -79,7 +87,7 @@ final class RepoRootStore: ObservableObject {
     }
 
     func chooseRepoRoot() {
-        guard !isChoosingRepoRoot else {
+        guard !usesBundledScripts, !isChoosingRepoRoot else {
             return
         }
 

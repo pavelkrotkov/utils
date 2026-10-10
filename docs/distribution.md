@@ -14,19 +14,24 @@ and applicable terms of any third-party code or assets contributed.
 ## What's in the macOS app
 
 `TranscriptionLauncher/Scripts/make-app.sh` packages the Swift executable,
-`Info.plist`, `PkgInfo`, and `AppIcon.icns`. SwiftPM declares **no external
+`Info.plist`, `PkgInfo`, `AppIcon.icns`, scripts and MIT license. SwiftPM declares **no external
 package dependencies**. The icon PNGs are generated from drawing primitives
 in `Scripts/generate_icon.py` using Pillow, without imported artwork. The
 generator and PNGs were introduced together in [commit `167b192`](https://github.com/pavelkrotkov/utils/commit/167b192043eaa97569219a1913682593d294191e).
 
-The `.app` **does not include** the Python scripts, `uv`, `ffmpeg`, `jq`,
-`whisper.cpp`, Python packages, or model weights. Users choose a separate
-`utils` checkout, install tools, and download models themselves.
+The `.app` also bundles the seven MIT-licensed transcription scripts
+(`audio_transcribe_openai.sh`, `audio_transcribe_whisper.py`,
+`audio_transcribe_vibevoice.py`, `audio_cloud_chunks.py`,
+`audio_common.py`, `audio_segments.py`, and `audio_transcript.py`) plus
+the root MIT license. Scripts come from the same commit as the app build.
+Users install `uv`, `ffmpeg`, `jq`, `whisper.cpp`, Python packages, and
+model weights separately; no external tools or weights are redistributed.
 
 ## Third-party terms
 
-These components are fetched/installed separately, **not redistributed in
-the app**. Licenses below describe upstream projects/model cards, not a grant
+These third-party components are fetched/installed separately, **not
+redistributed in the app**. Licenses below describe upstream projects/model
+cards, not a grant
 from `utils` to repackage them.
 
 | Component | Upstream terms | Usage |
