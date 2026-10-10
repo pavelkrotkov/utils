@@ -194,11 +194,7 @@ def ensure_apple_silicon() -> None:
     sys.exit(1)
 
 
-def resolve_output_path(
-    input_path: Path,
-    output_path: Path | None,
-    output_format: str,
-) -> Path:
+def resolve_output_path(input_path: Path, output_path: Path | None, output_format: str) -> Path:
     final_path = output_path or input_path.with_name(
         f"{input_path.stem}.vibevoice.{_format_file_ext(output_format)}"
     )

@@ -24,13 +24,15 @@ def test_native_json_survives_when_not_requested_and_reexports_without_model(
     audio.write_bytes(b"fake audio")
     original = tmp_path / "recording.vibevoice.json"
     original.write_text("existing original")
-    native = '{"segments":[{"start":1,"end":2,"text":"spoken","speaker":"Speaker 1"}],"native":"yes"}'
+    native = (
+        '{"segments":[{"start":1,"end":2,"text":"spoken","speaker":"Speaker 1"}],"native":"yes"}'
+    )
 
     def generate_transcription(**kwargs: object) -> None:
-        Path(f'{kwargs["output_path"]}.json').write_text(native)
+        Path(f"{kwargs['output_path']}.json").write_text(native)
 
     generate = ModuleType("mlx_audio.stt.generate")
-    setattr(generate, "generate_transcription", generate_transcription)
+    monkeypatch.setattr(generate, "generate_transcription", generate_transcription, raising=False)
     monkeypatch.setitem(sys.modules, "mlx_audio", ModuleType("mlx_audio"))
     monkeypatch.setitem(sys.modules, "mlx_audio.stt", ModuleType("mlx_audio.stt"))
     monkeypatch.setitem(sys.modules, "mlx_audio.stt.generate", generate)
@@ -42,7 +44,9 @@ def test_native_json_survives_when_not_requested_and_reexports_without_model(
     assert "Speaker 1:" in (tmp_path / "recording.vibevoice.md").read_text()
 
     monkeypatch.setattr(
-        sys, "argv", ["vibevoice", str(audio), "--format", "md", "--keep-json", "--no-progress"]
+        sys,
+        "argv",
+        ["vibevoice", str(audio), "--format", "md", "--keep-json", "--no-progress"],
     )
     vv.main()
     assert original.read_text() == native

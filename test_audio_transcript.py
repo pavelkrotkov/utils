@@ -26,9 +26,7 @@ class TranscriptEmitterTests(unittest.TestCase):
             TranscriptSegment(1.234, 2.0, "Words unchanged", "SPEAKER_00"),
             TranscriptSegment(0.0, 0.0, "Untimed text"),
         ]
-        result = emit_markdown(
-            segments, ["Alice"], Path("/tmp/my recording.m4a")
-        )
+        result = emit_markdown(segments, ["Alice"], Path("/tmp/my recording.m4a"))
         self.assertEqual(
             result,
             "# Transcript\n\nAudio: [Open source](my%20recording.m4a)\n\n"
