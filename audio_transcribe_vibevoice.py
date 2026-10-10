@@ -9,12 +9,14 @@ Transcribe audio locally with VibeVoice-ASR through mlx-audio.
 
 Defaults to mlx-community/VibeVoice-ASR-4bit. mlx-audio is asked for raw JSON,
 then this script normalizes that JSON into shared TranscriptSegment objects and
-emits json, txt, srt, or vtt locally.
+emits JSON, text, subtitles, or source-linked Markdown locally.
 
 Usage:
     uv run ./audio_transcribe_vibevoice.py interview.m4a
     uv run ./audio_transcribe_vibevoice.py interview.m4a --context "Pavel, Mathpix, pyannote"
     uv run ./audio_transcribe_vibevoice.py interview.m4a --format srt -o interview.srt
+    uv run ./audio_transcribe_vibevoice.py interview.m4a --format md --keep-json
+    python3 ./audio_transcribe_vibevoice.py --from-json interview.vibevoice.json --format md
 
 Long files on memory-constrained Macs (16 GB can OOM during prefill):
     uv run ./audio_transcribe_vibevoice.py long_interview.m4a --chunk-seconds 120
@@ -26,7 +28,8 @@ usable silence are hard-cut with a small overlap whose double-transcribed span
 is deduped at splice time. Known limitation: speaker labels reset at chunk
 boundaries ("Speaker 1" in chunk 2 is not necessarily "Speaker 1" in chunk 1).
 Chunking trades VibeVoice's cross-file speaker consistency for lower memory
-use. No chunk duration (including 300 seconds) guarantees success on 16 GB.
+use. With --keep-json, chunked runs save merged normalized segments rather than
+the per-chunk native originals. No chunk duration (including 300 seconds) guarantees success on 16 GB.
 """
 
 from __future__ import annotations
@@ -37,6 +40,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -57,7 +61,7 @@ from audio_transcript import TranscriptSegment, emit_transcript
 DEFAULT_MODEL = "mlx-community/VibeVoice-ASR-4bit"
 # Observed on Apple Silicon: transcription takes roughly 4x the audio duration.
 REALTIME_FACTOR = 4.0
-SUPPORTED_FORMATS = ("json", "txt", "srt", "vtt", "diarized-txt", "diarized-breaks")
+SUPPORTED_FORMATS = ("json", "txt", "srt", "vtt", "diarized-txt", "diarized-breaks", "md")
 _DIARIZED_FORMATS = frozenset({"diarized-txt", "diarized-breaks"})
 DEFAULT_CHUNK_SECONDS = 300.0
 DEFAULT_SILENCE_DB = -30.0
@@ -98,6 +102,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         metavar="JSON",
         help="Convert an existing VibeVoice JSON to another format without re-transcribing",
+    )
+    parser.add_argument(
+        "--keep-json",
+        action="store_true",
+        help="Also save structured JSON next to audio (merged segments for chunked runs)",
     )
     parser.add_argument(
         "-o",
@@ -185,25 +194,20 @@ def ensure_apple_silicon() -> None:
     sys.exit(1)
 
 
-def resolve_output_paths(
+def resolve_output_path(
     input_path: Path,
     output_path: Path | None,
     output_format: str,
-) -> tuple[Path, Path, Path]:
-    ext = _format_file_ext(output_format)
-    if output_path is None:
-        final_path = input_path.with_name(f"{input_path.stem}.vibevoice.{ext}")
-    else:
-        final_path = output_path
-
+) -> Path:
+    final_path = output_path or input_path.with_name(
+        f"{input_path.stem}.vibevoice.{_format_file_ext(output_format)}"
+    )
     final_path.parent.mkdir(parents=True, exist_ok=True)
-    suffix = f".{ext}"
-    if final_path.name.lower().endswith(suffix):
-        mlx_stem = Path(str(final_path)[: -len(suffix)])
-    else:
-        mlx_stem = final_path.with_name(f"{final_path.name}.mlx-audio")
+    return final_path
 
-    return final_path, mlx_stem, Path(f"{mlx_stem}.json")
+
+def structured_output_path(input_path: Path) -> Path:
+    return input_path.with_name(f"{input_path.stem}.vibevoice.json")
 
 
 def validate_output(path: Path) -> None:
@@ -233,7 +237,7 @@ def _bool_env(name: str) -> bool:
 
 
 def _warn_if_speakers_ignored(segments: list[TranscriptSegment], output_format: str) -> None:
-    if output_format in _DIARIZED_FORMATS:
+    if output_format != "txt":
         return
     if any(s.speaker is not None for s in segments):
         formats_str = " or ".join(sorted(_DIARIZED_FORMATS))
@@ -395,7 +399,7 @@ def run_chunked(args: argparse.Namespace, generate: Any, progress: ProgressRepor
         print("ERROR: cannot determine audio duration; cannot plan chunks", file=sys.stderr)
         sys.exit(1)
 
-    final_path, _, generated_path = resolve_output_paths(input_path, args.output, args.format)
+    final_path = resolve_output_path(input_path, args.output, args.format)
 
     if progress:
         progress.info(
@@ -470,11 +474,15 @@ def run_chunked(args: argparse.Namespace, generate: Any, progress: ProgressRepor
             )
 
         if args.format == "json":
-            generated_path.write_text(_dump_segments_json(merged), encoding="utf-8")
-            if generated_path != final_path:
-                generated_path.replace(final_path)
+            final_path.write_text(_dump_segments_json(merged), encoding="utf-8")
         else:
-            final_path.write_text(emit_transcript(merged, args.format) + "\n", encoding="utf-8")
+            final_path.write_text(
+                emit_transcript(merged, args.format, source=input_path) + "\n", encoding="utf-8"
+            )
+            if args.keep_json:
+                structured_output_path(input_path).write_text(
+                    _dump_segments_json(merged), encoding="utf-8"
+                )
 
     validate_output(final_path)
     print(f"Transcript written to: {final_path}")
@@ -512,10 +520,15 @@ def main() -> None:
 
         ext = _format_file_ext(args.format)
         out_path = args.output if args.output else args.from_json.with_suffix(f".{ext}")
+        if out_path.resolve() == args.from_json.resolve():
+            parser.error("Output must not overwrite the source JSON")
         out_path.parent.mkdir(parents=True, exist_ok=True)
         segments = load_vibevoice_segments(args.from_json)
         _warn_if_speakers_ignored(segments, args.format)
-        out_path.write_text(emit_transcript(segments, args.format) + "\n", encoding="utf-8")
+        out_path.write_text(
+            emit_transcript(segments, args.format, source=args.from_json) + "\n",
+            encoding="utf-8",
+        )
         print(f"Transcript written to: {out_path}")
         return
 
@@ -546,13 +559,7 @@ def main() -> None:
         run_chunked(args, generate_transcription, progress)
         return
 
-    final_path, mlx_stem, generated_path = resolve_output_paths(
-        args.input,
-        args.output,
-        args.format,
-    )
-    old_mtime_ns = generated_path.stat().st_mtime_ns if generated_path.exists() else None
-
+    final_path = resolve_output_path(args.input, args.output, args.format)
     progress = None if args.no_progress else ProgressReporter(interval=args.progress_interval)
     pre_convert = args.pre_convert_pcm16k or _bool_env("VIBEVOICE_PRECONVERT_PCM16K")
     audio_seconds = probe_media_duration(args.input, "ffprobe", args.verbose) if progress else None
@@ -569,60 +576,57 @@ def main() -> None:
         print(f"INFO: Transcribing with {args.model}", file=sys.stderr)
         print(f"INFO: Writing {args.format.upper()} to {final_path}", file=sys.stderr)
 
-    with tempfile.TemporaryDirectory(prefix="vibevoice_pcm16k_") as temp_dir:
-        audio_for_transcription = args.input
-        if pre_convert:
-            audio_for_transcription = Path(temp_dir) / "audio.wav"
-            convert_to_pcm16k_mono(
-                args.input,
-                audio_for_transcription,
-                progress=progress,
-                verbose=args.verbose,
-            )
-
-        def transcribe() -> None:
-            # Always ask mlx-audio for JSON; we emit the user's requested
-            # format locally via emit_transcript so all backends share the
-            # same txt/srt/vtt output policy.
-            generate_transcription(
-                model=args.model,
-                audio=str(audio_for_transcription),
-                output_path=str(mlx_stem),
-                format="json",
-                verbose=args.verbose,
-                context=args.context,
-            )
-
-        try:
-            if progress:
-                run_threaded_with_periodic_progress(
-                    transcribe,
-                    reporter=progress,
-                    label="VibeVoice ASR",
-                    interval=args.progress_interval,
-                    expected_seconds=expected_seconds,
+    with tempfile.TemporaryDirectory(prefix="vibevoice_raw_") as raw_dir:
+        mlx_stem = Path(raw_dir) / "transcript"
+        generated_path = Path(f"{mlx_stem}.json")
+        with tempfile.TemporaryDirectory(prefix="vibevoice_pcm16k_") as temp_dir:
+            audio_for_transcription = args.input
+            if pre_convert:
+                audio_for_transcription = Path(temp_dir) / "audio.wav"
+                convert_to_pcm16k_mono(
+                    args.input,
+                    audio_for_transcription,
+                    progress=progress,
+                    verbose=args.verbose,
                 )
-            else:
-                transcribe()
-        except Exception as exc:
-            print(f"ERROR: VibeVoice transcription failed: {exc}", file=sys.stderr)
-            sys.exit(1)
 
-    validate_output(generated_path)
-    if old_mtime_ns is not None and generated_path.stat().st_mtime_ns == old_mtime_ns:
-        print(f"ERROR: mlx-audio did not update output file: {generated_path}", file=sys.stderr)
-        sys.exit(1)
+            def transcribe() -> None:
+                generate_transcription(
+                    model=args.model,
+                    audio=str(audio_for_transcription),
+                    output_path=str(mlx_stem),
+                    format="json",
+                    verbose=args.verbose,
+                    context=args.context,
+                )
 
-    if args.format == "json":
-        if generated_path != final_path:
-            generated_path.replace(final_path)
-    else:
-        try:
+            try:
+                if progress:
+                    run_threaded_with_periodic_progress(
+                        transcribe,
+                        reporter=progress,
+                        label="VibeVoice ASR",
+                        interval=args.progress_interval,
+                        expected_seconds=expected_seconds,
+                    )
+                else:
+                    transcribe()
+            except Exception as exc:
+                print(f"ERROR: VibeVoice transcription failed: {exc}", file=sys.stderr)
+                sys.exit(1)
+
+        validate_output(generated_path)
+        if args.format == "json":
+            shutil.copyfile(generated_path, final_path)
+        else:
             segments = load_vibevoice_segments(generated_path)
             _warn_if_speakers_ignored(segments, args.format)
-            final_path.write_text(emit_transcript(segments, args.format) + "\n", encoding="utf-8")
-        finally:
-            generated_path.unlink(missing_ok=True)
+            final_path.write_text(
+                emit_transcript(segments, args.format, source=args.input) + "\n",
+                encoding="utf-8",
+            )
+            if args.keep_json:
+                shutil.copyfile(generated_path, structured_output_path(args.input))
 
     validate_output(final_path)
     print(f"Transcript written to: {final_path}")

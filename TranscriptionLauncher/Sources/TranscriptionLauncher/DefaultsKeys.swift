@@ -5,4 +5,6 @@ enum DefaultsKeys {
     static let whisperModelPath = "whisperModelPath"
     static let vibevoiceContext = "vibevoiceContext"
     static let vibevoiceChunkSeconds = "vibevoiceChunkSeconds"
+    static let transcriptFormat = "transcriptFormat"
+    static let keepVibeVoiceJSON = "keepVibeVoiceJSON"
 }

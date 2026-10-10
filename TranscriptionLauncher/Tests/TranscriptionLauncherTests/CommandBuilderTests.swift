@@ -44,7 +44,7 @@ func testPrivateLocalWithSpeakersPreset() {
     #expect(command.arguments == [
         "run", "/Users/me/utils/audio_transcribe_whisper.py",
         "/Users/me/Recordings/meeting.m4a",
-        "--diarization",
+        "--diarization", "--format", "diarized-txt",
         "-o", "/Users/me/Recordings/meeting.spk.txt",
     ])
     #expect(command.workingDirectory == repoRoot)
@@ -162,4 +162,51 @@ func testDefaultWhisperModelPathOmitted() {
 
     #expect(!plain.arguments.contains("--large-model"))
     #expect(!speakers.arguments.contains("--large-model"))
+}
+
+@Test
+func testFormatOptionsAndSuffixes() {
+    let whisper = CommandBuilder.command(
+        for: .privateLocal, input: input, repoRoot: repoRoot, format: .srt
+    )
+    #expect(whisper.arguments.contains("srt"))
+    #expect(whisper.outputFile.lastPathComponent == "meeting.srt")
+
+    let speakers = CommandBuilder.command(
+        for: .privateLocalWithSpeakers, input: input, repoRoot: repoRoot, format: .markdown
+    )
+    #expect(speakers.arguments.contains("--diarization"))
+    #expect(speakers.arguments.contains("md"))
+    #expect(speakers.outputFile.lastPathComponent == "meeting.spk.md")
+
+    let cloud = CommandBuilder.command(
+        for: .cloud, input: input, repoRoot: repoRoot, format: .markdown
+    )
+    #expect(cloud.arguments.contains("--format"))
+    #expect(cloud.outputFile.lastPathComponent == "meeting.md")
+
+    let vibe = CommandBuilder.command(
+        for: .appleSiliconLocal, input: input, repoRoot: repoRoot,
+        format: .speakerText, keepVibeVoiceJSON: true
+    )
+    #expect(vibe.arguments.contains("diarized-txt"))
+    #expect(vibe.arguments.contains("--keep-json"))
+    #expect(vibe.outputFiles.map(\.lastPathComponent) ==
+        ["meeting.vibevoice.spk.txt", "meeting.vibevoice.json"])
+}
+
+@Test
+func testJSONReexportDoesNotInvokeTranscriptionModel() {
+    let json = URL(fileURLWithPath: "/Users/me/Recordings/meeting.vibevoice.json")
+    let command = CommandBuilder.command(
+        for: .appleSiliconLocal, input: json, repoRoot: repoRoot, format: .markdown,
+        keepVibeVoiceJSON: true
+    )
+    #expect(command.executable == "python3")
+    #expect(command.arguments == [
+        "/Users/me/utils/audio_transcribe_vibevoice.py",
+        "--from-json", json.path, "--format", "md",
+        "-o", "/Users/me/Recordings/meeting.vibevoice.md",
+    ])
+    #expect(command.outputFiles.count == 1)
 }

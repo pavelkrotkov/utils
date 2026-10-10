@@ -7,13 +7,66 @@ ffmpeg required: the exercised pieces are pure functions.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
 import audio_transcribe_vibevoice as vv
 from audio_transcript import TranscriptSegment, emit_transcript
+
+
+def test_native_json_survives_when_not_requested_and_reexports_without_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio = tmp_path / "recording.m4a"
+    audio.write_bytes(b"fake audio")
+    original = tmp_path / "recording.vibevoice.json"
+    original.write_text("existing original")
+    native = '{"segments":[{"start":1,"end":2,"text":"spoken","speaker":"Speaker 1"}],"native":"yes"}'
+
+    def generate_transcription(**kwargs: object) -> None:
+        Path(f'{kwargs["output_path"]}.json').write_text(native)
+
+    generate = ModuleType("mlx_audio.stt.generate")
+    setattr(generate, "generate_transcription", generate_transcription)
+    monkeypatch.setitem(sys.modules, "mlx_audio", ModuleType("mlx_audio"))
+    monkeypatch.setitem(sys.modules, "mlx_audio.stt", ModuleType("mlx_audio.stt"))
+    monkeypatch.setitem(sys.modules, "mlx_audio.stt.generate", generate)
+    monkeypatch.setattr(vv, "ensure_apple_silicon", lambda: None)
+
+    monkeypatch.setattr(sys, "argv", ["vibevoice", str(audio), "--format", "md", "--no-progress"])
+    vv.main()
+    assert original.read_text() == "existing original"
+    assert "Speaker 1:" in (tmp_path / "recording.vibevoice.md").read_text()
+
+    monkeypatch.setattr(
+        sys, "argv", ["vibevoice", str(audio), "--format", "md", "--keep-json", "--no-progress"]
+    )
+    vv.main()
+    assert original.read_text() == native
+
+    output = tmp_path / "reexport.md"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["vibevoice", "--from-json", str(original), "--format", "md", "-o", str(output)],
+    )
+    vv.main()
+    content = output.read_text()
+    assert "Source JSON: [Open source](recording.vibevoice.json)" in content
+    assert "Speaker 1:" in content
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["vibevoice", "--from-json", str(original), "--format", "md", "-o", str(original)],
+    )
+    with pytest.raises(SystemExit):
+        vv.main()
+    assert original.read_text() == native
+
 
 # ---------------------------------------------------------------------------
 # plan_chunks

@@ -49,6 +49,70 @@ private func endToEndEveryPresetWritesItsTranscriptNextToInput(
     }
 }
 
+private struct FormatExpectation: Sendable, CustomTestStringConvertible {
+    let preset: TranscriptionPreset
+    let format: TranscriptFormat
+    let outputName: String
+    let content: String
+
+    var testDescription: String { "\(preset) \(format)" }
+}
+
+@Test(arguments: [
+    FormatExpectation(preset: .cloud, format: .markdown, outputName: "meeting.md", content: "# Transcript"),
+    FormatExpectation(preset: .privateLocal, format: .srt, outputName: "meeting.srt", content: "00:00:01"),
+    FormatExpectation(preset: .privateLocal, format: .vtt, outputName: "meeting.vtt", content: "WEBVTT"),
+    FormatExpectation(preset: .privateLocalWithSpeakers, format: .speakerText, outputName: "meeting.spk.txt", content: "Speaker 1"),
+    FormatExpectation(preset: .privateLocalWithSpeakers, format: .markdown, outputName: "meeting.spk.md", content: "# Transcript"),
+    FormatExpectation(preset: .appleSiliconLocal, format: .speakerText, outputName: "meeting.vibevoice.spk.txt", content: "Speaker 1"),
+    FormatExpectation(preset: .appleSiliconLocal, format: .markdown, outputName: "meeting.vibevoice.md", content: "# Transcript"),
+])
+@MainActor
+private func endToEndFormatsProduceExpectedFiles(_ expectation: FormatExpectation) async throws {
+    try await withE2EFixture { fixture in
+        let input = try fixture.makeInput(named: "meeting.m4a")
+        let command = CommandBuilder.command(
+            for: expectation.preset,
+            input: input,
+            repoRoot: fixture.repoRoot,
+            format: expectation.format
+        )
+        let output = try await ProcessRunner().run(command: command, environment: fixture.environment)
+        #expect(output.lastPathComponent == expectation.outputName)
+        #expect(try String(contentsOf: output, encoding: .utf8).contains(expectation.content))
+    }
+}
+
+@Test
+@MainActor
+func endToEndStructuredJSONOverwriteAndReexport() async throws {
+    try await withE2EFixture { fixture in
+        let input = try fixture.makeInput(named: "meeting.m4a")
+        let json = OutputPathResolver.structuredOutputPath(for: input)
+        try "stale JSON".write(to: json, atomically: true, encoding: .utf8)
+        let command = CommandBuilder.command(
+            for: .appleSiliconLocal,
+            input: input,
+            repoRoot: fixture.repoRoot,
+            format: .speakerText,
+            keepVibeVoiceJSON: true
+        )
+        #expect(command.outputFiles.contains(json))
+        #expect(command.outputFiles.contains { FileManager.default.fileExists(atPath: $0.path) })
+        _ = try await ProcessRunner().run(command: command, environment: fixture.environment)
+        #expect(try String(contentsOf: json, encoding: .utf8).contains("start"))
+
+        let reexport = CommandBuilder.command(
+            for: .appleSiliconLocal, input: json, repoRoot: fixture.repoRoot, format: .markdown
+        )
+        let output = try await ProcessRunner().run(
+            command: reexport, environment: fixture.environment
+        )
+        #expect(output.lastPathComponent == "meeting.vibevoice.md")
+        #expect(try String(contentsOf: output, encoding: .utf8).contains("# Transcript"))
+    }
+}
+
 private struct FilenameExpectation: Sendable, CustomTestStringConvertible {
     let input: String
     let output: String
@@ -438,27 +502,64 @@ private func withE2EFixture(
     // Default success stubs mirror the real scripts' argument interfaces:
     // the OpenAI wrapper takes `--model NAME INPUT OUTPUT`, the Python
     // scripts take `INPUT [options] -o OUTPUT`.
+    try installExecutable(
+        at: fixture.binDirectory.appendingPathComponent("python3"),
+        contents: """
+        #!/bin/sh
+        script="$1"; shift
+        /bin/sh "$script" "$@"
+        """
+    )
     try fixture.installScript(
         named: "audio_transcribe_openai.sh",
         body: """
         [ "$1" = "--model" ] || { echo "Error: expected --model" >&2; exit 2; }
-        model="$2"; input="$3"; output="$4"
+        model="$2"; shift 2
+        format=txt
+        if [ "$1" = "--format" ]; then format="$2"; shift 2; fi
+        input="$1"; output="$2"
         [ -f "$input" ] || { echo "Error: input not found: $input" >&2; exit 1; }
-        printf 'transcript(%s)\\n' "$model" > "$output"
+        {
+          if [ "$format" = md ]; then
+            echo '# Transcript'
+            echo
+            echo 'Audio: [Open source](meeting.m4a)'
+            echo
+          fi
+          echo "transcript($model)"
+        } > "$output"
         """
     )
     for script in ["audio_transcribe_whisper.py", "audio_transcribe_vibevoice.py"] {
         try fixture.installScript(
             named: script,
             body: """
-            input="$1"; shift
-            output=""
+            if [ "$1" = "--from-json" ]; then
+              input="$2"; shift 2
+            else
+              input="$1"; shift
+            fi
+            output=""; format=txt; keep=no
             while [ $# -gt 0 ]; do
-              if [ "$1" = "-o" ]; then output="$2"; shift 2; else shift; fi
+              case "$1" in
+                -o) output="$2"; shift 2 ;;
+                --format) format="$2"; shift 2 ;;
+                --keep-json) keep=yes; shift ;;
+                *) shift ;;
+              esac
             done
             [ -f "$input" ] || { echo "ERROR: input not found: $input" >&2; exit 1; }
             [ -n "$output" ] || { echo "ERROR: -o is required" >&2; exit 2; }
-            echo transcript > "$output"
+            case "$format" in
+              md) echo '# Transcript' > "$output"; echo >> "$output"; echo 'Speaker 1: transcript' >> "$output" ;;
+              diarized-txt) echo 'Speaker 1: transcript' > "$output" ;;
+              srt) echo '1' > "$output"; echo '00:00:00,000 --> 00:00:01,000' >> "$output"; echo 'transcript' >> "$output" ;;
+              vtt) echo 'WEBVTT' > "$output"; echo 'transcript' >> "$output" ;;
+              *) echo transcript > "$output" ;;
+            esac
+            if [ "$keep" = yes ]; then
+              echo '[{"start": 0, "end": 1, "text": "transcript"}]' > "${input%.*}.vibevoice.json"
+            fi
             """
         )
     }

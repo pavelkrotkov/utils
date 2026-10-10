@@ -578,7 +578,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--format",
-        choices=["txt", "srt", "vtt", "diarized-txt", "diarized-breaks"],
+        choices=["txt", "srt", "vtt", "diarized-txt", "diarized-breaks", "md"],
         help=(
             "Output format (default: txt, or diarized-txt with --diarization; "
             "--style breaks is shorthand for --format diarized-breaks)"
@@ -789,7 +789,7 @@ def main() -> None:
                 )
             transcript_segments = [TranscriptSegment(0.0, 0.0, transcript.plain_text())]
 
-        final_text = emit_transcript(transcript_segments, output_format, speaker_names)
+        final_text = emit_transcript(transcript_segments, output_format, speaker_names, args.input)
 
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(final_text)
