@@ -18,9 +18,8 @@ import audio_transcribe_vibevoice as vv
 from audio_transcript import TranscriptSegment, emit_transcript
 
 
-def test_native_json_survives_when_not_requested_and_reexports_without_model(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+@pytest.fixture
+def fake_vibevoice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     audio = tmp_path / "recording.m4a"
     audio.write_bytes(b"fake audio")
     original = tmp_path / "recording.vibevoice.json"
@@ -49,80 +48,109 @@ def test_native_json_survives_when_not_requested_and_reexports_without_model(
     monkeypatch.setattr(mx, "device_info", lambda: {"memory_size": 16 * 2**30}, raising=False)
     monkeypatch.setitem(sys.modules, "mlx", ModuleType("mlx"))
     monkeypatch.setitem(sys.modules, "mlx.core", mx)
+    return SimpleNamespace(
+        audio=audio, original=original, native=native, model=model, loads=loads, calls=calls, mx=mx
+    )
 
-    monkeypatch.setattr(sys, "argv", ["vibevoice", str(audio), "--format", "md", "--no-progress"])
+
+def test_native_json_survives_unrequested_export(
+    fake_vibevoice: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = fake_vibevoice
+    monkeypatch.setattr(
+        sys, "argv", ["vibevoice", str(state.audio), "--format", "md", "--no-progress"]
+    )
     vv.main()
-    assert original.read_text() == "existing original"
-    assert "Speaker 1:" in (tmp_path / "recording.vibevoice.md").read_text()
-
+    assert state.original.read_text() == "existing original"
+    assert "Speaker 1:" in state.audio.with_suffix(".vibevoice.md").read_text()
     monkeypatch.setattr(
         sys,
         "argv",
-        ["vibevoice", str(audio), "--format", "md", "--keep-json", "--no-progress"],
+        ["vibevoice", str(state.audio), "--format", "md", "--keep-json", "--no-progress"],
     )
     vv.main()
-    assert original.read_text() == native
+    assert state.original.read_text() == state.native
 
-    loads.clear()
-    calls.clear()
+
+def test_chunked_run_reuses_one_model(
+    fake_vibevoice: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = fake_vibevoice
     monkeypatch.setattr(vv, "probe_media_duration", lambda *args: 64.0)
     monkeypatch.setattr(vv, "detect_silences", lambda *args, **kwargs: [])
     monkeypatch.setattr(vv, "extract_chunk", lambda *args: None)
     monkeypatch.setattr(
-        sys, "argv", ["vibevoice", str(audio), "--chunk-seconds", "30", "--no-progress"]
+        sys, "argv", ["vibevoice", str(state.audio), "--chunk-seconds", "30", "--no-progress"]
     )
     vv.main()
-    assert loads == [vv.DEFAULT_MODEL]
-    assert calls == [model, model, model]
-    original.write_text(native)
+    assert state.loads == [vv.DEFAULT_MODEL]
+    assert state.calls == [state.model, state.model, state.model]
 
-    def fail_headroom(_):
-        raise RuntimeError("use audio_transcribe_whisper.py")
 
-    with monkeypatch.context() as patch:
-        patch.setattr(vv, "load_vibevoice_model", fail_headroom)
-        with pytest.raises(SystemExit) as exc:
-            vv.main()
-        assert exc.value.code == 1
-    assert calls == [model, model, model]
-    assert original.read_text() == native
+@pytest.mark.parametrize("failure", ["load_vibevoice_model", "set_memory_limit"])
+def test_setup_failure_preserves_output_without_inference(
+    fake_vibevoice: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    state = fake_vibevoice
 
-    def fail_limit(_):
-        raise RuntimeError("unsupported allocator")
+    def fail(_):
+        raise RuntimeError("cannot safely initialize model")
 
-    monkeypatch.setattr(mx, "set_memory_limit", fail_limit)
-    monkeypatch.setattr(sys, "argv", ["vibevoice", str(audio), "--no-progress"])
+    target = vv if failure == "load_vibevoice_model" else state.mx
+    monkeypatch.setattr(target, failure, fail)
+    monkeypatch.setattr(sys, "argv", ["vibevoice", str(state.audio), "--no-progress"])
     with pytest.raises(SystemExit) as exc:
         vv.main()
     assert exc.value.code == 1
-    assert original.read_text() == native
+    assert state.calls == []
+    assert state.original.read_text() == "existing original"
 
-    output = tmp_path / "reexport.md"
+
+def test_reexport_requires_no_model_and_protects_source(
+    fake_vibevoice: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = fake_vibevoice
+    state.original.write_text(state.native)
+
+    def fail(_):
+        raise RuntimeError("reexport must not load a model")
+
+    monkeypatch.setattr(vv, "load_vibevoice_model", fail)
+    output = state.audio.with_suffix(".reexport.md")
     monkeypatch.setattr(
         sys,
         "argv",
-        ["vibevoice", "--from-json", str(original), "--format", "md", "-o", str(output)],
+        ["vibevoice", "--from-json", str(state.original), "--format", "md", "-o", str(output)],
     )
     vv.main()
     content = output.read_text()
     assert "Source JSON: [Open source](recording.vibevoice.json)" in content
     assert "Speaker 1:" in content
-
     monkeypatch.setattr(
         sys,
         "argv",
-        ["vibevoice", "--from-json", str(original), "--format", "md", "-o", str(original)],
+        [
+            "vibevoice",
+            "--from-json",
+            str(state.original),
+            "--format",
+            "md",
+            "-o",
+            str(state.original),
+        ],
     )
     with pytest.raises(SystemExit):
         vv.main()
-    assert original.read_text() == native
+    assert state.original.read_text() == state.native
 
 
 @pytest.mark.parametrize(
     ("total", "available", "fits"),
     [(16, 7.25, True), (16, 7.25 - 1 / 2**30, False), (8, 8, False)],
 )
-def test_lazy_model_checks_headroom_before_inference(monkeypatch, total, available, fits):
+def test_lazy_model_checks_headroom_before_inference(
+    monkeypatch: pytest.MonkeyPatch, total: int, available: float, fits: bool
+) -> None:
     model = SimpleNamespace(parameters=lambda: {"weight": SimpleNamespace(nbytes=5 * 2**30)})
     utils = ModuleType("mlx_audio.stt.utils")
     loads = []
