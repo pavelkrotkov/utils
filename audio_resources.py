@@ -18,6 +18,10 @@ import sys
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING, TextIO
+
+if TYPE_CHECKING:
+    import psutil
 
 THREADS = max(1, min(4, (os.cpu_count() or 2) // 2))
 SIGNALS = (signal.SIGINT, signal.SIGHUP, signal.SIGTERM)
@@ -48,7 +52,7 @@ def stop_worker(worker: subprocess.Popen) -> None:
     worker.wait()
 
 
-def process_memory(process) -> int:
+def process_memory(process: psutil.Process) -> int:
     """A child may exit between enumeration and its RSS read."""
     import psutil
 
@@ -85,7 +89,7 @@ def wait_for_worker(worker: subprocess.Popen, budget: int, reserve: int) -> int:
                     return 1
 
 
-def run_worker(lock) -> int:
+def run_worker(lock: TextIO) -> int:
     """Block cancellation until the child's session exists to avoid orphans.
 
     Unreadable RSS must fail closed, never count as zero resident memory.

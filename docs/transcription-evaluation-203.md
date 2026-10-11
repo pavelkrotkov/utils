@@ -212,7 +212,7 @@ Measure full-output disagreement separately, never label it reference accuracy.
 Validation of the safety patch: 203 Python tests and 90 subtests passed, three
 opt-in model/API smoke tests skipped; 115 native Swift tests passed; local
 arm64 packaging and strict codesign verification passed. The new supervisor
-has MI 52.07 and maximum cyclomatic complexity 7; its process tests have MI
+has MI 51.53 and maximum cyclomatic complexity 7; its process tests have MI
 59.00 and maximum complexity 7. Existing large transcription functions
 retain their pre-existing complexity; this patch does not claim they meet
 those thresholds. Native CI must additionally validate the exact pushed head.

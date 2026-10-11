@@ -148,7 +148,7 @@ The script builds with SwiftPM, assembles `dist/TranscriptionLauncher.app`
 with `Packaging/Info.plist` and an `AppIcon.icns` generated from
 `Packaging/AppIcon.appiconset`, and applies an ad-hoc code signature —
 sufficient for local development without notarization. The app includes
-the seven transcription scripts and the root MIT license in
+the eight transcription scripts and the root MIT license in
 `Contents/Resources`; it does not bundle CLI tools, Python packages, or
 model weights. Development builds can still select a source checkout.
 
