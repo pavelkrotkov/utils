@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+import psutil
 import pytest
 
 import audio_transcribe_vibevoice as vv
@@ -27,8 +28,13 @@ def test_native_json_survives_when_not_requested_and_reexports_without_model(
     native = (
         '{"segments":[{"start":1,"end":2,"text":"spoken","speaker":"Speaker 1"}],"native":"yes"}'
     )
+    model = object()
+    loads = []
+    calls = []
+    monkeypatch.setattr(vv, "load_vibevoice_model", lambda path: loads.append(path) or model)
 
     def generate_transcription(**kwargs: object) -> None:
+        calls.append(kwargs["model"])
         Path(f"{kwargs['output_path']}.json").write_text(native)
 
     generate = ModuleType("mlx_audio.stt.generate")
@@ -55,6 +61,30 @@ def test_native_json_survives_when_not_requested_and_reexports_without_model(
         ["vibevoice", str(audio), "--format", "md", "--keep-json", "--no-progress"],
     )
     vv.main()
+    assert original.read_text() == native
+
+    loads.clear()
+    calls.clear()
+    monkeypatch.setattr(vv, "probe_media_duration", lambda *args: 64.0)
+    monkeypatch.setattr(vv, "detect_silences", lambda *args, **kwargs: [])
+    monkeypatch.setattr(vv, "extract_chunk", lambda *args: None)
+    monkeypatch.setattr(
+        sys, "argv", ["vibevoice", str(audio), "--chunk-seconds", "30", "--no-progress"]
+    )
+    vv.main()
+    assert loads == [vv.DEFAULT_MODEL]
+    assert calls == [model, model, model]
+    original.write_text(native)
+
+    def fail_headroom(_):
+        raise RuntimeError("use audio_transcribe_whisper.py")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(vv, "load_vibevoice_model", fail_headroom)
+        with pytest.raises(SystemExit) as exc:
+            vv.main()
+        assert exc.value.code == 1
+    assert calls == [model, model, model]
     assert original.read_text() == native
 
     def fail_limit(_):
@@ -86,6 +116,39 @@ def test_native_json_survives_when_not_requested_and_reexports_without_model(
     with pytest.raises(SystemExit):
         vv.main()
     assert original.read_text() == native
+
+
+@pytest.mark.parametrize(
+    ("total", "available", "fits"),
+    [(16, 7.25, True), (16, 7.25 - 1 / 2**30, False), (8, 8, False)],
+)
+def test_lazy_model_checks_headroom_before_inference(monkeypatch, total, available, fits):
+    model = SimpleNamespace(parameters=lambda: {"weight": SimpleNamespace(nbytes=5 * 2**30)})
+    utils = ModuleType("mlx_audio.stt.utils")
+    loads = []
+    monkeypatch.setattr(
+        utils,
+        "load_model",
+        lambda path, **kwargs: loads.append((path, kwargs)) or model,
+        raising=False,
+    )
+    mlx_utils = ModuleType("mlx.utils")
+    monkeypatch.setattr(
+        mlx_utils, "tree_flatten", lambda parameters: list(parameters.items()), raising=False
+    )
+    monkeypatch.setitem(sys.modules, "mlx_audio.stt.utils", utils)
+    monkeypatch.setitem(sys.modules, "mlx.utils", mlx_utils)
+    monkeypatch.setattr(
+        psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(total=total * 2**30, available=available * 2**30),
+    )
+    if fits:
+        assert vv.load_vibevoice_model("model") is model
+    else:
+        with pytest.raises(RuntimeError, match=r"use audio_transcribe_whisper\.py"):
+            vv.load_vibevoice_model("model")
+    assert loads == [("model", {"lazy": True})]
 
 
 # ---------------------------------------------------------------------------
