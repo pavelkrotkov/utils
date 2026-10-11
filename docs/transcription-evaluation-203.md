@@ -1,7 +1,8 @@
 # Local transcription evaluation (#203)
 
 Evaluation date: 2026-10-10. Baseline code: `65d1bd78fda5fb4378c597a89682eb1ad06efbbe`.
-Resource-guard results below use the implementation in this PR.
+Resource-guard measurements use `efbd94a3a5f1577fe642f344ef3e345fb683963e`.
+The later review fixes improve failure reporting without changing that policy.
 
 This is a real-device evaluation, not the stub-based Swift integration matrix.
 The available machine is a **16 GB Apple M4 MacBook Air, macOS 27.0.1**.
@@ -73,6 +74,7 @@ Bonjour. Nous comparons les valeurs propres et la covariance. Le résultat conti
 | VibeVoice synthetic, 30 s chunks, before guard | Incomplete | Not captured | Cold Python preparation, cached model; terminated with status 143 during first chunk. Cause not established; no transcript. System memory pressure was high. |
 | VibeVoice synthetic, same chunks, guard enabled | 3.77 s | 1.148 GiB | Stopped by memory guard during first chunk; no new transcript |
 | Whisper complete 48:26 recording, original defaults | 474.26 s | 1.614 GiB | Complete, 8,673 whitespace-delimited words |
+| Whisper complete same recording, guarded app bundle / 4 threads | 210.30 s | 1.451 GiB | Complete; byte-for-byte identical output and strict bundle signature retained |
 | Parakeet v3 complete same recording, guarded | 25.74 s | 0.500 GiB | Complete, 8,577 whitespace-delimited words |
 
 These are cached-model runs, not clean-install download measurements. The first
@@ -124,6 +126,12 @@ short challenge within the reserve. Installed Parakeet v3 was much faster
 on the full file, but accuracy against a human reference and speaker handling
 remain unverified. No 8/16 GB M1 or 60–90-minute result is claimed; #203 remains
 open for those gaps rather than treating stub CI or synthetic speech as proof.
+
+A repeat of guarded VibeVoice with diagnostics stopped at 0.38 GiB aggregate
+RSS and 1.97 GiB system available memory, confirming the system reserve triggered
+before the RSS budget. Memory-inspection errors also fail closed and stop the
+process group; they are never interpreted as zero usage. MLX initialization
+errors stop before inference and report the dependency/resource-limit failure.
 
 ## Finder and cancellation
 
@@ -201,10 +209,10 @@ with the normalization and aliases specified above; the core comparison is
 `jiwer.process_words(reference, hypothesis)` and `jiwer.cer(reference, hypothesis)`.
 Measure full-output disagreement separately, never label it reference accuracy.
 
-Validation of the safety patch: 202 Python tests and 90 subtests passed, three
+Validation of the safety patch: 203 Python tests and 90 subtests passed, three
 opt-in model/API smoke tests skipped; 115 native Swift tests passed; local
 arm64 packaging and strict codesign verification passed. The new supervisor
-has MI 50.80 and maximum cyclomatic complexity 7; its process tests have MI
-above 50 and maximum complexity 7. Existing large transcription functions
+has MI 52.07 and maximum cyclomatic complexity 7; its process tests have MI
+59.00 and maximum complexity 7. Existing large transcription functions
 retain their pre-existing complexity; this patch does not claim they meet
 those thresholds. Native CI must additionally validate the exact pushed head.

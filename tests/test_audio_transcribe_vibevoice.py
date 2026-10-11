@@ -57,6 +57,16 @@ def test_native_json_survives_when_not_requested_and_reexports_without_model(
     vv.main()
     assert original.read_text() == native
 
+    def fail_limit(_):
+        raise RuntimeError("unsupported allocator")
+
+    monkeypatch.setattr(mx, "set_memory_limit", fail_limit)
+    monkeypatch.setattr(sys, "argv", ["vibevoice", str(audio), "--no-progress"])
+    with pytest.raises(SystemExit) as exc:
+        vv.main()
+    assert exc.value.code == 1
+    assert original.read_text() == native
+
     output = tmp_path / "reexport.md"
     monkeypatch.setattr(
         sys,

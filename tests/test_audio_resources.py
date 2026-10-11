@@ -29,6 +29,10 @@ from types import SimpleNamespace
 import psutil
 from audio_resources import supervise
 psutil.virtual_memory = lambda: SimpleNamespace(total=128*1024**2, available=100*1024**2)
+def denied_memory(process):
+    raise psutil.AccessDenied(process.pid)
+if sys.argv[1] == "inspection-error":
+    psutil.Process.memory_info = denied_memory
 def main():
     assert os.environ["OMP_NUM_THREADS"] != "64"
     size = 80*1024**2 if sys.argv[1] == "memory" else 1
@@ -72,7 +76,9 @@ def wait_for_pid(path):
     assert path.exists()
 
 
-@pytest.mark.parametrize("guarded_worker", ["memory", "cancel", "success"], indirect=True)
+@pytest.mark.parametrize(
+    "guarded_worker", ["memory", "cancel", "success", "inspection-error"], indirect=True
+)
 def test_resource_guard_stops_descendants_and_releases_lock(tmp_path, guarded_worker):
     worker, command, env = guarded_worker
     action = command[-1]
@@ -85,8 +91,16 @@ def test_resource_guard_stops_descendants_and_releases_lock(tmp_path, guarded_wo
         assert "already running" in second.stderr
         worker.send_signal(signal.SIGTERM)
     _, stderr = worker.communicate(timeout=10)
-    assert worker.returncode == {"memory": 1, "cancel": 130, "success": 0}[action], stderr
-    assert {"memory": "memory budget reached", "cancel": "", "success": ""}[action] in stderr
+    assert (
+        worker.returncode
+        == {"memory": 1, "cancel": 130, "success": 0, "inspection-error": 1}[action]
+    ), stderr
+    assert {
+        "memory": "memory budget reached",
+        "cancel": "",
+        "success": "",
+        "inspection-error": "Cannot enforce transcription resource guard",
+    }[action] in stderr
     rerun = subprocess.run(
         [*command[:2], "success"], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=10
     )

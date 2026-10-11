@@ -558,8 +558,11 @@ def main() -> None:
         with contextlib.suppress(ImportError):
             import mlx_audio.stt.models  # noqa: F401
         from mlx_audio.stt.generate import generate_transcription
-    except ImportError as exc:
-        print(f"ERROR: Missing required Python package: {exc}", file=sys.stderr)
+    except (ImportError, KeyError, ValueError, RuntimeError) as exc:
+        print(
+            f"ERROR: Cannot initialize VibeVoice dependencies/resource limits: {exc}",
+            file=sys.stderr,
+        )
         print("Run with: uv run ./audio_transcribe_vibevoice.py ...", file=sys.stderr)
         sys.exit(1)
 

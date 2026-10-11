@@ -86,7 +86,10 @@ def wait_for_worker(worker: subprocess.Popen, budget: int, reserve: int) -> int:
 
 
 def run_worker(lock) -> int:
-    """Block cancellation until the child's session exists to avoid orphans."""
+    """Block cancellation until the child's session exists to avoid orphans.
+
+    Unreadable RSS must fail closed, never count as zero resident memory.
+    """
     import psutil
 
     memory = psutil.virtual_memory()
@@ -115,6 +118,9 @@ def run_worker(lock) -> int:
         return wait_for_worker(worker, budget, reserve)
     except KeyboardInterrupt:
         return 130
+    except (OSError, psutil.Error) as exc:
+        print(f"ERROR: Cannot enforce transcription resource guard: {exc}", file=sys.stderr)
+        return 1
     finally:
         signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS)
         if worker is not None:
