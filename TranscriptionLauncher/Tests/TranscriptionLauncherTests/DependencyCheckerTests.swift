@@ -8,7 +8,7 @@ func selectedPresetsOnlyRequireTheirOwnToolsAndCredentials() {
     let speakers = DependencyChecker.check(preset: .privateLocalWithSpeakers, environment: [:], repoRoot: nil, osMajorVersion: 14)
     let cloud = DependencyChecker.check(preset: .cloud, environment: [:], repoRoot: nil, osMajorVersion: 14)
 
-    #expect(local.map(\.name) == ["audio_transcribe_whisper.py", "macOS 14+", "audio_common.py", "audio_segments.py", "audio_transcript.py", "uv", "ffmpeg", "whisper-cpp / whisper-cli", "Whisper model"])
+    #expect(local.map(\.name) == ["audio_transcribe_whisper.py", "macOS 14+", "audio_common.py", "audio_resources.py", "audio_segments.py", "audio_transcript.py", "uv", "ffmpeg", "whisper-cpp / whisper-cli", "Whisper model"])
     #expect(speakers.map(\.name) == local.map(\.name) + ["HF_TOKEN"])
     #expect(cloud.map(\.name) == ["audio_transcribe_openai.sh", "macOS 14+", "curl", "jq", "OPENAI_API_KEY"])
     #expect(local.first { $0.name == "Whisper model" }?.resolvedPath?.hasSuffix("ggml-large-v3-turbo-q8_0.bin") == true)
@@ -130,7 +130,7 @@ func vibeVoiceJSONReexportNeedsNoModelOrGPU() throws {
 }
 
 private func installLocalModules(in root: URL) throws {
-    for name in ["audio_common.py", "audio_segments.py", "audio_transcript.py"] {
+    for name in ["audio_common.py", "audio_resources.py", "audio_segments.py", "audio_transcript.py"] {
         try Data([1]).write(to: root.appendingPathComponent(name))
     }
 }

@@ -30,6 +30,7 @@ show_missing = true
 
 [dependency-groups]
 dev = [
+    "psutil>=5.9",
     # Declared so Dependabot tracks it. pip is otherwise only a
     # transitive dependency (pip-api <- pip-audit), and version
     # updates cover declared dependencies, so advisories like

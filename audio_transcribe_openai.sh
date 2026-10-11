@@ -137,7 +137,8 @@ CHUNK_PLAN=""
 if [ "$SIZE_BYTES" -gt "$MAX_BYTES" ]; then
   echo "Input file is larger than ${MAX_MB}MB, downsampling with ffmpeg..."
   TMP_FILE=$(mktemp /tmp/transcribe-XXXXXX.m4a)
-  ffmpeg -y -i "$INPUT" -ac 1 -ar 16000 -b:a 32k "$TMP_FILE" >/dev/null 2>&1
+  ffmpeg -threads 1 -filter_threads 1 -filter_complex_threads 1 -y -i "$INPUT" \
+    -threads 1 -ac 1 -ar 16000 -b:a 32k "$TMP_FILE" >/dev/null 2>&1
 
   if [ ! -s "$TMP_FILE" ]; then
     echo "Error: ffmpeg produced an empty downsampled file." >&2

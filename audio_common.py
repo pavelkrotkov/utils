@@ -11,6 +11,8 @@ import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+FFMPEG_LIMITS = ("-threads", "1", "-filter_threads", "1", "-filter_complex_threads", "1")
+
 
 def format_duration(seconds: float | None) -> str:
     """Format a duration in seconds as MM:SS or H:MM:SS."""
@@ -307,6 +309,7 @@ def convert_to_pcm16k_mono(
 
     cmd = [
         ffmpeg_bin,
+        *FFMPEG_LIMITS,
         "-hide_banner",
         "-nostdin",
         "-y",
@@ -321,6 +324,8 @@ def convert_to_pcm16k_mono(
         [
             "-i",
             str(input_path),
+            "-threads",
+            "1",
             "-ar",
             "16000",
             "-ac",

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # dependencies = [
+#   "psutil>=5.9",
 #   "mlx-audio>=0.4.3,<0.5; platform_system == 'Darwin' and platform_machine == 'arm64'",
 # ]
 # ///
@@ -49,12 +50,14 @@ from pathlib import Path
 from typing import Any
 
 from audio_common import (
+    FFMPEG_LIMITS,
     ProgressReporter,
     convert_to_pcm16k_mono,
     format_duration,
     probe_media_duration,
     run_threaded_with_periodic_progress,
 )
+from audio_resources import supervise
 from audio_segments import TranscriptError, read_transcript_file
 from audio_transcript import TranscriptSegment, emit_transcript
 
@@ -254,10 +257,13 @@ def detect_silences(
     """Return (start, end) silence intervals via ffmpeg silencedetect."""
     cmd = [
         ffmpeg_bin,
+        *FFMPEG_LIMITS,
         "-hide_banner",
         "-nostats",
         "-i",
         str(path),
+        "-threads",
+        "1",
         "-af",
         f"silencedetect=noise={noise_db}dB:d={min_silence}",
         "-f",
@@ -322,6 +328,7 @@ def extract_chunk(
     """Cut one chunk out of the input as mono 16 kHz WAV."""
     cmd = [
         ffmpeg_bin,
+        *FFMPEG_LIMITS,
         "-v",
         "error",
         "-y",
@@ -331,6 +338,8 @@ def extract_chunk(
         f"{chunk.end:.3f}",
         "-i",
         str(input_path),
+        "-threads",
+        "1",
         "-vn",
         "-ac",
         "1",
@@ -537,6 +546,10 @@ def main() -> None:
     os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 
     try:
+        import mlx.core as mx
+
+        mx.set_cache_limit(256 * 1024**2)
+        mx.set_memory_limit(mx.device_info()["memory_size"] // 2)
         # mlx-audio 0.4.5 has a circular import: stt.generate imports
         # stt.models, whose glmasr/voxtral modules import back from
         # stt.generate. Loading stt.models first breaks the cycle. Swallow
@@ -629,4 +642,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    supervise(main)

@@ -64,6 +64,6 @@ jobs:
           codesign --verify --strict dist/TranscriptionLauncher.app
           test "$(lipo -archs dist/TranscriptionLauncher.app/Contents/MacOS/TranscriptionLauncher)" = arm64
           cmp ../LICENSE dist/TranscriptionLauncher.app/Contents/Resources/LICENSE
-          for script in audio_transcribe_openai.sh audio_transcribe_whisper.py audio_transcribe_vibevoice.py audio_cloud_chunks.py audio_common.py audio_segments.py audio_transcript.py; do
+          for script in audio_transcribe_openai.sh audio_transcribe_whisper.py audio_transcribe_vibevoice.py audio_cloud_chunks.py audio_common.py audio_resources.py audio_segments.py audio_transcript.py; do
             cmp "../$script" "dist/TranscriptionLauncher.app/Contents/Resources/Scripts/$script"
           done
