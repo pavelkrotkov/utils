@@ -19,7 +19,7 @@ Usage:
     uv run ./audio_transcribe_vibevoice.py interview.m4a --format md --keep-json
     python3 ./audio_transcribe_vibevoice.py --from-json interview.vibevoice.json --format md
 
-Long files on memory-constrained Macs (16 GB can OOM during prefill):
+Long files (chunking reduces audio activations, not the model's memory floor):
     uv run ./audio_transcribe_vibevoice.py long_interview.m4a --chunk-seconds 120
 
 Chunking splits the input near natural silences into pieces of at most
@@ -30,7 +30,9 @@ is deduped at splice time. Known limitation: speaker labels reset at chunk
 boundaries ("Speaker 1" in chunk 2 is not necessarily "Speaker 1" in chunk 1).
 Chunking trades VibeVoice's cross-file speaker consistency for lower memory
 use. With --keep-json, chunked runs save merged normalized segments rather than
-the per-chunk native originals. No chunk duration (including 300 seconds) guarantees success on 16 GB.
+the per-chunk native originals. Model weights load lazily once per run; a
+model/cache headroom check preserves the system reserve before inference.
+No chunk duration (including 300 seconds) guarantees success on 16 GB.
 """
 
 from __future__ import annotations
@@ -46,6 +48,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +65,7 @@ from audio_segments import TranscriptError, read_transcript_file
 from audio_transcript import TranscriptSegment, emit_transcript
 
 DEFAULT_MODEL = "mlx-community/VibeVoice-ASR-4bit"
+MLX_CACHE_LIMIT = 256 * 1024**2
 # Observed on Apple Silicon: transcription takes roughly 4x the audio duration.
 REALTIME_FACTOR = 4.0
 SUPPORTED_FORMATS = ("json", "txt", "srt", "vtt", "diarized-txt", "diarized-breaks", "md")
@@ -150,7 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Split the input into pieces of at most N seconds, transcribe each, "
             "and splice results with corrected absolute timestamps (0 = single "
             "pass, the default; single pass keeps VibeVoice's global speaker "
-            "consistency). Use for long files on low-memory Macs. Boundaries "
+            "consistency). Reduces audio activations, not model weight memory. Boundaries "
             "snap to silence when available; speaker labels reset per chunk."
         ),
     )
@@ -195,6 +199,28 @@ def ensure_apple_silicon() -> None:
         file=sys.stderr,
     )
     sys.exit(1)
+
+
+def load_vibevoice_model(model_path: str) -> Any:
+    import psutil
+    from mlx.utils import tree_flatten
+    from mlx_audio.stt.utils import load_model
+
+    model = load_model(model_path, lazy=True)
+    weights = sum(parameter.nbytes for _, parameter in tree_flatten(model.parameters()))
+    memory = psutil.virtual_memory()
+    reserve = memory.total // 8
+    required = weights + MLX_CACHE_LIMIT
+    headroom = min(memory.total // 2, memory.available - reserve)
+    if required > headroom:
+        raise RuntimeError(
+            f"VibeVoice needs at least {required / 2**30:.2f} GiB for model/cache, "
+            f"plus {reserve / 2**30:.2f} GiB system reserve; "
+            f"only {max(0, headroom) / 2**30:.2f} GiB headroom is available. "
+            "Close unused memory-heavy apps or use audio_transcribe_whisper.py. "
+            "Smaller audio chunks do not shrink model weights."
+        )
+    return model
 
 
 def resolve_output_path(input_path: Path, output_path: Path | None, output_format: str) -> Path:
@@ -433,7 +459,6 @@ def run_chunked(args: argparse.Namespace, generate: Any, progress: ProgressRepor
 
         def transcribe_chunk(wav_path: Path, stem: Path) -> None:
             generate(
-                model=args.model,
                 audio=str(wav_path),
                 output_path=str(stem),
                 format="json",
@@ -548,7 +573,7 @@ def main() -> None:
     try:
         import mlx.core as mx
 
-        mx.set_cache_limit(256 * 1024**2)
+        mx.set_cache_limit(MLX_CACHE_LIMIT)
         mx.set_memory_limit(mx.device_info()["memory_size"] // 2)
         # mlx-audio 0.4.5 has a circular import: stt.generate imports
         # stt.models, whose glmasr/voxtral modules import back from
@@ -558,7 +583,11 @@ def main() -> None:
         with contextlib.suppress(ImportError):
             import mlx_audio.stt.models  # noqa: F401
         from mlx_audio.stt.generate import generate_transcription
-    except (ImportError, KeyError, ValueError, RuntimeError) as exc:
+
+        generate_transcription = partial(
+            generate_transcription, model=load_vibevoice_model(args.model)
+        )
+    except Exception as exc:
         print(
             f"ERROR: Cannot initialize VibeVoice dependencies/resource limits: {exc}",
             file=sys.stderr,
@@ -572,7 +601,6 @@ def main() -> None:
         return
 
     final_path = resolve_output_path(args.input, args.output, args.format)
-    progress = None if args.no_progress else ProgressReporter(interval=args.progress_interval)
     pre_convert = args.pre_convert_pcm16k or _bool_env("VIBEVOICE_PRECONVERT_PCM16K")
     audio_seconds = probe_media_duration(args.input, "ffprobe", args.verbose) if progress else None
     expected_seconds = audio_seconds * REALTIME_FACTOR if audio_seconds else None
@@ -604,7 +632,6 @@ def main() -> None:
 
             def transcribe() -> None:
                 generate_transcription(
-                    model=args.model,
                     audio=str(audio_for_transcription),
                     output_path=str(mlx_stem),
                     format="json",

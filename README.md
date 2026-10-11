@@ -406,7 +406,7 @@ Enable pyannote speaker diarization when speaker labels are needed:
 uv run ./audio_transcribe_whisper.py interview.m4a --diarization --num-speakers 2
 ```
 
-Plain local Whisper uses no Python packages beyond the standard library. With
+Plain local Whisper uses `psutil` for its resource guard. With
 `--diarization`, `uv` installs pyannote and its PyTorch dependencies on demand.
 
 By default, the local script prints progress/ETA reports and writes `<input>.txt`.
@@ -435,7 +435,18 @@ transcript to any of the other formats without re-running ASR.
   RSS excludes swapped/compressed memory, and GPU utilization is not capped.
   VibeVoice also limits its reusable MLX cache to 256 MiB; MLX's half-RAM allocation
   guideline is not a hard limit. A stopped job fails without publishing a
-  transcript; close other memory-heavy apps or use a smaller model/chunk.
+  transcript; close unused memory-heavy apps or use Whisper.
+- VibeVoice loads one lazy model for the entire run, including all audio chunks.
+  Before inference it checks the actual model tensor size plus the 256 MiB
+  cache allowance against both the half-RAM budget and available memory minus
+  the system reserve. The cached default 4-bit model has 5.32 GiB of weights:
+  on a 16 GiB Mac it needs at least **7.57 GiB available system memory** before
+  weight evaluation (5.32 GiB weights + 0.25 GiB cache + 2 GiB reserve).
+  This is a necessary starting condition, not a promise that audio activations
+  or inference will fit. Smaller chunks cannot shrink those weights. If the
+  headroom check fails, the script recommends closing unused apps or using
+  Whisper, without weakening either guard. The #203 desktop did not have this
+  headroom; chunked VibeVoice is not validated for that load.
 
 - Scripts are standalone and run directly; no central build or test harness.
 - Prefer small sample files for quick validation.
