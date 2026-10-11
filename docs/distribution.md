@@ -19,10 +19,10 @@ package dependencies**. The icon PNGs are generated from drawing primitives
 in `Scripts/generate_icon.py` using Pillow, without imported artwork. The
 generator and PNGs were introduced together in [commit `167b192`](https://github.com/pavelkrotkov/utils/commit/167b192043eaa97569219a1913682593d294191e).
 
-The `.app` also bundles the seven MIT-licensed transcription scripts
+The `.app` also bundles the eight MIT-licensed transcription scripts
 (`audio_transcribe_openai.sh`, `audio_transcribe_whisper.py`,
 `audio_transcribe_vibevoice.py`, `audio_cloud_chunks.py`,
-`audio_common.py`, `audio_segments.py`, and `audio_transcript.py`) plus
+`audio_common.py`, `audio_resources.py`, `audio_segments.py`, and `audio_transcript.py`) plus
 the root MIT license. Scripts come from the same commit as the app build.
 Users install `uv`, `ffmpeg`, `jq`, `whisper.cpp`, Python packages, and
 model weights separately; no external tools or weights are redistributed.

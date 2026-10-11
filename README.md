@@ -425,6 +425,18 @@ transcript to any of the other formats without re-running ASR.
 
 ## Notes
 
+- Local Whisper and VibeVoice runs share one resource guard: one model job at a
+  time, at most four CPU threads (and no more than half the CPU count), lower
+  scheduling priority, and a 200 ms memory check. It stops the worker process
+  group if combined resident memory exceeds half of physical RAM or system
+  available memory falls below an eighth. `--threads` can lower Whisper's limit.
+  ffmpeg decoding, encoding, and filter pools use one thread.
+- These are safety guardrails, not an OS memory/GPU quota: sampling can overshoot,
+  RSS excludes swapped/compressed memory, and GPU utilization is not capped.
+  VibeVoice also limits its reusable MLX cache to 256 MiB; MLX's half-RAM allocation
+  guideline is not a hard limit. A stopped job fails without publishing a
+  transcript; close other memory-heavy apps or use a smaller model/chunk.
+
 - Scripts are standalone and run directly; no central build or test harness.
 - Prefer small sample files for quick validation.
 - Outputs default next to the input file unless overridden.

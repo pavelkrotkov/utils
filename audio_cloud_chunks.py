@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from audio_common import probe_media_duration
+from audio_common import FFMPEG_LIMITS, probe_media_duration
 from audio_transcribe_vibevoice import detect_silences, plan_chunks
 
 CHUNK_SECONDS = 3600.0
@@ -35,6 +35,7 @@ def main() -> None:
                 subprocess.run(
                     [
                         "ffmpeg",
+                        *FFMPEG_LIMITS,
                         "-v",
                         "error",
                         "-y",
@@ -42,6 +43,8 @@ def main() -> None:
                         f"{chunk.start:.3f}",
                         "-i",
                         str(source),
+                        "-threads",
+                        "1",
                         "-t",
                         f"{chunk.end - chunk.start:.3f}",
                         "-vn",

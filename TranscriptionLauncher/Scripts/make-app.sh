@@ -31,7 +31,7 @@ cp "$REPO_DIR/LICENSE" "$APP_DIR/Contents/Resources/LICENSE"
 printf 'APPL????' > "$APP_DIR/Contents/PkgInfo"
 
 for script in audio_transcribe_openai.sh audio_transcribe_whisper.py audio_transcribe_vibevoice.py \
-              audio_cloud_chunks.py audio_common.py audio_segments.py audio_transcript.py; do
+              audio_cloud_chunks.py audio_common.py audio_resources.py audio_segments.py audio_transcript.py; do
     cp "$REPO_DIR/$script" "$APP_DIR/Contents/Resources/Scripts/$script"
 done
 

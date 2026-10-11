@@ -96,7 +96,7 @@ public enum DependencyChecker {
     }
 
     private static func localModuleItems(repoRoot: URL?) -> [Item] {
-        ["audio_common.py", "audio_segments.py", "audio_transcript.py"].map { name in
+        ["audio_common.py", "audio_resources.py", "audio_segments.py", "audio_transcript.py"].map { name in
             let path = repoRoot?.appendingPathComponent(name).path(percentEncoded: false)
             return Item(
                 name: name,

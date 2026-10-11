@@ -37,6 +37,12 @@ def test_native_json_survives_when_not_requested_and_reexports_without_model(
     monkeypatch.setitem(sys.modules, "mlx_audio.stt", ModuleType("mlx_audio.stt"))
     monkeypatch.setitem(sys.modules, "mlx_audio.stt.generate", generate)
     monkeypatch.setattr(vv, "ensure_apple_silicon", lambda: None)
+    mx = ModuleType("mlx.core")
+    monkeypatch.setattr(mx, "set_cache_limit", lambda _: None, raising=False)
+    monkeypatch.setattr(mx, "set_memory_limit", lambda _: None, raising=False)
+    monkeypatch.setattr(mx, "device_info", lambda: {"memory_size": 16 * 2**30}, raising=False)
+    monkeypatch.setitem(sys.modules, "mlx", ModuleType("mlx"))
+    monkeypatch.setitem(sys.modules, "mlx.core", mx)
 
     monkeypatch.setattr(sys, "argv", ["vibevoice", str(audio), "--format", "md", "--no-progress"])
     vv.main()
@@ -49,6 +55,16 @@ def test_native_json_survives_when_not_requested_and_reexports_without_model(
         ["vibevoice", str(audio), "--format", "md", "--keep-json", "--no-progress"],
     )
     vv.main()
+    assert original.read_text() == native
+
+    def fail_limit(_):
+        raise RuntimeError("unsupported allocator")
+
+    monkeypatch.setattr(mx, "set_memory_limit", fail_limit)
+    monkeypatch.setattr(sys, "argv", ["vibevoice", str(audio), "--no-progress"])
+    with pytest.raises(SystemExit) as exc:
+        vv.main()
+    assert exc.value.code == 1
     assert original.read_text() == native
 
     output = tmp_path / "reexport.md"

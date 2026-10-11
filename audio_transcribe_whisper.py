@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # /// script
-# dependencies = []
+# dependencies = ["psutil>=5.9"]
 # ///
 """
 audio_transcribe_whisper.py - Robust whisper-cpp ASR with optional pyannote diarization
@@ -51,6 +51,7 @@ from audio_common import (
     print_process_tail,
     run_with_progress,
 )
+from audio_resources import THREADS, supervise
 from audio_segments import Transcript, TranscriptError, read_transcript_file
 from audio_transcript import TranscriptSegment, emit_transcript
 
@@ -188,7 +189,11 @@ def load_pyannote(model_name: str, hf_token: str | None, verbose: bool = False) 
     Returns: Pipeline instance or exits on failure.
     """
     try:
+        import torch
         from pyannote.audio import Pipeline
+
+        torch.set_num_threads(THREADS)
+        torch.set_num_interop_threads(1)
     except ImportError as e:
         print(f"ERROR: Missing required Python package: {e}", file=sys.stderr)
         sys.exit(1)
@@ -594,7 +599,10 @@ def main() -> None:
         help="Path to whisper large model",
     )
     parser.add_argument(
-        "--threads", type=int, default=os.cpu_count(), help="Number of threads for whisper-cpp"
+        "--threads",
+        type=int,
+        default=THREADS,
+        help=f"Whisper CPU threads (1-{THREADS}; default: {THREADS})",
     )
     parser.add_argument("--language", default="auto", help="Language code (default: auto)")
     parser.add_argument(
@@ -648,6 +656,8 @@ def main() -> None:
     parser.add_argument("--verbose", action="store_true", help="Verbose logging")
 
     args = parser.parse_args()
+    if not 1 <= args.threads <= THREADS:
+        parser.error(f"--threads must be between 1 and {THREADS}")
 
     # Setup
     maybe_set_metal_env()
@@ -805,4 +815,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    supervise(main)
