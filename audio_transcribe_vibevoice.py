@@ -30,8 +30,9 @@ is deduped at splice time. Known limitation: speaker labels reset at chunk
 boundaries ("Speaker 1" in chunk 2 is not necessarily "Speaker 1" in chunk 1).
 Chunking trades VibeVoice's cross-file speaker consistency for lower memory
 use. With --keep-json, chunked runs save merged normalized segments rather than
-the per-chunk native originals. Model weights load lazily once per run; a
-model/cache headroom check preserves the system reserve before inference.
+the per-chunk native originals. Model weights load lazily once per run. On macOS,
+model/cache and process overhead must fit the half-RAM worker budget; the parent
+monitors system memory pressure and worker footprint throughout inference.
 No chunk duration (including 300 seconds) guarantees success on 16 GB.
 """
 
@@ -60,7 +61,7 @@ from audio_common import (
     probe_media_duration,
     run_threaded_with_periodic_progress,
 )
-from audio_resources import supervise
+from audio_resources import PRESSURE_NORMAL, macos_memory, supervise
 from audio_segments import TranscriptError, read_transcript_file
 from audio_transcript import TranscriptSegment, emit_transcript
 
@@ -206,16 +207,28 @@ def load_vibevoice_model(model_path: str) -> Any:
     from mlx.utils import tree_flatten
     from mlx_audio.stt.utils import load_model
 
+    mac = macos_memory()
+    # Sample before lazy loading so any materialized weights are not counted twice.
+    baseline = mac.footprint(os.getpid()) if mac else 0
     model = load_model(model_path, lazy=True)
     weights = sum(parameter.nbytes for _, parameter in tree_flatten(model.parameters()))
     memory = psutil.virtual_memory()
     reserve = memory.total // 8
     required = weights + MLX_CACHE_LIMIT
-    headroom = min(memory.total // 2, memory.available - reserve)
+    if mac:
+        if mac.pressure() != PRESSURE_NORMAL:
+            raise RuntimeError(
+                "macOS memory pressure is elevated; wait or use audio_transcribe_whisper.py."
+            )
+        headroom = memory.total // 2 - baseline
+        policy = f"{baseline / 2**30:.2f} GiB process overhead within the half-RAM worker budget"
+    else:
+        headroom = min(memory.total // 2, memory.available - reserve)
+        policy = f"{reserve / 2**30:.2f} GiB system reserve"
     if required > headroom:
         raise RuntimeError(
             f"VibeVoice needs at least {required / 2**30:.2f} GiB for model/cache, "
-            f"plus {reserve / 2**30:.2f} GiB system reserve; "
+            f"plus {policy}; "
             f"only {max(0, headroom) / 2**30:.2f} GiB headroom is available. "
             "Close unused memory-heavy apps or use audio_transcribe_whisper.py. "
             "Smaller audio chunks do not shrink model weights."

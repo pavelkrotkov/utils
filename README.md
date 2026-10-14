@@ -428,25 +428,33 @@ transcript to any of the other formats without re-running ASR.
 - Local Whisper and VibeVoice runs share one resource guard: one model job at a
   time, at most four CPU threads (and no more than half the CPU count), lower
   scheduling priority, and a 200 ms memory check. It stops the worker process
-  group if combined resident memory exceeds half of physical RAM or system
-  available memory falls below an eighth. `--threads` can lower Whisper's limit.
+  group if combined worker memory exceeds half of physical RAM. On macOS it
+  measures physical footprint, including Metal and compressed allocations,
+  and requires normal memory pressure at startup. During inference, critical
+  pressure stops the job immediately; warnings get five seconds of recovery
+  time within a rolling ten-second window. A recovered normal state is allowed
+  to continue. Low reported available memory alone does not stop a macOS job.
+  Other platforms retain the RSS budget and an eighth-RAM system reserve.
+  Unreadable monitoring data fails the job. `--threads` can lower Whisper's limit.
   ffmpeg decoding, encoding, and filter pools use one thread.
 - These are safety guardrails, not an OS memory/GPU quota: sampling can overshoot,
-  RSS excludes swapped/compressed memory, and GPU utilization is not capped.
+  and GPU utilization is not capped. macOS emergency stops allow only 100 ms
+  for graceful termination before killing the worker group; ordinary cancellation
+  retains the two-second cleanup grace.
   VibeVoice also limits its reusable MLX cache to 256 MiB; MLX's half-RAM allocation
   guideline is not a hard limit. A stopped job fails without publishing a
   transcript; close unused memory-heavy apps or use Whisper.
 - VibeVoice loads one lazy model for the entire run, including all audio chunks.
   Before inference it checks the actual model tensor size plus the 256 MiB
-  cache allowance against both the half-RAM budget and available memory minus
-  the system reserve. The cached default 4-bit model has 5.32 GiB of weights:
-  on a 16 GiB Mac it needs at least **7.57 GiB available system memory** before
-  weight evaluation (5.32 GiB weights + 0.25 GiB cache + 2 GiB reserve).
-  This is a necessary starting condition, not a promise that audio activations
-  or inference will fit. Smaller chunks cannot shrink those weights. If the
-  headroom check fails, the script recommends closing unused apps or using
-  Whisper, without weakening either guard. The #203 desktop did not have this
-  headroom; chunked VibeVoice is not validated for that load.
+  cache allowance against the half-RAM budget, allowing for the process footprint
+  measured before model loading. The cached default 4-bit model has 5.32 GiB of
+  weights: on a 16 GiB Mac, weights/cache and process overhead must fit within
+  the **8 GiB worker budget**. This permits macOS to reclaim caches and manage
+  compression rather than requiring 7.57 GiB of reported available memory up
+  front. Audio activations and inference can still exceed the budget; smaller
+  chunks cannot shrink the weights. The parent reports the sampled peak worker
+  footprint at completion. Full VibeVoice transcription under this policy still
+  requires real-audio validation on the target Mac.
 
 - Scripts are standalone and run directly; no central build or test harness.
 - Prefer small sample files for quick validation.
