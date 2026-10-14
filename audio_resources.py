@@ -207,8 +207,6 @@ def wait_for_worker(
                         f"available {available / 2**30:.2f} GiB).",
                         file=sys.stderr,
                     )
-                    if mac:
-                        stop_worker(worker, grace=EMERGENCY_GRACE)
                     return 1
         else:
             if mac:
@@ -246,6 +244,7 @@ def run_worker(lock: TextIO) -> int:
     env = dict(os.environ, **{WORKER_ENV: str(os.getpid())})
     previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS)
     worker = None
+    grace = 2.0
     try:
         worker = subprocess.Popen(
             [sys.executable, *sys.argv],
@@ -256,18 +255,21 @@ def run_worker(lock: TextIO) -> int:
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         with contextlib.suppress(psutil.NoSuchProcess):
             psutil.Process(worker.pid).nice(10)
-        return wait_for_worker(worker, budget, reserve, mac=mac)
+        result = wait_for_worker(worker, budget, reserve, mac=mac)
+        if mac and result == 1:
+            grace = EMERGENCY_GRACE
+        return result
     except KeyboardInterrupt:
         return 130
     except (OSError, psutil.Error) as exc:
         print(f"ERROR: Cannot enforce transcription resource guard: {exc}", file=sys.stderr)
-        if mac and worker is not None:
-            stop_worker(worker, grace=EMERGENCY_GRACE)
+        if mac:
+            grace = EMERGENCY_GRACE
         return 1
     finally:
         signal.pthread_sigmask(signal.SIG_BLOCK, SIGNALS)
         if worker is not None:
-            stop_worker(worker)
+            stop_worker(worker, grace=grace)
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
 
 

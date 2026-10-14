@@ -134,6 +134,12 @@ def test_pressure_warning_recovery_at_grace_boundary_does_not_stop():
     assert not window.exceeded(5, 1)
 
 
+def test_pressure_warning_window_cannot_override_critical_pressure():
+    window = resources.PressureWindow()
+    assert not window.exceeded(0, 2)
+    assert not window.exceeded(6, 4)
+
+
 @pytest.fixture
 def fake_mac(monkeypatch):
     mac = resources.MacMemory.__new__(resources.MacMemory)
@@ -162,7 +168,7 @@ def test_macos_low_available_memory_does_not_stop_healthy_worker(monkeypatch, fa
 
 
 @pytest.mark.parametrize("pressure,footprint", [(4, 32), (1, 65)])
-def test_macos_emergency_stop_uses_short_grace(monkeypatch, fake_mac, pressure, footprint):
+def test_macos_emergency_condition_fails_monitor(monkeypatch, fake_mac, pressure, footprint):
     import audio_resources as resources
 
     class Worker(subprocess.Popen):
@@ -176,10 +182,32 @@ def test_macos_emergency_stop_uses_short_grace(monkeypatch, fake_mac, pressure, 
     monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=1))
     monkeypatch.setattr(fake_mac, "pressure", lambda: pressure)
     monkeypatch.setattr(fake_mac, "footprint", lambda pid: footprint)
-    stopped = []
-    monkeypatch.setattr(resources, "stop_worker", lambda worker, grace=2: stopped.append(grace))
     assert resources.wait_for_worker(Worker.__new__(Worker), 64, 16, mac=fake_mac) == 1
-    assert stopped == [0.1]
+
+
+@pytest.mark.parametrize(
+    "outcome,expected_grace", [(1, 0.1), (OSError, 0.1), (KeyboardInterrupt, 2.0)]
+)
+def test_macos_cleanup_runs_once_with_correct_grace(
+    tmp_path, monkeypatch, fake_mac, outcome, expected_grace
+):
+    worker = SimpleNamespace(pid=123)
+    stopped = []
+
+    def wait(*args, **kwargs):
+        if isinstance(outcome, type):
+            raise outcome()
+        return outcome
+
+    monkeypatch.setattr(resources, "macos_memory", lambda: fake_mac)
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: worker)
+    monkeypatch.setattr(psutil, "Process", lambda pid: SimpleNamespace(nice=lambda n: None))
+    monkeypatch.setattr(resources, "wait_for_worker", wait)
+    monkeypatch.setattr(signal, "pthread_sigmask", lambda *args: set())
+    monkeypatch.setattr(resources, "stop_worker", lambda worker, grace: stopped.append(grace))
+    with (tmp_path / "lock").open("w") as lock:
+        assert resources.run_worker(lock) == (130 if outcome is KeyboardInterrupt else 1)
+    assert stopped == [expected_grace]
 
 
 @pytest.mark.parametrize("pressure", [2, 4])

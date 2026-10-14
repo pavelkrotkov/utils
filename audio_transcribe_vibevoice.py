@@ -209,6 +209,7 @@ def load_vibevoice_model(model_path: str) -> Any:
 
     mac = macos_memory()
     # Sample before lazy loading so any materialized weights are not counted twice.
+    # This is a lower bound; the parent also monitors loader overhead and activations.
     baseline = mac.footprint(os.getpid()) if mac else 0
     model = load_model(model_path, lazy=True)
     weights = sum(parameter.nbytes for _, parameter in tree_flatten(model.parameters()))
