@@ -431,9 +431,10 @@ transcript to any of the other formats without re-running ASR.
   group if combined worker memory exceeds half of physical RAM. On macOS it
   measures physical footprint, including Metal and compressed allocations,
   and requires normal memory pressure at startup. During inference, critical
-  pressure stops the job immediately; warnings get five seconds of recovery
-  time within a rolling ten-second window. A recovered normal state is allowed
-  to continue. Low reported available memory alone does not stop a macOS job.
+  pressure stops the job immediately. Warning pressure is advisory: it logs
+  once and lets inference continue within the footprint budget. A sustained
+  warning alone does not terminate a job. Low reported available memory alone
+  does not stop a macOS job.
   Other platforms retain the RSS budget and an eighth-RAM system reserve.
   Unreadable monitoring data fails the job. `--threads` can lower Whisper's limit.
   ffmpeg decoding, encoding, and filter pools use one thread.
@@ -453,8 +454,15 @@ transcript to any of the other formats without re-running ASR.
   compression rather than requiring 7.57 GiB of reported available memory up
   front. Audio activations and inference can still exceed the budget; smaller
   chunks cannot shrink the weights. The parent reports the sampled peak worker
-  footprint at completion. Full VibeVoice transcription under this policy still
-  requires real-audio validation on the target Mac.
+  footprint at completion. Waveform encoding uses 30-second windows with the
+  causal encoder's full left context; only duplicate feature frames are trimmed.
+  All features feed one transcription call, preserving speaker context across
+  the recording. Language-model prefill uses 512-token batches to limit temporary
+  allocations. This differs from `--chunk-seconds`, which makes separate
+  transcription calls and resets speaker labels between them.
+  In the default single-pass path, completed waveform encoders are released
+  after their features are evaluated and before lazy language-model weights
+  materialize. Explicit transcription chunks retain encoders for reuse.
 
 - Scripts are standalone and run directly; no central build or test harness.
 - Prefer small sample files for quick validation.

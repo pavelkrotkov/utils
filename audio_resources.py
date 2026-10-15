@@ -19,8 +19,6 @@ import signal
 import subprocess
 import sys
 import tempfile
-import time
-from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, TextIO
@@ -32,8 +30,6 @@ THREADS = max(1, min(4, (os.cpu_count() or 2) // 2))
 SIGNALS = (signal.SIGINT, signal.SIGHUP, signal.SIGTERM)
 WORKER_ENV = "UTILS_AUDIO_RESOURCE_WORKER"
 PRESSURE_NORMAL, PRESSURE_WARNING, PRESSURE_CRITICAL = 1, 2, 4
-WARNING_WINDOW = 10.0
-WARNING_GRACE = 5.0
 EMERGENCY_GRACE = 0.1
 
 
@@ -116,24 +112,6 @@ def macos_memory() -> MacMemory | None:
     return MacMemory() if sys.platform == "darwin" else None
 
 
-class PressureWindow:
-    """Bound repeated warnings without resetting on a single normal sample."""
-
-    def __init__(self) -> None:
-        self.intervals: deque[tuple[float, float]] = deque()
-        self.previous: tuple[float, int] | None = None
-
-    def exceeded(self, now: float, pressure: int) -> bool:
-        if self.previous is not None and self.previous[1] == PRESSURE_WARNING:
-            self.intervals.append((self.previous[0], now))
-        self.previous = now, pressure
-        cutoff = now - WARNING_WINDOW
-        while self.intervals and self.intervals[0][1] <= cutoff:
-            self.intervals.popleft()
-        exposure = sum(end - max(start, cutoff) for start, end in self.intervals)
-        return pressure == PRESSURE_WARNING and exposure >= WARNING_GRACE
-
-
 def configure_threads() -> None:
     """Override ambient pool sizes before importing numerical libraries."""
     for name in (
@@ -183,7 +161,7 @@ def wait_for_worker(
         process = psutil.Process(worker.pid)
     except psutil.NoSuchProcess:
         return worker.wait()
-    warnings = PressureWindow()
+    warned = False
     peak = 0
     while True:
         try:
@@ -192,8 +170,6 @@ def wait_for_worker(
             with contextlib.suppress(psutil.NoSuchProcess):
                 pressure = mac.pressure() if mac else PRESSURE_NORMAL
                 reason = "critical macOS memory pressure" if pressure == PRESSURE_CRITICAL else ""
-                if mac and warnings.exceeded(time.monotonic(), pressure):
-                    reason = "persistent macOS memory pressure warning"
                 processes = [process, *process.children(recursive=True)]
                 used = sum(mac.footprint(p.pid) if mac else process_memory(p) for p in processes)
                 peak = max(peak, used)
@@ -208,6 +184,15 @@ def wait_for_worker(
                         file=sys.stderr,
                     )
                     return 1
+                if mac and pressure == PRESSURE_WARNING and not warned:
+                    print(
+                        "WARNING: macOS memory pressure is elevated; continuing within "
+                        f"the {budget / 2**30:.1f} GiB footprint budget "
+                        f"(currently {used / 2**30:.2f} GiB). "
+                        "Critical pressure or exceeding the budget will stop the worker.",
+                        file=sys.stderr,
+                    )
+                    warned = True
         else:
             if mac:
                 print(
