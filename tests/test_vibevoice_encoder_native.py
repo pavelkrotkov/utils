@@ -77,7 +77,7 @@ def test_noncausal_encoder_is_rejected():
         vv.encoder_geometry(encoder)
 
 
-def test_single_pass_releases_encoders_after_features_are_evaluated():
+def test_single_pass_releases_encoders_after_features_are_evaluated(monkeypatch):
     mx = pytest.importorskip("mlx.core")
     module = pytest.importorskip("mlx_audio.stt.models.vibevoice_asr.audio_encoder")
     configs = pytest.importorskip("mlx_audio.stt.models.vibevoice_asr.config")
@@ -92,12 +92,40 @@ def test_single_pass_releases_encoders_after_features_are_evaluated():
         acoustic_connector=object(),
         semantic_connector=object(),
     )
-    model.encode_speech = lambda audio, verbose=False: (
-        model.acoustic_tokenizer.encode(audio) + model.semantic_tokenizer.encode(audio)
-    )
+    pending = {}
+
+    def encode_speech(audio, verbose=False):
+        features = model.acoustic_tokenizer.encode(audio) + model.semantic_tokenizer.encode(audio)
+        pending["features"] = features
+        return features
+
+    model.encode_speech = encode_speech
     audio = mx.random.normal((1, 1, 2003))
     expected = model.encode_speech(audio)
     mx.eval(expected)
+    events = []
+    evaluate, clear_cache = mx.eval, mx.clear_cache
+    names = (
+        "acoustic_tokenizer",
+        "semantic_tokenizer",
+        "acoustic_connector",
+        "semantic_connector",
+    )
+
+    def check_evaluation(*arrays):
+        if any(array is pending["features"] for array in arrays):
+            assert all(getattr(model, name) is not None for name in names)
+            events.append("features evaluated")
+        return evaluate(*arrays)
+
+    def check_cache_clear():
+        assert events == ["features evaluated"]
+        assert all(getattr(model, name) is None for name in names)
+        events.append("encoders released")
+        return clear_cache()
+
+    monkeypatch.setattr(mx, "eval", check_evaluation)
+    monkeypatch.setattr(mx, "clear_cache", check_cache_clear)
     vv.configure_encoder_memory(model, release_encoders=True)
     actual = model.encode_speech(audio)
     assert mx.allclose(actual, expected, atol=1e-5, rtol=1e-5).item()
@@ -105,3 +133,4 @@ def test_single_pass_releases_encoders_after_features_are_evaluated():
     assert model.semantic_tokenizer is None
     assert model.acoustic_connector is None
     assert model.semantic_connector is None
+    assert events == ["features evaluated", "encoders released"]
