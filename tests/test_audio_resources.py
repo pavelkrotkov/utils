@@ -125,8 +125,8 @@ def fake_mac(monkeypatch):
 
 def test_macos_sustained_warning_below_budget_continues(monkeypatch, fake_mac, capsys):
     # Replay a full minute at the footprint/available values from the failed run.
-    # The clock advances without real sleeps; the production monitor handles
-    # every pressure sample and the worker's final successful exit.
+    # Retain a virtual clock so reintroducing the former five-second warning
+    # timeout reproduces the reported stop without depending on test wall time.
     clock = {"now": 0.0}
 
     class Worker(subprocess.Popen):

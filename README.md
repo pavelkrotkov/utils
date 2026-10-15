@@ -454,8 +454,12 @@ transcript to any of the other formats without re-running ASR.
   compression rather than requiring 7.57 GiB of reported available memory up
   front. Audio activations and inference can still exceed the budget; smaller
   chunks cannot shrink the weights. The parent reports the sampled peak worker
-  footprint at completion. Full VibeVoice transcription under this policy still
-  requires real-audio validation on the target Mac.
+  footprint at completion. Waveform encoding uses 30-second windows with the
+  causal encoder's full left context; only duplicate feature frames are trimmed.
+  All features feed one transcription call, preserving speaker context across
+  the recording. Language-model prefill uses 512-token batches to limit temporary
+  allocations. This differs from `--chunk-seconds`, which makes separate
+  transcription calls and resets speaker labels between them.
 
 - Scripts are standalone and run directly; no central build or test harness.
 - Prefer small sample files for quick validation.

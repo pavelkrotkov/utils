@@ -45,9 +45,11 @@ def fake_vibevoice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNam
         return model
 
     monkeypatch.setattr(vv, "load_vibevoice_model", load_model)
+    monkeypatch.setattr(vv, "configure_encoder_memory", lambda model: None)
 
     def generate_transcription(**kwargs: object) -> None:
         assert threading.get_ident() == owner_thread, "lazy model crossed threads"
+        assert kwargs["prefill_step_size"] == 512
         calls.append(kwargs["model"])
         Path(f"{kwargs['output_path']}.json").write_text(native)
 

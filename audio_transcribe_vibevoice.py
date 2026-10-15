@@ -33,6 +33,9 @@ use. With --keep-json, chunked runs save merged normalized segments rather than
 the per-chunk native originals. Model weights load lazily once per run. On macOS,
 model/cache and process overhead must fit the half-RAM worker budget; the parent
 monitors system memory pressure and worker footprint throughout inference.
+The waveform encoders use overlapping bounded windows and language-model
+prefill uses small batches. These preserve one full-recording feature timeline
+and speaker context; they do not split transcription into independent calls.
 No chunk duration (including 300 seconds) guarantees success on 16 GB.
 """
 
@@ -75,6 +78,8 @@ DEFAULT_CHUNK_SECONDS = 300.0
 DEFAULT_SILENCE_DB = -30.0
 DEFAULT_SILENCE_MIN = 0.5
 DEFAULT_CHUNK_OVERLAP = 2.5
+ENCODER_BLOCK_SAMPLES = 30 * 24000
+PREFILL_STEP_SIZE = 512
 
 
 @dataclass
@@ -235,6 +240,70 @@ def load_vibevoice_model(model_path: str) -> Any:
             "Smaller audio chunks do not shrink model weights."
         )
     return model
+
+
+def encoder_geometry(encoder: Any) -> tuple[int, int]:
+    """Return output stride and aligned history for the causal audio encoder.
+
+    Norms and FFNs operate independently at each time position. Only the
+    downsampling, mixer, and head convolutions expand the receptive field.
+    """
+    receptive, hop = 1, 1
+
+    def convolution(layer: Any) -> None:
+        nonlocal receptive, hop
+        if not layer.causal:
+            raise RuntimeError("Bounded VibeVoice encoding requires causal convolutions")
+        receptive += (layer.kernel_size - 1) * layer.dilation * hop
+        hop *= layer.stride
+
+    for downsample, stage in zip(encoder.downsample_layers, encoder.stages, strict=True):
+        convolution(downsample)
+        for block in stage:
+            convolution(block.mixer.conv)
+    convolution(encoder.head)
+    if hop != encoder.hop_length:
+        raise RuntimeError("Unsupported VibeVoice encoder stride")
+    history = ((receptive - 1 + hop - 1) // hop) * hop
+    return hop, history
+
+
+def encode_audio_blocks(
+    audio: Any, *, encode: Any, hop: int, history: int, block_samples: int
+) -> Any:
+    """Bound waveform activations while preserving one complete feature timeline.
+
+    Window starts align to the encoder stride. Re-encode enough left history
+    for every causal layer, then discard its output frames. No transcription
+    or speaker assignment happens inside these windows.
+    """
+    import mlx.core as mx
+
+    if audio.shape[-1] <= block_samples:
+        return encode(audio)
+    outputs = []
+    for start in range(0, audio.shape[-1], block_samples):
+        left = max(0, start - history)
+        end = min(start + block_samples, audio.shape[-1])
+        features = encode(audio[..., left:end])
+        features = features[:, (start - left) // hop :, :]
+        mx.eval(features)
+        outputs.append(features)
+    return mx.concatenate(outputs, axis=1)
+
+
+def configure_encoder_memory(model: Any) -> None:
+    """Tile the two VibeVoice waveform encoders, keeping global diarization."""
+    for tokenizer in (model.acoustic_tokenizer, model.semantic_tokenizer):
+        hop, history = encoder_geometry(tokenizer.encoder)
+        block_samples = max(hop, ENCODER_BLOCK_SAMPLES // hop * hop)
+        tokenizer.encode = partial(
+            encode_audio_blocks,
+            encode=tokenizer.encode,
+            hop=hop,
+            history=history,
+            block_samples=block_samples,
+        )
 
 
 def resolve_output_path(input_path: Path, output_path: Path | None, output_format: str) -> Path:
@@ -598,8 +667,10 @@ def main() -> None:
             import mlx_audio.stt.models  # noqa: F401
         from mlx_audio.stt.generate import generate_transcription
 
+        model = load_vibevoice_model(args.model)
+        configure_encoder_memory(model)
         generate_transcription = partial(
-            generate_transcription, model=load_vibevoice_model(args.model)
+            generate_transcription, model=model, prefill_step_size=PREFILL_STEP_SIZE
         )
     except Exception as exc:
         print(
