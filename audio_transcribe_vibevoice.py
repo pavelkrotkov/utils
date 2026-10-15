@@ -292,7 +292,7 @@ def encode_audio_blocks(
     return mx.concatenate(outputs, axis=1)
 
 
-def configure_encoder_memory(model: Any) -> None:
+def configure_encoder_memory(model: Any, *, release_encoders: bool = False) -> None:
     """Tile the two VibeVoice waveform encoders, keeping global diarization."""
     for tokenizer in (model.acoustic_tokenizer, model.semantic_tokenizer):
         hop, history = encoder_geometry(tokenizer.encoder)
@@ -304,6 +304,28 @@ def configure_encoder_memory(model: Any) -> None:
             history=history,
             block_samples=block_samples,
         )
+    if release_encoders:
+        encode_speech = model.encode_speech
+
+        def encode_once(speech_tensors: Any, verbose: bool = False) -> Any:
+            import mlx.core as mx
+
+            features = encode_speech(speech_tensors, verbose=verbose)
+            mx.eval(features)
+            # The default CLI makes one transcription call. Drop completed
+            # encoders before lazy language-model weights materialize. Break
+            # the partial/bound-method self references before clearing cache.
+            for name in ("acoustic_tokenizer", "semantic_tokenizer"):
+                tokenizer = getattr(model, name)
+                tokenizer.encode = None
+                setattr(model, name, None)
+            del tokenizer
+            model.acoustic_connector = None
+            model.semantic_connector = None
+            mx.clear_cache()
+            return features
+
+        model.encode_speech = encode_once
 
 
 def resolve_output_path(input_path: Path, output_path: Path | None, output_format: str) -> Path:
@@ -668,7 +690,7 @@ def main() -> None:
         from mlx_audio.stt.generate import generate_transcription
 
         model = load_vibevoice_model(args.model)
-        configure_encoder_memory(model)
+        configure_encoder_memory(model, release_encoders=not args.chunk_seconds)
         generate_transcription = partial(
             generate_transcription, model=model, prefill_step_size=PREFILL_STEP_SIZE
         )

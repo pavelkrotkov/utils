@@ -460,6 +460,9 @@ transcript to any of the other formats without re-running ASR.
   the recording. Language-model prefill uses 512-token batches to limit temporary
   allocations. This differs from `--chunk-seconds`, which makes separate
   transcription calls and resets speaker labels between them.
+  In the default single-pass path, completed waveform encoders are released
+  after their features are evaluated and before lazy language-model weights
+  materialize. Explicit transcription chunks retain encoders for reuse.
 
 - Scripts are standalone and run directly; no central build or test harness.
 - Prefer small sample files for quick validation.

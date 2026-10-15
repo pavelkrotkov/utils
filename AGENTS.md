@@ -109,6 +109,7 @@ Repository scripts:
 - `audio_transcribe_whisper.py` runs a local whisper-cpp pipeline (mono 16kHz conversion + plain transcript by default). Use `--diarization` to add pyannote speaker diarization and merge speaker labels.
 - `audio_transcribe_vibevoice.py` uses `mlx-audio` with VibeVoice-ASR on Apple Silicon, defaults to `mlx-community/VibeVoice-ASR-4bit`, and writes native structured JSON by default; opt-in `--chunk-seconds` splits long files on silence for low-memory Macs (speaker labels reset per chunk).
 - VibeVoice waveform encoders use 30-second windows aligned to their output stride, with enough left history for every causal convolution. Trim only duplicate feature frames, concatenate one full-recording feature timeline, and keep one language-model transcription call for global speaker context. Prefill batches contain 512 tokens. Native equivalence checks in `tests/test_vibevoice_encoder_native.py` require MLX/mlx-audio on Apple Silicon; portable CI skips them.
+- For a default single-pass VibeVoice run, release waveform tokenizers/connectors only after evaluating their complete features, before lazy language-model weights materialize. Break encoder wrapper self references before clearing the MLX cache. Explicit `--chunk-seconds` runs must retain the encoders for subsequent transcription calls.
 - `tidal_import_page_to_playlist.py` imports classical albums from MHTML/MD files to TIDAL playlists using API v2.
 - `test_matching.py` helper for testing TIDAL matching (see below).
 

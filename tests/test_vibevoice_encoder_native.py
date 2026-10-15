@@ -6,6 +6,7 @@ these checks; they deliberately use the real upstream encoder implementation.
 
 import sys
 from functools import partial
+from types import SimpleNamespace
 
 import pytest
 
@@ -74,3 +75,33 @@ def test_noncausal_encoder_is_rejected():
     )
     with pytest.raises(RuntimeError, match="requires causal"):
         vv.encoder_geometry(encoder)
+
+
+def test_single_pass_releases_encoders_after_features_are_evaluated():
+    mx = pytest.importorskip("mlx.core")
+    module = pytest.importorskip("mlx_audio.stt.models.vibevoice_asr.audio_encoder")
+    configs = pytest.importorskip("mlx_audio.stt.models.vibevoice_asr.config")
+    options = dict(encoder_n_filters=2, vae_dim=3, encoder_ratios=[2, 3], encoder_depths="1-2-1")
+    model = SimpleNamespace(
+        acoustic_tokenizer=module.AcousticTokenizerEncoder(
+            configs.AcousticTokenizerConfig(**options)
+        ),
+        semantic_tokenizer=module.SemanticTokenizerEncoder(
+            configs.SemanticTokenizerConfig(**options)
+        ),
+        acoustic_connector=object(),
+        semantic_connector=object(),
+    )
+    model.encode_speech = lambda audio, verbose=False: (
+        model.acoustic_tokenizer.encode(audio) + model.semantic_tokenizer.encode(audio)
+    )
+    audio = mx.random.normal((1, 1, 2003))
+    expected = model.encode_speech(audio)
+    mx.eval(expected)
+    vv.configure_encoder_memory(model, release_encoders=True)
+    actual = model.encode_speech(audio)
+    assert mx.allclose(actual, expected, atol=1e-5, rtol=1e-5).item()
+    assert model.acoustic_tokenizer is None
+    assert model.semantic_tokenizer is None
+    assert model.acoustic_connector is None
+    assert model.semantic_connector is None

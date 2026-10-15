@@ -37,6 +37,7 @@ def fake_vibevoice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNam
     owner_thread = None
     loads = []
     calls = []
+    encoder_options = []
 
     def load_model(path):
         nonlocal owner_thread
@@ -45,7 +46,9 @@ def fake_vibevoice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNam
         return model
 
     monkeypatch.setattr(vv, "load_vibevoice_model", load_model)
-    monkeypatch.setattr(vv, "configure_encoder_memory", lambda model: None)
+    monkeypatch.setattr(
+        vv, "configure_encoder_memory", lambda model, **kwargs: encoder_options.append(kwargs)
+    )
 
     def generate_transcription(**kwargs: object) -> None:
         assert threading.get_ident() == owner_thread, "lazy model crossed threads"
@@ -66,7 +69,14 @@ def fake_vibevoice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNam
     monkeypatch.setitem(sys.modules, "mlx", ModuleType("mlx"))
     monkeypatch.setitem(sys.modules, "mlx.core", mx)
     return SimpleNamespace(
-        audio=audio, original=original, native=native, model=model, loads=loads, calls=calls, mx=mx
+        audio=audio,
+        original=original,
+        native=native,
+        model=model,
+        loads=loads,
+        calls=calls,
+        mx=mx,
+        encoder_options=encoder_options,
     )
 
 
@@ -117,6 +127,7 @@ def test_progress_preserves_model_thread_for_entire_run(fake_vibevoice, monkeypa
     vv.main()
     assert state.loads == [vv.DEFAULT_MODEL]
     assert state.calls == [state.model] * (3 if chunked else 1)
+    assert state.encoder_options == [{"release_encoders": not chunked}]
 
 
 @pytest.mark.parametrize("failure", ["load_vibevoice_model", "set_memory_limit"])
