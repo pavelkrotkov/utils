@@ -10,7 +10,6 @@ import struct
 import subprocess
 import tempfile
 import threading
-import time
 import unittest
 import wave
 from pathlib import Path
@@ -31,6 +30,7 @@ class RecordingReporter(ProgressReporter):
         self.finished: list[tuple[str, str | None]] = []
         self.percentages: list[float] = []
         self.updates: list[tuple[str, float | None, float | None, str | None]] = []
+        self.updated = threading.Event()
 
     def start(self, stage: str, detail: str | None = None) -> None:
         self.started.append((stage, detail))
@@ -49,6 +49,7 @@ class RecordingReporter(ProgressReporter):
         self.updates.append((stage, completed, total, detail))
         if completed is not None and total:
             self.percentages.append(100.0 * completed / total)
+        self.updated.set()
 
     def finish(self, stage: str, detail: str | None = None) -> None:
         self.finished.append((stage, detail))
@@ -106,8 +107,11 @@ class RunWithProgressTest(unittest.TestCase):
 
                 reporter = ThreadRecordingReporter()
 
-                def fail(error_type: type[BaseException] = exception) -> None:
-                    time.sleep(0.55)
+                def fail(
+                    error_type: type[BaseException] = exception,
+                    observed: threading.Event = reporter.updated,
+                ) -> None:
+                    self.assertTrue(observed.wait(timeout=3))
                     raise error_type("interrupted work")
 
                 with self.assertRaises(exception):
@@ -121,12 +125,17 @@ class RunWithProgressTest(unittest.TestCase):
     def test_periodic_progress_surfaces_reporting_errors(self) -> None:
         class BrokenReporter(RecordingReporter):
             def update(self, *args: Any, **kwargs: Any) -> None:
+                self.updated.set()
                 raise OSError("reporting failed")
 
         reporter = BrokenReporter()
+
+        def wait_for_report() -> None:
+            self.assertTrue(reporter.updated.wait(timeout=3))
+
         with self.assertRaisesRegex(OSError, "reporting failed"):
             run_with_periodic_progress(
-                lambda: time.sleep(0.55), reporter=reporter, label="failed", interval=0.5
+                wait_for_report, reporter=reporter, label="failed", interval=0.5
             )
         self.assertEqual([], reporter.finished)
 
@@ -170,7 +179,7 @@ class RunWithProgressTest(unittest.TestCase):
         reporter = RecordingReporter()
 
         def delayed_noop() -> None:
-            time.sleep(0.55)
+            self.assertTrue(reporter.updated.wait(timeout=3))
 
         run_with_periodic_progress(
             delayed_noop,
@@ -191,9 +200,9 @@ class RunWithProgressTest(unittest.TestCase):
         reporter = RecordingReporter()
 
         def delayed_noop() -> None:
-            time.sleep(0.55)
+            self.assertTrue(reporter.updated.wait(timeout=3))
 
-        # expected_seconds is far larger than the real ~0.55s delay, so the
+        # expected_seconds is far larger than the first timer interval, so the
         # "left" branch is deterministic regardless of actual scheduling.
         run_with_periodic_progress(
             delayed_noop,
@@ -210,7 +219,7 @@ class RunWithProgressTest(unittest.TestCase):
         reporter = RecordingReporter()
 
         def delayed_noop() -> None:
-            time.sleep(0.55)
+            self.assertTrue(reporter.updated.wait(timeout=3))
 
         # A negative expectation guarantees elapsed time (always >= 0)
         # exceeds it regardless of actual scheduling, keeping this
