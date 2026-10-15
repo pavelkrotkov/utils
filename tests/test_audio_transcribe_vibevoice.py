@@ -18,6 +18,11 @@ import audio_transcribe_vibevoice as vv
 from audio_transcript import TranscriptSegment, emit_transcript
 
 
+@pytest.fixture(autouse=True)
+def no_live_memory_policy(monkeypatch):
+    monkeypatch.setattr(vv, "macos_memory", lambda: None)
+
+
 @pytest.fixture
 def fake_vibevoice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     audio = tmp_path / "recording.m4a"
@@ -423,3 +428,22 @@ def test_extract_chunk_builds_expected_ffmpeg_call(
     assert "-ss" in cmd and cmd[cmd.index("-ss") + 1] == "1.500"
     assert "-to" in cmd and cmd[cmd.index("-to") + 1] == "31.250"
     assert "-ac" in cmd and "-ar" in cmd  # mono 16k conversion happens here
+
+
+@pytest.mark.parametrize(
+    ("available", "total", "baseline", "pressure", "fits"),
+    [
+        (1, 16, 0.5, 1, True),
+        (4.34, 16, 0.5, 1, True),
+        (8, 8, 0.5, 1, False),
+        (12, 16, 3, 1, False),
+        (12, 16, 0.5, 2, False),
+        (12, 16, 0.5, 4, False),
+    ],
+)
+def test_macos_model_admission_uses_pressure_and_footprint(
+    monkeypatch, available, total, baseline, pressure, fits
+):
+    mac = SimpleNamespace(pressure=lambda: pressure, footprint=lambda pid: int(baseline * 2**30))
+    monkeypatch.setattr(vv, "macos_memory", lambda: mac, raising=False)
+    test_lazy_model_checks_headroom_before_inference(monkeypatch, total, available, fits)
