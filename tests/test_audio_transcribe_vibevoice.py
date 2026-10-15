@@ -8,6 +8,7 @@ ffmpeg required: the exercised pieces are pure functions.
 from __future__ import annotations
 
 import sys
+import threading
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -33,11 +34,20 @@ def fake_vibevoice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNam
         '{"segments":[{"start":1,"end":2,"text":"spoken","speaker":"Speaker 1"}],"native":"yes"}'
     )
     model = object()
+    owner_thread = None
     loads = []
     calls = []
-    monkeypatch.setattr(vv, "load_vibevoice_model", lambda path: loads.append(path) or model)
+
+    def load_model(path):
+        nonlocal owner_thread
+        owner_thread = threading.get_ident()
+        loads.append(path)
+        return model
+
+    monkeypatch.setattr(vv, "load_vibevoice_model", load_model)
 
     def generate_transcription(**kwargs: object) -> None:
+        assert threading.get_ident() == owner_thread, "lazy model crossed threads"
         calls.append(kwargs["model"])
         Path(f"{kwargs['output_path']}.json").write_text(native)
 
@@ -90,6 +100,21 @@ def test_chunked_run_reuses_one_model(
     vv.main()
     assert state.loads == [vv.DEFAULT_MODEL]
     assert state.calls == [state.model, state.model, state.model]
+
+
+@pytest.mark.parametrize("chunked", [False, True])
+def test_progress_preserves_model_thread_for_entire_run(fake_vibevoice, monkeypatch, chunked):
+    state = fake_vibevoice
+    monkeypatch.setattr(vv, "probe_media_duration", lambda *args: 64.0)
+    monkeypatch.setattr(vv, "detect_silences", lambda *args, **kwargs: [])
+    monkeypatch.setattr(vv, "extract_chunk", lambda *args: None)
+    args = ["vibevoice", str(state.audio), "--format", "md"]
+    if chunked:
+        args += ["--chunk-seconds", "30"]
+    monkeypatch.setattr(sys, "argv", args)
+    vv.main()
+    assert state.loads == [vv.DEFAULT_MODEL]
+    assert state.calls == [state.model] * (3 if chunked else 1)
 
 
 @pytest.mark.parametrize("failure", ["load_vibevoice_model", "set_memory_limit"])

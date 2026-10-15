@@ -59,7 +59,7 @@ from audio_common import (
     convert_to_pcm16k_mono,
     format_duration,
     probe_media_duration,
-    run_threaded_with_periodic_progress,
+    run_with_periodic_progress,
 )
 from audio_resources import PRESSURE_NORMAL, macos_memory, supervise
 from audio_segments import TranscriptError, read_transcript_file
@@ -488,7 +488,7 @@ def run_chunked(args: argparse.Namespace, generate: Any, progress: ProgressRepor
             label = f"VibeVoice ASR chunk {index}/{total}"
             try:
                 if progress:
-                    run_threaded_with_periodic_progress(
+                    run_with_periodic_progress(
                         lambda w=wav_path, s=stem: transcribe_chunk(w, s),
                         reporter=progress,
                         label=label,
@@ -655,7 +655,7 @@ def main() -> None:
 
             try:
                 if progress:
-                    run_threaded_with_periodic_progress(
+                    run_with_periodic_progress(
                         transcribe,
                         reporter=progress,
                         label="VibeVoice ASR",
