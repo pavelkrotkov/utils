@@ -115,37 +115,45 @@ def test_resource_guard_stops_descendants_and_releases_lock(tmp_path, guarded_wo
     assert rerun.returncode == 0, rerun.stderr
 
 
-def test_pressure_window_allows_recovery_but_bounds_repeated_warnings():
-    from audio_resources import PressureWindow
-
-    window = PressureWindow()
-    assert not window.exceeded(0, 1)
-    assert not window.exceeded(1, 2)
-    assert not window.exceeded(3, 1)  # two seconds of warning, then recovery
-    assert not window.exceeded(4, 2)
-    assert window.exceeded(7, 2)  # five seconds across both warning episodes
-    assert not window.exceeded(7.1, 1)
-    assert not window.exceeded(20, 1)  # old exposure has expired
-
-
-def test_pressure_warning_recovery_at_grace_boundary_does_not_stop():
-    window = resources.PressureWindow()
-    assert not window.exceeded(0, 2)
-    assert not window.exceeded(5, 1)
-
-
-def test_pressure_warning_window_cannot_override_critical_pressure():
-    window = resources.PressureWindow()
-    assert not window.exceeded(0, 2)
-    assert not window.exceeded(6, 4)
-
-
 @pytest.fixture
 def fake_mac(monkeypatch):
     mac = resources.MacMemory.__new__(resources.MacMemory)
     monkeypatch.setattr(mac, "pressure", lambda: 1)
     monkeypatch.setattr(mac, "footprint", lambda pid: 32)
     return mac
+
+
+def test_macos_sustained_warning_below_budget_continues(monkeypatch, fake_mac, capsys):
+    # Replay a full minute at the footprint/available values from the failed run.
+    # The clock advances without real sleeps; the production monitor handles
+    # every pressure sample and the worker's final successful exit.
+    clock = {"now": 0.0}
+
+    class Worker(subprocess.Popen):
+        pid = 123
+        samples = 0
+
+        def wait(self, timeout=None):
+            self.samples += 1
+            clock["now"] += 0.2
+            if self.samples <= 300:
+                raise subprocess.TimeoutExpired("worker", timeout or 0.0)
+            return 0
+
+    worker = Worker.__new__(Worker)
+    process = SimpleNamespace(pid=123, children=lambda **kw: [])
+    monkeypatch.setattr(psutil, "Process", lambda pid: process)
+    monkeypatch.setattr(
+        psutil, "virtual_memory", lambda: SimpleNamespace(available=int(2.41 * 2**30))
+    )
+    monkeypatch.setattr(time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(fake_mac, "pressure", lambda: 2)
+    monkeypatch.setattr(fake_mac, "footprint", lambda pid: int(6.79 * 2**30))
+    assert resources.wait_for_worker(worker, 8 * 2**30, 2 * 2**30, mac=fake_mac) == 0
+    assert worker.samples == 301
+    stderr = capsys.readouterr().err
+    assert stderr.count("WARNING:") == 1
+    assert "stopping worker" not in stderr
 
 
 def test_macos_low_available_memory_does_not_stop_healthy_worker(monkeypatch, fake_mac):
@@ -167,7 +175,7 @@ def test_macos_low_available_memory_does_not_stop_healthy_worker(monkeypatch, fa
     assert resources.wait_for_worker(Worker.__new__(Worker), 64, 16, mac=fake_mac) == 0
 
 
-@pytest.mark.parametrize("pressure,footprint", [(4, 32), (1, 65), (4, 65)])
+@pytest.mark.parametrize("pressure,footprint", [(4, 32), (1, 65), (2, 65), (4, 65)])
 def test_macos_emergency_condition_fails_monitor(
     monkeypatch, fake_mac, capsys, pressure, footprint
 ):
@@ -187,6 +195,24 @@ def test_macos_emergency_condition_fails_monitor(
     assert resources.wait_for_worker(Worker.__new__(Worker), 64, 16, mac=fake_mac) == 1
     expected = "critical macOS memory pressure" if pressure == 4 else "memory budget reached"
     assert expected in capsys.readouterr().err
+
+
+def test_macos_warning_does_not_hide_later_critical_pressure(monkeypatch, fake_mac, capsys):
+    class Worker(subprocess.Popen):
+        pid = 123
+
+        def wait(self, timeout=None):
+            raise subprocess.TimeoutExpired("worker", timeout or 0.0)
+
+    pressures = iter([2, 4])
+    process = SimpleNamespace(pid=123, children=lambda **kw: [])
+    monkeypatch.setattr(psutil, "Process", lambda pid: process)
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=1))
+    monkeypatch.setattr(fake_mac, "pressure", lambda: next(pressures))
+    assert resources.wait_for_worker(Worker.__new__(Worker), 64, 16, mac=fake_mac) == 1
+    stderr = capsys.readouterr().err
+    assert stderr.count("WARNING:") == 1
+    assert "critical macOS memory pressure; stopping worker" in stderr
 
 
 @pytest.mark.parametrize(

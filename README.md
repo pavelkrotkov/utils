@@ -431,9 +431,10 @@ transcript to any of the other formats without re-running ASR.
   group if combined worker memory exceeds half of physical RAM. On macOS it
   measures physical footprint, including Metal and compressed allocations,
   and requires normal memory pressure at startup. During inference, critical
-  pressure stops the job immediately; warnings get five seconds of recovery
-  time within a rolling ten-second window. A recovered normal state is allowed
-  to continue. Low reported available memory alone does not stop a macOS job.
+  pressure stops the job immediately. Warning pressure is advisory: it logs
+  once and lets inference continue within the footprint budget. A sustained
+  warning alone does not terminate a job. Low reported available memory alone
+  does not stop a macOS job.
   Other platforms retain the RSS budget and an eighth-RAM system reserve.
   Unreadable monitoring data fails the job. `--threads` can lower Whisper's limit.
   ffmpeg decoding, encoding, and filter pools use one thread.
