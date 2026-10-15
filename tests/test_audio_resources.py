@@ -167,8 +167,10 @@ def test_macos_low_available_memory_does_not_stop_healthy_worker(monkeypatch, fa
     assert resources.wait_for_worker(Worker.__new__(Worker), 64, 16, mac=fake_mac) == 0
 
 
-@pytest.mark.parametrize("pressure,footprint", [(4, 32), (1, 65)])
-def test_macos_emergency_condition_fails_monitor(monkeypatch, fake_mac, pressure, footprint):
+@pytest.mark.parametrize("pressure,footprint", [(4, 32), (1, 65), (4, 65)])
+def test_macos_emergency_condition_fails_monitor(
+    monkeypatch, fake_mac, capsys, pressure, footprint
+):
     import audio_resources as resources
 
     class Worker(subprocess.Popen):
@@ -183,6 +185,8 @@ def test_macos_emergency_condition_fails_monitor(monkeypatch, fake_mac, pressure
     monkeypatch.setattr(fake_mac, "pressure", lambda: pressure)
     monkeypatch.setattr(fake_mac, "footprint", lambda pid: footprint)
     assert resources.wait_for_worker(Worker.__new__(Worker), 64, 16, mac=fake_mac) == 1
+    expected = "critical macOS memory pressure" if pressure == 4 else "memory budget reached"
+    assert expected in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(

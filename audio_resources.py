@@ -198,7 +198,7 @@ def wait_for_worker(
                 used = sum(mac.footprint(p.pid) if mac else process_memory(p) for p in processes)
                 peak = max(peak, used)
                 available = psutil.virtual_memory().available
-                if used > budget or (not mac and available < reserve):
+                if not reason and (used > budget or (not mac and available < reserve)):
                     reason = "memory budget reached"
                 if reason:
                     print(
