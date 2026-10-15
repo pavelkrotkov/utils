@@ -381,7 +381,7 @@ def convert_to_pcm16k_mono(
         raise
 
 
-def run_threaded_with_periodic_progress(
+def run_with_periodic_progress(
     func: Callable[[], None],
     *,
     reporter: ProgressReporter,
@@ -389,38 +389,39 @@ def run_threaded_with_periodic_progress(
     interval: float,
     expected_seconds: float | None = None,
 ) -> None:
-    """Run blocking Python work while periodically reporting elapsed time.
+    """Run work on the calling thread and report progress from a timer thread.
 
+    Lazy MLX arrays carry thread-local streams, so loading and inference must
+    stay on the same thread. Only the elapsed-time messages run in the background.
     The wrapped call gives no progress feedback, so updates only show honest
     elapsed time — plus a rough time-left hint when expected_seconds is given.
     """
     done = threading.Event()
     error: list[BaseException] = []
 
-    def target() -> None:
+    def report_progress() -> None:
         try:
-            func()
+            while not done.wait(max(0.5, interval)):
+                elapsed = time.monotonic() - start
+                if expected_seconds is None:
+                    detail = "still running"
+                elif elapsed < expected_seconds:
+                    detail = f"~{format_duration(expected_seconds - elapsed)} left (rough estimate)"
+                else:
+                    detail = "running longer than the rough estimate"
+                reporter.update(label, detail=detail, force=True, show_count=False)
         except BaseException as exc:
             error.append(exc)
-        finally:
-            done.set()
 
     reporter.start(label)
     start = time.monotonic()
-    thread = threading.Thread(target=target, daemon=True)
+    thread = threading.Thread(target=report_progress, daemon=True)
     thread.start()
-
-    while not done.wait(max(0.5, interval)):
-        elapsed = time.monotonic() - start
-        if expected_seconds is None:
-            detail = "still running"
-        elif elapsed < expected_seconds:
-            detail = f"~{format_duration(expected_seconds - elapsed)} left (rough estimate)"
-        else:
-            detail = "running longer than the rough estimate"
-        reporter.update(label, detail=detail, force=True, show_count=False)
-
-    thread.join()
+    try:
+        func()
+    finally:
+        done.set()
+        thread.join()
     if error:
         raise error[0]
 

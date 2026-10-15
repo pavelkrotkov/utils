@@ -9,7 +9,7 @@ import shutil
 import struct
 import subprocess
 import tempfile
-import time
+import threading
 import unittest
 import wave
 from pathlib import Path
@@ -18,7 +18,7 @@ from typing import Any
 from audio_common import (
     ProgressReporter,
     convert_to_pcm16k_mono,
-    run_threaded_with_periodic_progress,
+    run_with_periodic_progress,
     run_with_progress,
 )
 
@@ -30,6 +30,7 @@ class RecordingReporter(ProgressReporter):
         self.finished: list[tuple[str, str | None]] = []
         self.percentages: list[float] = []
         self.updates: list[tuple[str, float | None, float | None, str | None]] = []
+        self.updated = threading.Event()
 
     def start(self, stage: str, detail: str | None = None) -> None:
         self.started.append((stage, detail))
@@ -48,6 +49,7 @@ class RecordingReporter(ProgressReporter):
         self.updates.append((stage, completed, total, detail))
         if completed is not None and total:
             self.percentages.append(100.0 * completed / total)
+        self.updated.set()
 
     def finish(self, stage: str, detail: str | None = None) -> None:
         self.finished.append((stage, detail))
@@ -77,6 +79,66 @@ class FakeProcess:
 
 
 class RunWithProgressTest(unittest.TestCase):
+    def test_periodic_progress_keeps_work_on_calling_thread(self) -> None:
+        caller = threading.get_ident()
+
+        def thread_affine_work() -> None:
+            self.assertEqual(caller, threading.get_ident())
+
+        run_with_periodic_progress(
+            thread_affine_work,
+            reporter=RecordingReporter(),
+            label="thread-affine work",
+            interval=10,
+        )
+
+    def test_periodic_progress_joins_timer_on_error_or_cancellation(self) -> None:
+        for exception in (ValueError, KeyboardInterrupt):
+            with self.subTest(exception=exception):
+
+                class ThreadRecordingReporter(RecordingReporter):
+                    def __init__(self) -> None:
+                        super().__init__()
+                        self.timer_threads: list[threading.Thread] = []
+
+                    def update(self, *args: Any, **kwargs: Any) -> None:
+                        self.timer_threads.append(threading.current_thread())
+                        super().update(*args, **kwargs)
+
+                reporter = ThreadRecordingReporter()
+
+                def fail(
+                    error_type: type[BaseException] = exception,
+                    observed: threading.Event = reporter.updated,
+                ) -> None:
+                    self.assertTrue(observed.wait(timeout=3))
+                    raise error_type("interrupted work")
+
+                with self.assertRaises(exception):
+                    run_with_periodic_progress(
+                        fail, reporter=reporter, label="failed", interval=0.5
+                    )
+                self.assertTrue(reporter.timer_threads)
+                self.assertTrue(all(not thread.is_alive() for thread in reporter.timer_threads))
+                self.assertEqual([], reporter.finished)
+
+    def test_periodic_progress_surfaces_reporting_errors(self) -> None:
+        class BrokenReporter(RecordingReporter):
+            def update(self, *args: Any, **kwargs: Any) -> None:
+                self.updated.set()
+                raise OSError("reporting failed")
+
+        reporter = BrokenReporter()
+
+        def wait_for_report() -> None:
+            self.assertTrue(reporter.updated.wait(timeout=3))
+
+        with self.assertRaisesRegex(OSError, "reporting failed"):
+            run_with_periodic_progress(
+                wait_for_report, reporter=reporter, label="failed", interval=0.5
+            )
+        self.assertEqual([], reporter.finished)
+
     def test_reports_percentages_from_stubbed_process_output(self) -> None:
         calls: list[tuple[list[str], dict[str, Any]]] = []
 
@@ -113,13 +175,13 @@ class RunWithProgressTest(unittest.TestCase):
         self.assertEqual([12.5, 87.5], reporter.percentages)
         self.assertEqual([("fake stage", "output.json")], reporter.finished)
 
-    def test_threaded_progress_reports_start_still_running_and_finish(self) -> None:
+    def test_periodic_progress_reports_start_still_running_and_finish(self) -> None:
         reporter = RecordingReporter()
 
         def delayed_noop() -> None:
-            time.sleep(0.55)
+            self.assertTrue(reporter.updated.wait(timeout=3))
 
-        run_threaded_with_periodic_progress(
+        run_with_periodic_progress(
             delayed_noop,
             reporter=reporter,
             label="threaded stage",
@@ -134,15 +196,15 @@ class RunWithProgressTest(unittest.TestCase):
         self.assertEqual([], reporter.percentages)
         self.assertEqual([("threaded stage", None)], reporter.finished)
 
-    def test_threaded_progress_reports_rough_time_left_when_expected(self) -> None:
+    def test_periodic_progress_reports_rough_time_left_when_expected(self) -> None:
         reporter = RecordingReporter()
 
         def delayed_noop() -> None:
-            time.sleep(0.55)
+            self.assertTrue(reporter.updated.wait(timeout=3))
 
-        # expected_seconds is far larger than the real ~0.55s delay, so the
+        # expected_seconds is far larger than the first timer interval, so the
         # "left" branch is deterministic regardless of actual scheduling.
-        run_threaded_with_periodic_progress(
+        run_with_periodic_progress(
             delayed_noop,
             reporter=reporter,
             label="threaded stage",
@@ -153,16 +215,16 @@ class RunWithProgressTest(unittest.TestCase):
         details = [detail for _, _, _, detail in reporter.updates]
         self.assertTrue(any(detail and "left (rough estimate)" in detail for detail in details))
 
-    def test_threaded_progress_notes_when_past_the_rough_estimate(self) -> None:
+    def test_periodic_progress_notes_when_past_the_rough_estimate(self) -> None:
         reporter = RecordingReporter()
 
         def delayed_noop() -> None:
-            time.sleep(0.55)
+            self.assertTrue(reporter.updated.wait(timeout=3))
 
         # A negative expectation guarantees elapsed time (always >= 0)
         # exceeds it regardless of actual scheduling, keeping this
         # deterministic without mocking the clock or threading internals.
-        run_threaded_with_periodic_progress(
+        run_with_periodic_progress(
             delayed_noop,
             reporter=reporter,
             label="threaded stage",
