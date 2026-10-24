@@ -33,8 +33,7 @@ from wyze_sdk import Client
 MODELS = {"WYZE_CAKP2JFUS", "HL_BC"}
 FIELDS = ("time_utc", "wyze_name", "model", "mac", "wyze_ip_before",
           "nest_ip_before", "restart_result", "wyze_ip_after",
-          "nest_ip_after", "wyze_online_after", "nest_connected_after",
-          "elapsed_seconds")
+          "nest_ip_after", "wyze_online_after", "nest_connected_after", "offline_observed", "elapsed_seconds")
 
 
 def physical_mac(value):
@@ -156,7 +155,7 @@ def main():
                     wyze_ip_before=getattr(device, "ip", "") or "",
                     nest_ip_before=before.get("ipAddress") or "",
                     restart_result="", wyze_ip_after="", nest_ip_after="",
-                    wyze_online_after="", nest_connected_after="", elapsed_seconds="",
+                    wyze_online_after="", nest_connected_after="", offline_observed=False, elapsed_seconds="",
                 )
                 print(f"RESTART {device.nickname} | Nest {record['nest_ip_before']} | "
                       f"Wyze {record['wyze_ip_before']}", flush=True)
@@ -175,11 +174,18 @@ def main():
                 time.sleep(20)
                 deadline = time.monotonic() + 160
                 while True:
-                    live = by_mac(client.devices_list())
-                    current = live.get(mac)
-                    now_stations = nest_stations(wifi, group)
-                    observed = next((s for s in now_stations
-                                     if s.get("id") == before.get("id")), None)
+                    try:
+                        live = by_mac(client.devices_list())
+                        current = live.get(mac)
+                        now_stations = nest_stations(wifi, group)
+                        observed = next((s for s in now_stations
+                                         if s.get("id") == before.get("id")), None)
+                    except Exception:
+                        current, observed = None, None
+                    if (current and current.is_online is False) or (
+                        observed and observed.get("connected") is False
+                    ):
+                        record["offline_observed"] = True
                     record["wyze_ip_after"] = getattr(current, "ip", "") or "" if current else ""
                     record["nest_ip_after"] = (observed or {}).get("ipAddress") or ""
                     record["wyze_online_after"] = getattr(current, "is_online", "") if current else ""
@@ -187,6 +193,10 @@ def main():
                     if current and current.is_online is True and (
                         not before or (observed and observed.get("connected") is True)
                     ):
+                        record["restart_result"] = (
+                            "accepted; reconnect observed" if record["offline_observed"]
+                            else "accepted; online after wait"
+                        )
                         break
                     if time.monotonic() >= deadline:
                         record["restart_result"] = "accepted; reconnect unverified"
@@ -199,7 +209,7 @@ def main():
                       f"Nest {record['nest_ip_before']} -> {record['nest_ip_after']} | "
                       f"Wyze {record['wyze_ip_before']} -> {record['wyze_ip_after']}",
                       flush=True)
-                if record["restart_result"] != "accepted":
+                if record["restart_result"] == "accepted; reconnect unverified":
                     raise RuntimeError("Stopped because reconnect was not verified")
                 time.sleep(5)
     finally:
