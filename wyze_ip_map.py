@@ -109,8 +109,7 @@ def probe_nest_wyze(stations: list[dict]) -> None:
         if station.get("connected") is True
         and "wyze"
         in (
-            str(station.get("friendlyName") or "")
-            + str(station.get("automaticFriendlyName") or "")
+            str(station.get("friendlyName") or "") + str(station.get("automaticFriendlyName") or "")
         ).lower()
     }
     for ip in sorted(ips - {None, ""}):
@@ -169,9 +168,7 @@ def make_rows(devices, stations: list[dict], arp: dict[str, str]) -> list[dict]:
                 else "",
                 "wyze_reported_ip": reported,
                 "nest_client_name": (
-                    station.get("friendlyName")
-                    or station.get("automaticFriendlyName")
-                    or ""
+                    station.get("friendlyName") or station.get("automaticFriendlyName") or ""
                 ),
                 "nest_connected": station.get("connected") if station else "",
                 "review": review,
@@ -188,17 +185,15 @@ def sign_in_and_list():
     if not all((email, key_id, api_key, password)):
         raise ValueError("all four Wyze credentials are required")
     client = Client()
-    token = client.login(
-        email=email, password=password, key_id=key_id, api_key=api_key
-    )["access_token"]
+    token = client.login(email=email, password=password, key_id=key_id, api_key=api_key)[
+        "access_token"
+    ]
     return Client(token=token).devices_list()
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--nest-log", type=Path, help="Nest JSONL log or logs directory"
-    )
+    parser.add_argument("--nest-log", type=Path, help="Nest JSONL log or logs directory")
     parser.add_argument(
         "--existing-csv",
         type=Path,
@@ -210,9 +205,7 @@ def main() -> int:
         help="Ping connected Nest clients named Wyze once to refresh ARP",
     )
     parser.add_argument("--output", type=Path, help="Private CSV output path")
-    parser.add_argument(
-        "--self-check", action="store_true", help="Run an offline matching check"
-    )
+    parser.add_argument("--self-check", action="store_true", help="Run an offline matching check")
     args = parser.parse_args()
     if args.self_check:
         device = SimpleNamespace(
@@ -239,9 +232,7 @@ def main() -> int:
         parser.error("output parent directory does not exist")
 
     collected, stations = read_nest(args.nest_log)
-    devices = (
-        read_existing(args.existing_csv) if args.existing_csv else sign_in_and_list()
-    )
+    devices = read_existing(args.existing_csv) if args.existing_csv else sign_in_and_list()
     if args.probe_nest:
         probe_nest_wyze(stations)
     rows = make_rows(devices, stations, arp_by_mac())
