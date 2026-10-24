@@ -15,14 +15,14 @@ must be placed outside this public repository.
 
 import argparse
 import csv
-from datetime import datetime, timezone
 import getpass
 import importlib.util
 import os
-from pathlib import Path
 import re
 import sys
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import quote
 
 from wyze_sdk import Client
