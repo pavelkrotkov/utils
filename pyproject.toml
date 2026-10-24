@@ -35,16 +35,16 @@ dev = [
     # transitive dependency (pip-api <- pip-audit), and version
     # updates cover declared dependencies, so advisories like
     # PYSEC-2026-3721 required a manual relock.
-    "pip>=26.2.1",
+    "pip>=26.2.2",
     "pip-audit>=2.10.1",
     "pre-commit>=4.6.2",
     # Test-only: exercises the pypdf-backed paths of pdf_page_selection.
     # Converters still declare pypdf per-script via PEP 723.
-    "pypdf>=6.20.1",
+    "pypdf>=6.21.1",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
-    "ruff>=0.17.0",
-    "ty>=0.0.87",
+    "ruff>=0.17.1",
+    "ty>=0.0.90",
 ]
 
 [tool.ty.src]
