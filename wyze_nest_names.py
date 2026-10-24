@@ -46,25 +46,35 @@ def api_write(wifi, method, path, body):
     # A write is sent once. An uncertain result is never automatically replayed.
     try:
         response = wifi.session.request(
-            method, wifi_module.CLOUD + path, json=body,
-            timeout=(10, 20), allow_redirects=False,
+            method,
+            wifi_module.CLOUD + path,
+            json=body,
+            timeout=(10, 20),
+            allow_redirects=False,
             headers={"Authorization": "Bearer " + wifi.token},
         )
     except Exception as exc:
-        raise RuntimeError("Google API transport error; request may have arrived") from exc
+        raise RuntimeError(
+            "Google API transport error; request may have arrived"
+        ) from exc
     if response.status_code != 200:
-        raise RuntimeError(f"Google API HTTP {response.status_code}; request not retried")
+        raise RuntimeError(
+            f"Google API HTTP {response.status_code}; request not retried"
+        )
     try:
         return response.json()
     except ValueError as exc:
-        raise RuntimeError("Google API returned invalid JSON; request not retried") from exc
+        raise RuntimeError(
+            "Google API returned invalid JSON; request not retried"
+        ) from exc
 
 
 def station_macs(wifi, group, ids):
     if not ids:
         return {}
     created = api_write(
-        wifi, "POST",
+        wifi,
+        "POST",
         f"groups/{quote(group, safe='')}/stations/operations/sensitiveInfo?prettyPrint=false",
         {"stationIds": ids},
     )
@@ -79,7 +89,9 @@ def station_macs(wifi, group, ids):
         time.sleep(1)
     else:
         raise RuntimeError("Google MAC lookup did not complete")
-    records = wifi.get(path + "/sensitiveInfo?prettyPrint=false").get("stationSensitiveInfos")
+    records = wifi.get(path + "/sensitiveInfo?prettyPrint=false").get(
+        "stationSensitiveInfos"
+    )
     if not isinstance(records, list):
         raise RuntimeError("Google MAC lookup returned no records")
     wanted = set(ids)
@@ -119,9 +131,9 @@ def generic_name(name):
 
 
 def current_stations(wifi, group):
-    return wifi.get(
-        f"groups/{quote(group, safe='')}/stations?prettyPrint=false"
-    ).get("stations", [])
+    return wifi.get(f"groups/{quote(group, safe='')}/stations?prettyPrint=false").get(
+        "stations", []
+    )
 
 
 def main():
@@ -164,8 +176,15 @@ def main():
             if not generic_name(old_name):
                 print(f"SKIP custom Nest name: {old_name}")
                 continue
-            plan.append((station["id"], macs[station["id"]], old_name, new_name,
-                         station.get("ipAddress") or ""))
+            plan.append(
+                (
+                    station["id"],
+                    macs[station["id"]],
+                    old_name,
+                    new_name,
+                    station.get("ipAddress") or "",
+                )
+            )
         for _, _, old, new, ip in plan:
             print(f"PLAN {ip}: {old} -> {new}")
         print(f"Eligible clients: {len(plan)}")
@@ -175,32 +194,53 @@ def main():
         os.umask(0o077)
         with args.audit.open("x", encoding="utf-8", newline="") as stream:
             writer = csv.writer(stream)
-            writer.writerow(["time_utc", "ip_before", "old_name", "requested_name",
-                             "status", "ip_after"])
+            writer.writerow(
+                [
+                    "time_utc",
+                    "ip_before",
+                    "old_name",
+                    "requested_name",
+                    "status",
+                    "ip_after",
+                ]
+            )
             for station_id, mac, old, new, before_ip in plan:
                 # Refresh both station data and sensitive MAC immediately before
                 # each name mutation. Stop if identity/name/IP changed.
-                latest = [s for s in current_stations(wifi, group)
-                          if s.get("id") == station_id]
+                latest = [
+                    s
+                    for s in current_stations(wifi, group)
+                    if s.get("id") == station_id
+                ]
                 if len(latest) != 1 or latest[0].get("connected") is not True:
                     print(f"SKIP disconnected: {new}")
                     continue
                 current = latest[0]
                 fresh_mac = station_macs(wifi, group, [station_id]).get(station_id)
-                if (fresh_mac != mac or current.get("friendlyName") != old
-                        or current.get("ipAddress") != before_ip):
+                if (
+                    fresh_mac != mac
+                    or current.get("friendlyName") != old
+                    or current.get("ipAddress") != before_ip
+                ):
                     print(f"SKIP identity changed: {new}")
                     continue
-                path = (f"groups/{quote(group, safe='')}/stations/"
-                        f"{quote(station_id, safe='')}/stationName?prettyPrint=false")
+                path = (
+                    f"groups/{quote(group, safe='')}/stations/"
+                    f"{quote(station_id, safe='')}/stationName?prettyPrint=false"
+                )
                 when = datetime.now(timezone.utc).isoformat()
                 try:
                     api_write(wifi, "PUT", path, {"name": new})
-                    observed = [s for s in current_stations(wifi, group)
-                                if s.get("id") == station_id]
-                    status = ("verified" if len(observed) == 1
-                              and observed[0].get("friendlyName") == new
-                              else "sent; readback unconfirmed")
+                    observed = [
+                        s
+                        for s in current_stations(wifi, group)
+                        if s.get("id") == station_id
+                    ]
+                    status = (
+                        "verified"
+                        if len(observed) == 1 and observed[0].get("friendlyName") == new
+                        else "sent; readback unconfirmed"
+                    )
                     after_ip = observed[0].get("ipAddress", "") if observed else ""
                 except Exception as exc:
                     status, after_ip = str(exc), ""
