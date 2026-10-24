@@ -162,27 +162,31 @@ def main():
                     or device.type != "Camera"
                     or device.product.model != row["wyze_model"]
                 ):
-                    writer.writerow({
-                        "time_utc": datetime.now(timezone.utc).isoformat(),
-                        "wyze_name": row["wyze_name"],
-                        "model": row["wyze_model"],
-                        "mac": mac,
-                        "restart_result": "skipped: inventory mismatch",
-                    })
+                    writer.writerow(
+                        {
+                            "time_utc": datetime.now(timezone.utc).isoformat(),
+                            "wyze_name": row["wyze_name"],
+                            "model": row["wyze_model"],
+                            "mac": mac,
+                            "restart_result": "skipped: inventory mismatch",
+                        }
+                    )
                     stream.flush()
                     print(f"SKIP inventory mismatch: {row['wyze_name']}")
                     continue
                 if device.is_online is not True:
-                    writer.writerow({
-                        "time_utc": datetime.now(timezone.utc).isoformat(),
-                        "wyze_name": row["wyze_name"],
-                        "model": row["wyze_model"],
-                        "mac": mac,
-                        "wyze_ip_before": getattr(device, "ip", "") or "",
-                        "nest_ip_before": station_by_mac.get(mac, {}).get("ipAddress") or "",
-                        "restart_result": "skipped: Wyze offline",
-                        "wyze_online_after": False,
-                    })
+                    writer.writerow(
+                        {
+                            "time_utc": datetime.now(timezone.utc).isoformat(),
+                            "wyze_name": row["wyze_name"],
+                            "model": row["wyze_model"],
+                            "mac": mac,
+                            "wyze_ip_before": getattr(device, "ip", "") or "",
+                            "nest_ip_before": station_by_mac.get(mac, {}).get("ipAddress") or "",
+                            "restart_result": "skipped: Wyze offline",
+                            "wyze_online_after": False,
+                        }
+                    )
                     stream.flush()
                     print(f"SKIP Wyze offline: {row['wyze_name']}")
                     continue
