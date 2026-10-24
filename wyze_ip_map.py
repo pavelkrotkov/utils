@@ -28,7 +28,6 @@ from types import SimpleNamespace
 
 from wyze_sdk import Client
 
-
 ARP_ENTRY = re.compile(
     r"\((?P<ip>\d+\.\d+\.\d+\.\d+)\) at "
     r"(?P<mac>(?:[0-9a-fA-F]{1,2}:){5}[0-9a-fA-F]{1,2})\b"
