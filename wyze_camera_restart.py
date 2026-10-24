@@ -27,7 +27,6 @@ from urllib.parse import quote
 
 from wyze_sdk import Client
 
-
 # The generic SDK action is known, and Wyze documents app-based camera
 # restart. Outdoor cams and doorbells have different restart behavior.
 MODELS = {"WYZE_CAKP2JFUS", "HL_BC"}
