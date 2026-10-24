@@ -38,7 +38,10 @@ FIELDS = (
 
 
 def normalize_mac(value: str) -> str:
-    return re.sub(r"[^0-9a-fA-F]", "", value or "").lower().zfill(12)
+    parts = (value or "").split(":")
+    if len(parts) == 6 and all(1 <= len(part) <= 2 for part in parts):
+        return "".join(part.zfill(2) for part in parts).lower()
+    return re.sub(r"[^0-9a-fA-F]", "", value or "").lower()
 
 
 def read_nest(path: Path | None) -> tuple[str, list[dict]]:
