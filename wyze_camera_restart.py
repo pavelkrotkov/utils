@@ -65,10 +65,7 @@ def load_monitor(path):
 def station_macs(wifi, module, group, ids):
     if not ids:
         return {}
-    path = (
-        f"groups/{quote(group, safe='')}/stations/operations/"
-        "sensitiveInfo?prettyPrint=false"
-    )
+    path = f"groups/{quote(group, safe='')}/stations/operations/sensitiveInfo?prettyPrint=false"
     # This POST only requests a MAC read. Do not retry uncertain delivery.
     response = wifi.session.post(
         module.CLOUD + path,
@@ -89,9 +86,7 @@ def station_macs(wifi, module, group, ids):
         time.sleep(1)
     else:
         raise RuntimeError("Nest MAC lookup pending")
-    rows = wifi.get(path + "/sensitiveInfo?prettyPrint=false").get(
-        "stationSensitiveInfos"
-    )
+    rows = wifi.get(path + "/sensitiveInfo?prettyPrint=false").get("stationSensitiveInfos")
     if not isinstance(rows, list):
         raise RuntimeError("Nest MAC lookup returned no rows")
     wanted = set(ids)
@@ -139,9 +134,7 @@ def main():
 
     with args.csv.open(encoding="utf-8", newline="") as stream:
         inventory = list(csv.DictReader(stream))
-    targets = [
-        r for r in inventory if r["wyze_type"] == "Camera" and r["wyze_model"] in MODELS
-    ]
+    targets = [r for r in inventory if r["wyze_type"] == "Camera" and r["wyze_model"] in MODELS]
     print(f"Eligible cameras: {len(targets)}")
     print("Excluded: outdoor cameras, doorbell, plugs, switches, base station.")
     module = load_monitor(args.monitor)
@@ -197,17 +190,13 @@ def main():
                     flush=True,
                 )
                 try:
-                    client.cameras.restart(
-                        device_mac=device.mac, device_model=device.product.model
-                    )
+                    client.cameras.restart(device_mac=device.mac, device_model=device.product.model)
                     record["restart_result"] = "accepted"
                 except Exception as exc:
                     record["restart_result"] = f"error: {type(exc).__name__}"
                     writer.writerow(record)
                     stream.flush()
-                    raise RuntimeError(
-                        "Restart failed or delivery uncertain; stopped"
-                    ) from None
+                    raise RuntimeError("Restart failed or delivery uncertain; stopped") from None
 
                 # Give the camera time to reboot. Keep reading without issuing
                 # another restart. The API may miss a brief offline interval.
@@ -219,11 +208,7 @@ def main():
                         current = live.get(mac)
                         now_stations = nest_stations(wifi, group)
                         observed = next(
-                            (
-                                s
-                                for s in now_stations
-                                if s.get("id") == before.get("id")
-                            ),
+                            (s for s in now_stations if s.get("id") == before.get("id")),
                             None,
                         )
                     except Exception:
@@ -232,23 +217,16 @@ def main():
                         observed and observed.get("connected") is False
                     ):
                         record["offline_observed"] = True
-                    record["wyze_ip_after"] = (
-                        getattr(current, "ip", "") or "" if current else ""
-                    )
+                    record["wyze_ip_after"] = getattr(current, "ip", "") or "" if current else ""
                     record["nest_ip_after"] = (observed or {}).get("ipAddress") or ""
                     record["wyze_online_after"] = (
                         getattr(current, "is_online", "") if current else ""
                     )
-                    record["nest_connected_after"] = (observed or {}).get(
-                        "connected", ""
-                    )
+                    record["nest_connected_after"] = (observed or {}).get("connected", "")
                     if (
                         current
                         and current.is_online is True
-                        and (
-                            not before
-                            or (observed and observed.get("connected") is True)
-                        )
+                        and (not before or (observed and observed.get("connected") is True))
                     ):
                         record["restart_result"] = (
                             "accepted; reconnect observed"
