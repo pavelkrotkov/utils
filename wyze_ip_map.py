@@ -18,10 +18,12 @@ import csv
 import getpass
 import ipaddress
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+from types import SimpleNamespace
 
 from wyze_sdk import Client
 
@@ -127,8 +129,23 @@ def main() -> int:
     parser.add_argument("--nest-log", type=Path, help="Nest JSONL log or logs directory")
     parser.add_argument("--probe-nest", action="store_true",
                         help="Ping connected Nest clients named Wyze once to refresh ARP")
-    parser.add_argument("--output", type=Path, required=True, help="Private CSV output path")
+    parser.add_argument("--output", type=Path, help="Private CSV output path")
+    parser.add_argument("--self-check", action="store_true", help="Run an offline matching check")
     args = parser.parse_args()
+    if args.self_check:
+        device = SimpleNamespace(
+            mac="AA:BB:CC:DD:EE:FF", nickname="Porch", type="Camera",
+            product=SimpleNamespace(model="Cam"), ip="192.168.1.9",
+        )
+        station = {"ipAddress": "192.168.1.7", "connected": True}
+        row = make_rows([device], [station], {"aabbccddeeff": "192.168.1.7"})[0]
+        assert normalize_mac("a:0:b:1:c:2") == "0a000b010c02"
+        assert row["local_ip"] == "192.168.1.7"
+        assert row["review"] == "Wyze IP differs from ARP"
+        print("Offline matching check passed.")
+        return 0
+    if args.output is None:
+        parser.error("--output is required unless --self-check is used")
     if args.probe_nest and args.nest_log is None:
         parser.error("--probe-nest requires --nest-log")
     if not args.output.parent.is_dir():
@@ -149,6 +166,7 @@ def main() -> int:
     if args.probe_nest:
         probe_nest_wyze(stations)
     rows = make_rows(devices, stations, arp_by_mac())
+    os.umask(0o077)
     with args.output.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=FIELDS)
         writer.writeheader()
