@@ -10,6 +10,7 @@ Example:
         --probe-nest --output /path/to/private/wyze_ip_map.csv
 
 The optional Nest log is a local JSONL file or directory of dated JSONL files.
+Use --existing-csv to refresh a prior export without signing in again.
 A probe sends one ping only to Nest clients named Wyze; it makes no settings changes.
 """
 
@@ -120,7 +121,8 @@ def make_rows(devices, stations: list[dict], arp: dict[str, str]) -> list[dict]:
         reported = getattr(device, "ip", None) or ""
         observed = arp.get(network_mac, "")
         station = nest_by_ip.get(observed, {})
-        shared = network_mac != normalize_mac(mac)
+        shared_channel = "-" in mac
+        embedded_mac = "_" in mac
         if observed and reported and observed != reported:
             review = "Wyze IP differs from ARP"
         elif observed and station.get("connected") is True:
@@ -140,7 +142,10 @@ def make_rows(devices, stations: list[dict], arp: dict[str, str]) -> list[dict]:
             "wyze_mac": mac,
             "wyze_online": getattr(device, "is_online", ""),
             "local_ip": observed,
-            "ip_source": ("Parent ARP cache" if shared else "ARP cache") if observed else "",
+            "ip_source": (
+                "Parent ARP cache" if shared_channel else
+                "ID MAC ARP cache" if embedded_mac else "ARP cache"
+            ) if observed else "",
             "wyze_reported_ip": reported,
             "nest_client_name": (
                 station.get("friendlyName") or station.get("automaticFriendlyName") or ""
