@@ -33,9 +33,17 @@ ARP_ENTRY = re.compile(
     r"(?P<mac>(?:[0-9a-fA-F]{1,2}:){5}[0-9a-fA-F]{1,2})\b"
 )
 FIELDS = (
-    "wyze_name", "wyze_type", "wyze_model", "wyze_mac", "wyze_online",
-    "local_ip", "ip_source", "wyze_reported_ip", "nest_client_name",
-    "nest_connected", "review",
+    "wyze_name",
+    "wyze_type",
+    "wyze_model",
+    "wyze_mac",
+    "wyze_online",
+    "local_ip",
+    "ip_source",
+    "wyze_reported_ip",
+    "nest_client_name",
+    "nest_connected",
+    "review",
 )
 
 
@@ -58,7 +66,8 @@ def read_existing(path: Path) -> list[SimpleNamespace]:
         rows = list(csv.DictReader(stream))
     return [
         SimpleNamespace(
-            mac=row["wyze_mac"], nickname=row["wyze_name"],
+            mac=row["wyze_mac"],
+            nickname=row["wyze_name"],
             type=row["wyze_type"],
             product=SimpleNamespace(model=row["wyze_model"]),
             ip=row["wyze_reported_ip"],
@@ -76,8 +85,12 @@ def read_nest(path: Path | None) -> tuple[str, list[dict]]:
         for line in reversed(log_path.read_text(encoding="utf-8").splitlines()):
             record = json.loads(line)
             for network in record.get("google_cloud", {}).get("networks", []):
-                stations = (network.get("observations", {})
-                            .get("stations", {}).get("payload", {}).get("stations"))
+                stations = (
+                    network.get("observations", {})
+                    .get("stations", {})
+                    .get("payload", {})
+                    .get("stations")
+                )
                 if isinstance(stations, list):
                     return record.get("collected_at", ""), stations
     raise ValueError(f"No Nest station inventory in {path}")
@@ -94,7 +107,8 @@ def probe_nest_wyze(stations: list[dict]) -> None:
         station.get("ipAddress")
         for station in stations
         if station.get("connected") is True
-        and "wyze" in (
+        and "wyze"
+        in (
             str(station.get("friendlyName") or "")
             + str(station.get("automaticFriendlyName") or "")
         ).lower()
@@ -104,7 +118,9 @@ def probe_nest_wyze(stations: list[dict]) -> None:
             if ipaddress.ip_address(ip).is_private:
                 subprocess.run(
                     ["ping", "-c", "1", "-W", "1000", ip],
-                    capture_output=True, timeout=3, check=False,
+                    capture_output=True,
+                    timeout=3,
+                    check=False,
                 )
         except (ValueError, subprocess.TimeoutExpired):
             continue
@@ -134,25 +150,35 @@ def make_rows(devices, stations: list[dict], arp: dict[str, str]) -> list[dict]:
             review = "Wyze IP unverified"
         else:
             review = "No local IP found"
-        rows.append({
-            "wyze_name": device.nickname or "",
-            "wyze_type": device.type or "",
-            "wyze_model": getattr(device.product, "model", "") or "",
-            "wyze_mac": mac,
-            "wyze_online": getattr(device, "is_online", ""),
-            "local_ip": observed,
-            "ip_source": (
-                "Parent ARP cache" if shared_channel else
-                "ID MAC ARP cache" if embedded_mac else "ARP cache"
-            ) if observed else "",
-            "wyze_reported_ip": reported,
-            "nest_client_name": (
-                station.get("friendlyName") or station.get("automaticFriendlyName") or ""
-            ),
-            "nest_connected": station.get("connected") if station else "",
-            "review": review,
-        })
+        rows.append(
+            {
+                "wyze_name": device.nickname or "",
+                "wyze_type": device.type or "",
+                "wyze_model": getattr(device.product, "model", "") or "",
+                "wyze_mac": mac,
+                "wyze_online": getattr(device, "is_online", ""),
+                "local_ip": observed,
+                "ip_source": (
+                    "Parent ARP cache"
+                    if shared_channel
+                    else "ID MAC ARP cache"
+                    if embedded_mac
+                    else "ARP cache"
+                )
+                if observed
+                else "",
+                "wyze_reported_ip": reported,
+                "nest_client_name": (
+                    station.get("friendlyName")
+                    or station.get("automaticFriendlyName")
+                    or ""
+                ),
+                "nest_connected": station.get("connected") if station else "",
+                "review": review,
+            }
+        )
     return sorted(rows, key=lambda row: (row["wyze_name"].casefold(), row["wyze_mac"]))
+
 
 def sign_in_and_list():
     email = input("Wyze account email: ").strip()
@@ -170,18 +196,31 @@ def sign_in_and_list():
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--nest-log", type=Path, help="Nest JSONL log or logs directory")
-    parser.add_argument("--existing-csv", type=Path,
-                        help="Reconcile a prior export without Wyze sign-in")
-    parser.add_argument("--probe-nest", action="store_true",
-                        help="Ping connected Nest clients named Wyze once to refresh ARP")
+    parser.add_argument(
+        "--nest-log", type=Path, help="Nest JSONL log or logs directory"
+    )
+    parser.add_argument(
+        "--existing-csv",
+        type=Path,
+        help="Reconcile a prior export without Wyze sign-in",
+    )
+    parser.add_argument(
+        "--probe-nest",
+        action="store_true",
+        help="Ping connected Nest clients named Wyze once to refresh ARP",
+    )
     parser.add_argument("--output", type=Path, help="Private CSV output path")
-    parser.add_argument("--self-check", action="store_true", help="Run an offline matching check")
+    parser.add_argument(
+        "--self-check", action="store_true", help="Run an offline matching check"
+    )
     args = parser.parse_args()
     if args.self_check:
         device = SimpleNamespace(
-            mac="AA:BB:CC:DD:EE:FF", nickname="Porch", type="Camera",
-            product=SimpleNamespace(model="Cam"), ip="192.168.1.9",
+            mac="AA:BB:CC:DD:EE:FF",
+            nickname="Porch",
+            type="Camera",
+            product=SimpleNamespace(model="Cam"),
+            ip="192.168.1.9",
         )
         station = {"ipAddress": "192.168.1.7", "connected": True}
         row = make_rows([device], [station], {"aabbccddeeff": "192.168.1.7"})[0]
@@ -200,7 +239,9 @@ def main() -> int:
         parser.error("output parent directory does not exist")
 
     collected, stations = read_nest(args.nest_log)
-    devices = read_existing(args.existing_csv) if args.existing_csv else sign_in_and_list()
+    devices = (
+        read_existing(args.existing_csv) if args.existing_csv else sign_in_and_list()
+    )
     if args.probe_nest:
         probe_nest_wyze(stations)
     rows = make_rows(devices, stations, arp_by_mac())
@@ -215,6 +256,7 @@ def main() -> int:
     print(f"Rows needing review: {sum(bool(row['review']) for row in rows)}")
     return 0
 
+
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
@@ -223,5 +265,8 @@ if __name__ == "__main__":
         raise SystemExit(1) from None
     except Exception as error:
         # Do not print SDK exception bodies: some may include request details.
-        print(f"Wyze sign-in or inventory failed ({type(error).__name__}).", file=sys.stderr)
+        print(
+            f"Wyze sign-in or inventory failed ({type(error).__name__}).",
+            file=sys.stderr,
+        )
         raise SystemExit(1) from None
