@@ -59,4 +59,7 @@ exclude = [
     "pdf_convert_llamaparse.py",
     "test_audio_common.py",
     "TranscriptionLauncher/Scripts/generate_icon.py",
+    "wyze_camera_restart.py",
+    "wyze_ip_map.py",
+    "wyze_nest_names.py",
 ]
