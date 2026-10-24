@@ -54,19 +54,13 @@ def api_write(wifi, method, path, body):
             headers={"Authorization": "Bearer " + wifi.token},
         )
     except Exception as exc:
-        raise RuntimeError(
-            "Google API transport error; request may have arrived"
-        ) from exc
+        raise RuntimeError("Google API transport error; request may have arrived") from exc
     if response.status_code != 200:
-        raise RuntimeError(
-            f"Google API HTTP {response.status_code}; request not retried"
-        )
+        raise RuntimeError(f"Google API HTTP {response.status_code}; request not retried")
     try:
         return response.json()
     except ValueError as exc:
-        raise RuntimeError(
-            "Google API returned invalid JSON; request not retried"
-        ) from exc
+        raise RuntimeError("Google API returned invalid JSON; request not retried") from exc
 
 
 def station_macs(wifi, group, ids):
@@ -89,9 +83,7 @@ def station_macs(wifi, group, ids):
         time.sleep(1)
     else:
         raise RuntimeError("Google MAC lookup did not complete")
-    records = wifi.get(path + "/sensitiveInfo?prettyPrint=false").get(
-        "stationSensitiveInfos"
-    )
+    records = wifi.get(path + "/sensitiveInfo?prettyPrint=false").get("stationSensitiveInfos")
     if not isinstance(records, list):
         raise RuntimeError("Google MAC lookup returned no records")
     wanted = set(ids)
@@ -207,11 +199,7 @@ def main():
             for station_id, mac, old, new, before_ip in plan:
                 # Refresh both station data and sensitive MAC immediately before
                 # each name mutation. Stop if identity/name/IP changed.
-                latest = [
-                    s
-                    for s in current_stations(wifi, group)
-                    if s.get("id") == station_id
-                ]
+                latest = [s for s in current_stations(wifi, group) if s.get("id") == station_id]
                 if len(latest) != 1 or latest[0].get("connected") is not True:
                     print(f"SKIP disconnected: {new}")
                     continue
@@ -232,9 +220,7 @@ def main():
                 try:
                     api_write(wifi, "PUT", path, {"name": new})
                     observed = [
-                        s
-                        for s in current_stations(wifi, group)
-                        if s.get("id") == station_id
+                        s for s in current_stations(wifi, group) if s.get("id") == station_id
                     ]
                     status = (
                         "verified"
