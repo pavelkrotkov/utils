@@ -10,6 +10,7 @@ and TIDAL import.
 - Audiobook (M4B) conversion from folders of audio tracks, with chapters and cover art.
 - Audio transcription (OpenAI API, local whisper-cpp with optional pyannote diarization, or MLX VibeVoice-ASR on Apple Silicon).
 - TIDAL playlist import from Gramophone-style MHTML/Markdown pages.
+- Read-only Google/Nest Wifi monitoring on macOS, with private local logs.
 
 For deeper context, refer to the script headers and inline help.
 
@@ -22,6 +23,8 @@ terms and local versus cloud uploads.
 ## Setup
 
 Python dependencies are managed by `uv run` through PEP 723 metadata; optional Whisper diarization adds pyannote only when requested.
+
+For network observations, see [Nest Wifi monitor](docs/nest_wifi_monitor.md).
 
 System tools (macOS via Homebrew):
 
