@@ -45,6 +45,7 @@ dev = [
     "pytest-cov>=7.1.0",
     "ruff>=0.17.0",
     "ty>=0.0.87",
+    "pymupdf==1.27.2.2",
 ]
 
 [tool.ty.src]
