@@ -13,6 +13,7 @@ import json
 import struct
 import subprocess
 import sys
+from http.client import IncompleteRead
 from pathlib import Path
 from unittest.mock import patch
 
@@ -45,12 +46,23 @@ def convert(document, base_url, *options):
     return result.returncode
 
 
-def test_selected_pages_are_rendered_in_order_and_parsed_in_one_request(document, server):
+@pytest.mark.parametrize(
+    "selection,expected_widths", [("3,1", [100, 300]), (None, [100, 200, 300])]
+)
+def test_selected_pages_are_rendered_in_order_and_parsed_in_one_request(
+    document, server, monkeypatch, selection, expected_widths
+):
     base_url, state = server
+    pages = ["# Parsed\n$E=mc^2$", "|A|B|\n|-|-|", "Final page."][: len(expected_widths)]
+    grounding = "<|ref|>title<|/ref|><|det|>[[0,0,1,1]]<|/det|>"
     state["response"]["choices"][0]["message"]["content"] = (
-        "<PAGE><|ref|># Parsed<|/ref|><|det|>[[0,0,1,1]]<|/det|>\n$E=mc^2$<PAGE>|A|B|\n|-|-|"
+        "<PAGE>" + grounding + "<PAGE>".join(pages)
     )
-    assert convert(document, base_url, "--page-range", "3,1", "--dpi", "72") == 0
+    monkeypatch.setenv("UNLIMITED_OCR_API_KEY", "fixture-token")
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:1")
+    monkeypatch.setenv("no_proxy", "")
+    options = ["--dpi", "72"] + (["--page-range", selection] if selection else [])
+    result = convert(document, base_url, *options)
     # Separate per-page requests would discard the model's cross-page context.
     [(path, payload)] = state["requests"]
     content = payload["messages"][0]["content"]
@@ -60,14 +72,23 @@ def test_selected_pages_are_rendered_in_order_and_parsed_in_one_request(document
          "temperature":0.0,"max_tokens":8192,"skip_special_tokens":false,
          "vllm_xargs":{"ngram_size":35,"window_size":1024}}
     """)
+    expected["messages"][0]["content"][0]["text"] = (
+        "<image>" * len(expected_widths) + "Multi page parsing."
+    )
     expected["messages"][0]["content"].extend(content[1:])
-    assert (path, payload) == ("/v1/chat/completions", expected)
+    assert (result, path, payload, state["authorization"]) == (
+        0,
+        "/v1/chat/completions",
+        expected,
+        "Bearer fixture-token",
+    )
     widths = []
     for item in content[1:]:
         raw = base64.b64decode(item["image_url"]["url"].split(",", 1)[1])
+        assert (raw[:8], raw[12:16]) == (b"\x89PNG\r\n\x1a\n", b"IHDR")
         widths.append(struct.unpack(">I", raw[16:20])[0])
-    assert widths == [100, 300]
-    assert document[1].read_text() == "# Parsed\n$E=mc^2$\n\n---\n\n|A|B|\n|-|-|\n"
+    assert widths == expected_widths
+    assert document[1].read_text() == "\n\n---\n\n".join(pages) + "\n"
 
 
 @pytest.mark.parametrize(
@@ -76,6 +97,27 @@ def test_selected_pages_are_rendered_in_order_and_parsed_in_one_request(document
         ({"choices": [{"finish_reason": "length", "message": {"content": "Partial"}}]}, 200),
         ({"choices": [{"finish_reason": "stop", "message": {"content": ""}}]}, 200),
         ({"choices": []}, 200),
+        ({"choices": [{"finish_reason": "stop", "message": {"content": "\ud800"}}]}, 200),
+        (
+            {
+                "choices": [
+                    {"finish_reason": "stop", "message": {"content": "# Heading\n<|ref|>Partial"}}
+                ]
+            },
+            200,
+        ),
+        (
+            {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": "<|det|>box<|det|>discarded<|/det|># Tail"},
+                    }
+                ]
+            },
+            200,
+        ),
+        ({"choices": [{"finish_reason": "stop", "message": {"content": "<PAGE><PAGE>"}}]}, 200),
         (
             {"choices": [{"finish_reason": "stop", "message": {"content": "<|det|>unfinished"}}]},
             200,
@@ -99,11 +141,28 @@ def test_server_failures_preserve_existing_output(document, server, response, st
     )
 
 
-def test_transport_timeout_preserves_output(document):
+def test_completion_missing_a_page_preserves_existing_output(document, server):
+    base_url, state = server
+    state["response"]["choices"][0]["message"]["content"] = "<PAGE>Only first page."
+    assert convert(document, base_url, "--page-range", "1,3") == 1
+    assert document[1].read_text() == "Keep existing output"
+
+
+def test_ocr_request_does_not_follow_redirect(document, server, monkeypatch):
+    base_url, state = server
+    state.update(status=302, location="/redirect")
+    monkeypatch.setenv("UNLIMITED_OCR_API_KEY", "fixture-token")
+    assert convert(document, base_url, "--page-range", "1") == 1
+    assert state.get("redirected") is None
+    assert document[1].read_text() == "Keep existing output"
+
+
+@pytest.mark.parametrize("error", [TimeoutError("server timeout"), IncompleteRead(b"", 1)])
+def test_transport_failure_preserves_output(document, error):
     pdf, output = document
     with (
         patch("pdf_convert_unlimited_ocr.page_images", return_value=[{}]),
-        patch("pdf_unlimited_ocr_api.urlopen", side_effect=TimeoutError("server timeout")),
+        patch("pdf_unlimited_ocr_api.OCR_OPENER.open", side_effect=error),
     ):
         assert execute(UnlimitedOCRBackend(), [str(pdf), "-o", str(output)]) == 1
     assert output.read_text() == "Keep existing output"
@@ -118,6 +177,7 @@ def test_transport_timeout_preserves_output(document):
         ("--dpi", "0"),
         ("--max-tokens", "0"),
         ("--base-url", "file:///invalid"),
+        ("--base-url", "http://127.0.0.1:invalid/v1"),
     ],
 )
 def test_invalid_options_fail_before_contacting_server(document, server, options):

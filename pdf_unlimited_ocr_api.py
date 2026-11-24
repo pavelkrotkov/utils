@@ -13,14 +13,26 @@ import argparse
 import json
 import os
 import re
+from http.client import HTTPException
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 from pdf_convert_run import ConversionError
 
+GROUNDING_TOKEN = r"<\|/?(?:ref|det)\|>"
+GROUNDING_BLOCK = rf"<\|(ref|det)\|>(?:(?!{GROUNDING_TOKEN}).)*<\|/\1\|>"
 
-def response_markdown(response: Any) -> str:
+
+class RefuseRedirects(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl) -> None:
+        return None
+
+
+OCR_OPENER = build_opener(ProxyHandler({}), RefuseRedirects())
+
+
+def response_markdown(response: Any, page_count: int) -> str:
     try:
         choice = response["choices"][0]
         reason, content = choice["finish_reason"], choice["message"]["content"]
@@ -32,17 +44,30 @@ def response_markdown(response: Any) -> str:
         )
     if not isinstance(content, str) or not content.strip():
         raise ConversionError("Unlimited-OCR returned empty Markdown.")
-    return clean_markdown(content)
+    try:
+        content.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ConversionError("Unlimited-OCR returned invalid Unicode.") from exc
+    return clean_markdown(content, page_count)
 
 
-def clean_markdown(content: str) -> str:
-    content = re.sub(r"<\|det\|>.*?<\|/det\|>", "", content, flags=re.DOTALL)
-    for token in ("<|ref|>", "<|/ref|>", "<｜begin▁of▁sentence｜>", "<｜end▁of▁sentence｜>"):
-        content = content.replace(token, "")
-    content = content.strip().removeprefix("<PAGE>").replace("<PAGE>", "\n\n---\n\n").strip()
-    if not content or "<|det|>" in content or "<|/det|>" in content:
-        raise ConversionError("Unlimited-OCR returned empty or incomplete Markdown grounding.")
-    return content + "\n"
+def clean_markdown(content: str, page_count: int) -> str:
+    # Reference blocks label layout regions. The recognized text follows the coordinates.
+    content = re.sub(GROUNDING_BLOCK, "", content, flags=re.DOTALL)
+    if re.search(GROUNDING_TOKEN, content):
+        raise ConversionError("Unlimited-OCR returned malformed grounding markers.")
+    content = (
+        content.replace("<｜begin▁of▁sentence｜>", "").replace("<｜end▁of▁sentence｜>", "").strip()
+    )
+    if page_count > 1 and (
+        not content.startswith("<PAGE>") or content.count("<PAGE>") != page_count
+    ):
+        raise ConversionError(
+            f"Unlimited-OCR did not return all {page_count} requested page sections."
+        )
+    if not content.replace("<PAGE>", "").strip():
+        raise ConversionError("Unlimited-OCR returned empty Markdown after grounding cleanup.")
+    return content.removeprefix("<PAGE>").replace("<PAGE>", "\n\n---\n\n").strip() + "\n"
 
 
 def completion(args: argparse.Namespace, images: list[dict[str, object]]) -> str:
@@ -66,16 +91,14 @@ def completion(args: argparse.Namespace, images: list[dict[str, object]]) -> str
     headers = {"Content-Type": "application/json"}
     if key := os.environ.get("UNLIMITED_OCR_API_KEY"):
         headers["Authorization"] = f"Bearer {key}"
-    request = Request(
-        args.base_url.rstrip("/") + "/chat/completions", json.dumps(payload).encode(), headers
-    )
+    request = Request(args.endpoint, json.dumps(payload).encode(), headers)
     try:
-        with urlopen(request, timeout=args.timeout) as response:
+        with OCR_OPENER.open(request, timeout=args.timeout) as response:
             result = json.load(response)
     except HTTPError as exc:
         raise ConversionError(
             f"Unlimited-OCR server returned HTTP {exc.code}: {exc.reason}"
         ) from exc
-    except (URLError, OSError, ValueError) as exc:
+    except (URLError, OSError, ValueError, HTTPException) as exc:
         raise ConversionError(f"Unlimited-OCR request failed: {exc}") from exc
-    return response_markdown(result)
+    return response_markdown(result, len(images))

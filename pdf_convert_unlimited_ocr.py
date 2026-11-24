@@ -31,10 +31,11 @@ from pdf_unlimited_ocr_api import completion
 def api_endpoint(value: str) -> str:
     try:
         parsed = urlsplit(value)
+        port = parsed.port
     except ValueError as exc:
         raise ConversionError(f"Invalid --base-url: {exc}") from exc
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        raise ConversionError("--base-url must be an HTTP(S) API URL including /v1.")
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or port == 0:
+        raise ConversionError("--base-url must be an HTTP(S) API URL with a valid host and port.")
     if any((parsed.query, parsed.fragment, parsed.username, parsed.password)):
         raise ConversionError("--base-url must not contain credentials, a query or a fragment.")
     return value.rstrip("/") + "/chat/completions"
@@ -86,7 +87,7 @@ class UnlimitedOCRBackend(Backend):
         )
 
     def validate(self, args: argparse.Namespace) -> None:
-        api_endpoint(args.base_url)
+        args.endpoint = api_endpoint(args.base_url)
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConversionError("--timeout must be finite and positive.")
         if min(args.dpi, args.max_tokens) <= 0:

@@ -230,6 +230,7 @@ docker run --rm --gpus all --ipc=host -p 127.0.0.1:8000:8000 \
   -v "$PWD/state/huggingface:/root/.cache/huggingface" \
   vllm/vllm-openai:unlimited-ocr baidu/Unlimited-OCR \
   --trust-remote-code \
+  --chat-template-content-format string \
   --logits_processors vllm.model_executor.models.unlimited_ocr:NGramPerReqLogitsProcessor \
   --no-enable-prefix-caching --mm-processor-cache-gb 0 \
   --limit-mm-per-prompt '{"image":32}'
@@ -239,8 +240,10 @@ For a remote GPU machine, forward its loopback port with
 `ssh -L 8000:127.0.0.1:8000 gpu-host`, then use the default client URL. The server
 must allow at least as many images as selected pages; adjust its image/context
 limits or narrow `--page-range` for larger documents. The server downloads model
-weights on first startup. The upstream recipe's parsing prompt, retained special
-tokens and ngram controls are required; ordinary chat defaults are unsuitable.
+weights on first startup. The string content format preserves the client’s
+image placeholders. Baidu’s structured chat template would add a second set.
+The upstream parsing prompt, retained special tokens and ngram controls
+are required.
 See also the [model card](https://huggingface.co/baidu/Unlimited-OCR).
 
 MinerU (local; `pipeline` backend by default, `-b vlm-engine` for the MinerU 2.5

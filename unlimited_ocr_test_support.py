@@ -34,11 +34,18 @@ def server():
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
+            state["authorization"] = self.headers.get("Authorization")
             size = int(self.headers["Content-Length"])
             state["requests"].append((self.path, json.loads(self.rfile.read(size))))
             self.send_response(state["status"])
+            if location := state.get("location"):
+                self.send_header("Location", location)
             self.end_headers()
             self.wfile.write(json.dumps(state["response"]).encode())
+
+        def do_GET(self):
+            state["redirected"] = self.path
+            self.send_error(404)
 
         def log_message(self, format: str, *args: Any) -> None:
             pass
