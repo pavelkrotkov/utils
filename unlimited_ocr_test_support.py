@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -10,6 +12,30 @@ from typing import Any
 
 import pytest
 from pypdf import PdfWriter
+
+
+def run_converter(document: tuple[Path, Path], base_url: str, *options: str) -> int:
+    pdf, output = document
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).with_name("pdf_convert_unlimited_ocr.py")),
+            str(pdf),
+            "-o",
+            str(output),
+            "--base-url",
+            base_url,
+            *options,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return result.returncode
+
+
+def ocr_completion(content: str, finish_reason: str = "stop"):
+    return {"choices": [{"finish_reason": finish_reason, "message": {"content": content}}]}
 
 
 @pytest.fixture
@@ -29,7 +55,7 @@ def server():
     state: dict[str, Any] = {
         "requests": [],
         "status": 200,
-        "response": {"choices": [{"finish_reason": "stop", "message": {"content": "# Parsed\n"}}]},
+        "response": ocr_completion("# Parsed\n"),
     }
 
     class Handler(BaseHTTPRequestHandler):

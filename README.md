@@ -220,7 +220,8 @@ model weights. Page images go to `--base-url` (default: loopback); optionally se
 `UNLIMITED_OCR_API_KEY` for an authenticated server. `--timeout` defaults to 600
 seconds and `--max-tokens` to 8192. Truncated, empty or malformed responses fail
 without replacing an existing output. Grounding boxes are removed from the
-Markdown; figures are not exported as separate image files.
+Markdown. The client connects directly to the configured server, refuses HTTP
+redirects and does not export figures as separate files.
 
 Run the [official vLLM server recipe](https://recipes.vllm.ai/baidu/Unlimited-OCR)
 on a supported NVIDIA GPU first. For example, on the GPU machine:
@@ -229,6 +230,7 @@ on a supported NVIDIA GPU first. For example, on the GPU machine:
 docker run --rm --gpus all --ipc=host -p 127.0.0.1:8000:8000 \
   -v "$PWD/state/huggingface:/root/.cache/huggingface" \
   vllm/vllm-openai:unlimited-ocr baidu/Unlimited-OCR \
+  --revision 27a5997fa0524f9adcf9e2f3d5e7d3f784434fa5 \
   --trust-remote-code \
   --chat-template-content-format string \
   --logits_processors vllm.model_executor.models.unlimited_ocr:NGramPerReqLogitsProcessor \
@@ -240,8 +242,9 @@ For a remote GPU machine, forward its loopback port with
 `ssh -L 8000:127.0.0.1:8000 gpu-host`, then use the default client URL. The server
 must allow at least as many images as selected pages; adjust its image/context
 limits or narrow `--page-range` for larger documents. The server downloads model
-weights on first startup. The string content format preserves the client’s
-image placeholders. Baidu’s structured chat template would add a second set.
+weights on first startup. The example pins a model revision compatible with the
+[dedicated Docker image](https://github.com/vllm-project/vllm/issues/64489).
+The string content format preserves the image placeholders sent by the client.
 The upstream parsing prompt, retained special tokens and ngram controls
 are required.
 See also the [model card](https://huggingface.co/baidu/Unlimited-OCR).

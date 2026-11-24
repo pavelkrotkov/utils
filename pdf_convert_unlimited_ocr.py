@@ -35,8 +35,10 @@ def api_endpoint(value: str) -> str:
     except ValueError as exc:
         raise ConversionError(f"Invalid --base-url: {exc}") from exc
     if parsed.scheme not in ("http", "https") or not parsed.hostname or port == 0:
-        raise ConversionError("--base-url must be an HTTP(S) API URL with a valid host and port.")
-    if any((parsed.query, parsed.fragment, parsed.username, parsed.password)):
+        raise ConversionError(
+            "--base-url must use HTTP(S) with a hostname and valid optional port."
+        )
+    if any(("?" in value, "#" in value, parsed.username is not None)):
         raise ConversionError("--base-url must not contain credentials, a query or a fragment.")
     return value.rstrip("/") + "/chat/completions"
 

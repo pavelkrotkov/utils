@@ -59,12 +59,11 @@ def clean_markdown(content: str, page_count: int) -> str:
     content = (
         content.replace("<｜begin▁of▁sentence｜>", "").replace("<｜end▁of▁sentence｜>", "").strip()
     )
-    if page_count > 1 and (
+    has_page_markers = page_count > 1 or "<PAGE>" in content
+    if has_page_markers and (
         not content.startswith("<PAGE>") or content.count("<PAGE>") != page_count
     ):
-        raise ConversionError(
-            f"Unlimited-OCR did not return all {page_count} requested page sections."
-        )
+        raise ConversionError(f"Unlimited-OCR expected {page_count} page sections in the response.")
     if not content.replace("<PAGE>", "").strip():
         raise ConversionError("Unlimited-OCR returned empty Markdown after grounding cleanup.")
     return content.removeprefix("<PAGE>").replace("<PAGE>", "\n\n---\n\n").strip() + "\n"
@@ -99,6 +98,6 @@ def completion(args: argparse.Namespace, images: list[dict[str, object]]) -> str
         raise ConversionError(
             f"Unlimited-OCR server returned HTTP {exc.code}: {exc.reason}"
         ) from exc
-    except (URLError, OSError, ValueError, HTTPException) as exc:
+    except (URLError, OSError, ValueError, OverflowError, HTTPException) as exc:
         raise ConversionError(f"Unlimited-OCR request failed: {exc}") from exc
     return response_markdown(result, len(images))
