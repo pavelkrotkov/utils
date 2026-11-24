@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 # /// script
-# dependencies = ["pymupdf==1.27.2.2", "pypdf"]
+# dependencies = [
+#   "pymupdf==1.27.2.2",
+#   "pypdf",
+#   "mlx-vlm==0.8.1; platform_system == 'Darwin' and platform_machine == 'arm64'",
+# ]
 # ///
-"""Convert selected PDF pages together through an Unlimited-OCR vLLM server.
+"""Convert PDF pages to Markdown with Unlimited-OCR v1 on Apple Silicon.
 
-Start the upstream GPU server separately; this client downloads no model weights.
-    uv run ./pdf_convert_unlimited_ocr.py input.pdf --page-range 1-3,5 -o output.md
-    uv run ./pdf_convert_unlimited_ocr.py input.pdf --base-url http://gpu:8000/v1
+uv run ./pdf_convert_unlimited_ocr.py input.pdf -o output.md
+uv run ./pdf_convert_unlimited_ocr.py input.pdf --page-range 1-3,5
 """
 
 from __future__ import annotations
 
 import argparse
-import base64
-import math
+import platform
 import sys
-from urllib.parse import urlsplit
 
 from pdf_convert_run import (
     Backend,
@@ -25,78 +26,59 @@ from pdf_convert_run import (
     execute,
     require_module,
 )
-from pdf_unlimited_ocr_api import completion
+from pdf_unlimited_ocr_mlx import load_ocr
 
-
-def api_endpoint(value: str) -> str:
-    try:
-        parsed = urlsplit(value)
-        port = parsed.port
-    except ValueError as exc:
-        raise ConversionError(f"Invalid --base-url: {exc}") from exc
-    if parsed.scheme not in ("http", "https") or not parsed.hostname or port == 0:
-        raise ConversionError(
-            "--base-url must use HTTP(S) with a hostname and valid optional port."
-        )
-    if any(("?" in value, "#" in value, parsed.username is not None)):
-        raise ConversionError("--base-url must not contain credentials, a query or a fragment.")
-    return value.rstrip("/") + "/chat/completions"
-
-
-def page_images(request: ConversionRequest) -> list[dict[str, object]]:
-    pymupdf = require_module("pymupdf", "pymupdf")
-    try:
-        with pymupdf.open(request.pdf_path) as document:
-            pages = request.selection.as_zero_based() if request.selection else range(len(document))
-            images: list[dict[str, object]] = []
-            for page in pages:
-                png = document[page].get_pixmap(dpi=request.args.dpi, alpha=False).tobytes("png")
-                encoded = base64.b64encode(png).decode("ascii")
-                images.append(
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}}
-                )
-            return images
-    except Exception as exc:
-        raise ConversionError(f"Unable to render PDF pages: {exc}") from exc
+DEFAULT_MODEL = "mlx-community/Unlimited-OCR-4bit"
 
 
 class UnlimitedOCRBackend(Backend):
     name = "unlimited_ocr"
-    description = "Convert a PDF to Markdown using an Unlimited-OCR vLLM server."
+    description = "Convert a PDF to Markdown locally with Unlimited-OCR and MLX."
 
     def add_arguments(self, parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
-            "--base-url",
-            default="http://127.0.0.1:8000/v1",
-            help="vLLM API URL including /v1; PDF page images are sent here",
-        )
-        parser.add_argument(
-            "--model",
-            default="baidu/Unlimited-OCR",
-            help="Unlimited-OCR v1 served model name or alias",
-        )
-        parser.add_argument(
-            "--timeout", type=float, default=600, help="HTTP timeout in seconds (default: 600)"
+            "--model", default=DEFAULT_MODEL, help="Unlimited-OCR v1 MLX model ID or local path"
         )
         parser.add_argument(
             "--max-tokens",
             type=int,
             default=8192,
-            help="Output token limit (default: 8192); truncated output is rejected",
+            help="Output token limit per page (default: 8192)",
         )
         parser.add_argument(
             "--dpi", type=int, default=150, help="PDF rasterization resolution (default: 150 DPI)"
         )
 
     def validate(self, args: argparse.Namespace) -> None:
-        args.endpoint = api_endpoint(args.base_url)
-        if not math.isfinite(args.timeout) or args.timeout <= 0:
-            raise ConversionError("--timeout must be finite and positive.")
         if min(args.dpi, args.max_tokens) <= 0:
             raise ConversionError("--dpi and --max-tokens must be positive.")
+        if (platform.system(), platform.machine()) != ("Darwin", "arm64"):
+            raise ConversionError("Unlimited-OCR requires native macOS Python on Apple Silicon.")
 
     def convert(self, request: ConversionRequest) -> MarkdownText:
-        return MarkdownText(completion(request.args, page_images(request)))
+        pymupdf = require_module("pymupdf", "pymupdf")
+        try:
+            document = pymupdf.open(request.pdf_path)
+        except Exception as exc:
+            raise ConversionError(f"Unable to open PDF: {exc}") from exc
+        with document:
+            pages = request.selection.as_zero_based() if request.selection else range(len(document))
+            if not pages:
+                raise ConversionError("PDF has no pages to parse.")
+            parse = load_ocr(request.args.model, request.args.max_tokens)
+            image_path = request.workspace / "page.png"
+            markdown = []
+            for page_index in pages:
+                page = page_index + 1
+                print(f"INFO: Parsing page {page} with Unlimited-OCR", file=sys.stderr)
+                try:
+                    document[page_index].get_pixmap(dpi=request.args.dpi, alpha=False).save(
+                        image_path
+                    )
+                    markdown.append(parse(image_path))
+                except Exception as exc:
+                    raise ConversionError(f"Unlimited-OCR failed on page {page}: {exc}") from exc
+        return MarkdownText("\n\n---\n\n".join(markdown) + "\n")
 
 
 def main() -> None:
