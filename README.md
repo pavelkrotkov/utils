@@ -260,7 +260,7 @@ This ranking reflects one paper.
 | 6 | `pdf_convert_marker.py` | local | Usable, but misfiles an equation as a table row and drops one heading; current versions need `llama.cpp` (`brew install llama.cpp`) for their default layout/OCR models |
 | 7 | `pdf_convert_opendataloader.py` | local | Fast and deterministic, but Markdown fragments math/layout (its JSON mode is stronger) |
 | 8 | `pdf_convert_pymupdf4llm.py` | local | Fastest rough text dump; misses section headings, mangles formatting |
-| 9 | `pdf_convert_unlimited_ocr.py` | local MLX (Apple Silicon) | Emits display LaTeX and all four tables as HTML, but changes equation symbols and misplaces table values. Both rerun baselines kept the Table 3 metrics on the correct row. |
+| 9 | `pdf_convert_unlimited_ocr.py` | local MLX (Apple Silicon) | Default run stops on page 11. At `--dpi 200` (4-bit), emits display LaTeX and all four HTML tables with incorrect symbols and misplaced values. Both rerun baselines kept the Table 3 metrics on the correct row. |
 
 Unlimited-OCR v1 4-bit (`--dpi 200`) finished all 15 pages in **70.01 s** with a
 **3.63 GiB** peak physical memory footprint on a 16 GB M4 MacBook Air. The timing
