@@ -242,9 +242,13 @@ contiguous (MinerU limitation).
 
 ### PDF converter quality ranking
 
-Output-quality ranking for scientific papers, measured on arXiv 1706.03762
-("Attention Is All You Need", 15 pages, two-column layout, dense math, two
-tables). Single-paper benchmark; re-run before relying on the order.
+Output-quality ranking for scientific papers on *Attention Is All You Need*
+(15 pages, dense math, four numbered tables). The Unlimited-OCR run and the
+OpenDataLoader and PyMuPDF4LLM rechecks used arXiv 1706.03762v7. The original
+comparison identified the paper by its unversioned arXiv ID.
+[Benchmark PDF](https://arxiv.org/pdf/1706.03762v7) · [Original comparison](https://github.com/pavelkrotkov/utils/pull/164)
+
+This ranking reflects one paper.
 
 | # | Converter | Runs | Notes |
 |---|---|---|---|
@@ -256,6 +260,12 @@ tables). Single-paper benchmark; re-run before relying on the order.
 | 6 | `pdf_convert_marker.py` | local | Usable, but misfiles an equation as a table row and drops one heading; current versions need `llama.cpp` (`brew install llama.cpp`) for their default layout/OCR models |
 | 7 | `pdf_convert_opendataloader.py` | local | Fast and deterministic, but Markdown fragments math/layout (its JSON mode is stronger) |
 | 8 | `pdf_convert_pymupdf4llm.py` | local | Fastest rough text dump; misses section headings, mangles formatting |
+| 9 | `pdf_convert_unlimited_ocr.py` | local MLX (Apple Silicon) | Default run stops on page 11. At `--dpi 200` (4-bit), emits display LaTeX and all four HTML tables with incorrect symbols and misplaced values. Both rerun baselines kept the Table 3 metrics on the correct row. |
+
+Unlimited-OCR v1 4-bit (`--dpi 200`) finished all 15 pages in **70.01 s** with a
+**3.63 GiB** peak physical memory footprint on a 16 GB M4 MacBook Air. The timing
+covers the Python converter process, including model load from cache. The default
+150 DPI run hit the 8,192-token limit on page 11 and produced no Markdown.
 
 ## Markdown Tools
 
