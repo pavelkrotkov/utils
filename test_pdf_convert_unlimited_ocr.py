@@ -143,11 +143,12 @@ def test_transport_failure_preserves_output(document, error):
         ("--max-tokens", "0"),
         ("--base-url", "file:///invalid"),
         ("--base-url", "http://127.0.0.1:invalid/v1"),
-        ("--base-url", "http://127.0.0.1/v1?"),
-        ("--base-url", "http://127.0.0.1/v1#"),
+        ("--base-url", "{base_url}?"),
+        ("--base-url", "{base_url}#"),
     ],
 )
 def test_invalid_options_fail_before_contacting_server(document, server, options):
     base_url, state = server
+    options = tuple(option.format(base_url=base_url) for option in options)
     assert run_converter(document, base_url, *options) == 1
     assert (state["requests"], document[1].read_text()) == ([], "Keep existing output")
