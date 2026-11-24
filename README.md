@@ -5,7 +5,7 @@ and TIDAL import.
 
 ## Overview
 
-- PDF to Markdown conversion (Mathpix SDK, Docling, LlamaParse, PyMuPDF4LLM, PaddleOCR-VL, or local marker).
+- PDF to Markdown conversion (Mathpix SDK, Docling, LlamaParse, PyMuPDF4LLM, PaddleOCR-VL, local marker, or an Unlimited-OCR server).
 - Markdown splitting into per-section or per-subsection files.
 - Audiobook (M4B) conversion from folders of audio tracks, with chapters and cover art.
 - Audio transcription (OpenAI API, local whisper-cpp with optional pyannote diarization, or MLX VibeVoice-ASR on Apple Silicon).
@@ -204,6 +204,50 @@ thread pools; this reduces CPU contention but does not by itself cap memory.
 percentage (and checks every 5 seconds when no report interval is set). Raise batch
 sizes or enable `--queues` only explicitly on larger machines; PaddleX's
 asynchronous path can buffer up to 64 batches per stage.
+
+Unlimited-OCR (GPU-server client; the converter itself runs on macOS/CPU):
+
+```bash
+uv run ./pdf_convert_unlimited_ocr.py input.pdf -o output.md
+uv run ./pdf_convert_unlimited_ocr.py input.pdf --page-range 1-3,5 --max-tokens 16384
+uv run ./pdf_convert_unlimited_ocr.py input.pdf --base-url http://gpu-host:8000/v1
+```
+
+This targets **`baidu/Unlimited-OCR` v1**, the model from the original release.
+It renders selected pages at 150 DPI and sends them together in one request,
+preserving their document order and cross-page context. The client downloads no
+model weights. Page images go to `--base-url` (default: loopback); optionally set
+`UNLIMITED_OCR_API_KEY` for an authenticated server. `--timeout` defaults to 600
+seconds and `--max-tokens` to 8192. Truncated, empty or malformed responses fail
+without replacing an existing output. Grounding boxes are removed from the
+Markdown. The client connects directly to the configured server, refuses HTTP
+redirects and does not export figures as separate files.
+
+Run the [official vLLM server recipe](https://recipes.vllm.ai/baidu/Unlimited-OCR)
+on a supported NVIDIA GPU first. For example, on the GPU machine:
+
+```bash
+docker run --rm --gpus all --ipc=host -p 127.0.0.1:8000:8000 \
+  -v "$PWD/state/huggingface:/root/.cache/huggingface" \
+  vllm/vllm-openai:unlimited-ocr baidu/Unlimited-OCR \
+  --revision 27a5997fa0524f9adcf9e2f3d5e7d3f784434fa5 \
+  --trust-remote-code \
+  --chat-template-content-format string \
+  --logits_processors vllm.model_executor.models.unlimited_ocr:NGramPerReqLogitsProcessor \
+  --no-enable-prefix-caching --mm-processor-cache-gb 0 \
+  --limit-mm-per-prompt '{"image":32}'
+```
+
+For a remote GPU machine, forward its loopback port with
+`ssh -L 8000:127.0.0.1:8000 gpu-host`, then use the default client URL. The server
+must allow at least as many images as selected pages; adjust its image/context
+limits or narrow `--page-range` for larger documents. The server downloads model
+weights on first startup. The example pins a model revision compatible with the
+[dedicated Docker image](https://github.com/vllm-project/vllm/issues/64489).
+The string content format preserves the image placeholders sent by the client.
+The upstream parsing prompt, retained special tokens and ngram controls
+are required.
+See also the [model card](https://huggingface.co/baidu/Unlimited-OCR).
 
 MinerU (local; `pipeline` backend by default, `-b vlm-engine` for the MinerU 2.5
 Pro VLM):

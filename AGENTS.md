@@ -37,6 +37,7 @@ Run scripts (examples):
 - `uv run ./pdf_convert_opendataloader.py input.pdf -o output.md`
 - `uv run ./pdf_convert_paddleocr_vl.py input.pdf -o output.md`
 - `uv run ./pdf_convert_mineru.py input.pdf -o output.md`
+- `uv run ./pdf_convert_unlimited_ocr.py input.pdf -o output.md`
 - `uv run ./tidal_import_page_to_playlist.py test.md --dry-run`
 - `uv run ./audio_folder_to_m4b.py "/path/to/Audiobook Collection" --dry-run`
 - `./audio_transcribe_openai.sh recording.m4a output.txt`
@@ -101,6 +102,7 @@ Repository scripts:
 - `pdf_convert_opendataloader.py` uses OpenDataLoader PDF for local Markdown conversion (requires Java 11+); referenced image assets are copied next to the output file.
 - `pdf_convert_paddleocr_vl.py` uses the PaddleOCR-VL vision-language pipeline for local Markdown conversion; downloads models on first run, streams each page directly to Markdown without cross-page restructuring, and forces OMP/BLAS/Paddle thread pools to a small default for resource safety. It declares `psutil` for the parent memory monitor, which imports it lazily only when memory reporting or an abort threshold is enabled.
 - `pdf_convert_mineru.py` wraps the `mineru` CLI for local Markdown conversion; defaults to the CPU-friendly `pipeline` backend (`-b vlm-engine` for the MinerU 2.5 Pro VLM) and forces OMP/BLAS thread pools to a small default for resource safety.
+- `pdf_convert_unlimited_ocr.py` renders selected pages with PyMuPDF and sends them in one request to an explicitly configured Unlimited-OCR v1 vLLM server (loopback by default). The GPU server is separate; no model weights are downloaded by the client. `pdf_unlimited_ocr_api.py` owns its required parsing/decoding recipe and completion validation. PyMuPDF is pinned to the upstream-tested 1.27.2.2 because newer releases pull dependencies without Intel macOS wheels. The dev dependency enables real PDF/loopback HTTP integration tests without model inference.
 - `audio_folder_to_m4b.py` converts folders of audio tracks into chaptered M4B audiobooks via ffmpeg (one chapter per track, natural-sorted, with embedded cover art); probes each track once for duration plus audio-stream identity and skips unreadable or audio-less tracks; `.m4b` is output-only, never an accepted input.
 - `audio_transcribe_openai.sh` defaults to `gpt-transcribe`, validates JSON `.text`, compresses large files, and requires explicit `--chunk` consent for oversized paid uploads; completed chunk text is cached. Paid API smoke tests require `OPENAI_API_KEY` and `RUN_OPENAI_SMOKE=1`.
 - `audio_segments.py` owns ASR JSON decoding for every transcription backend: container shapes, time units (seconds, `t0`/`t1` centiseconds, `offsets` milliseconds), text and speaker key aliases, and capitalised keys. It returns a `Transcript` whose `has_timing` tells whisper whether a diarization merge is possible. Transcription scripts must not re-implement any of this.

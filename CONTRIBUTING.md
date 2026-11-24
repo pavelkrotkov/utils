@@ -4,7 +4,7 @@ Thank you for contributing to `utils`! This document outlines how to set up your
 
 ## Development Setup
 
-We use `uv` for dependency management. To set up your local development environment:
+The development environment requires Python 3.11.5 or later. We use `uv` for dependency management.
 
 ```bash
 # Install dependencies, developer tools, and create a virtual environment
