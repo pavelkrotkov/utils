@@ -62,20 +62,17 @@ class UnlimitedOCRBackend(Backend):
         except Exception as exc:
             raise ConversionError(f"Unable to open PDF: {exc}") from exc
         with document:
-            pages = (
-                request.selection.as_one_based()
-                if request.selection
-                else range(1, len(document) + 1)
-            )
+            pages = request.selection.as_zero_based() if request.selection else range(len(document))
             if not pages:
                 raise ConversionError("PDF has no pages to parse.")
             parse = load_ocr(request.args.model, request.args.max_tokens)
             image_path = request.workspace / "page.png"
             markdown = []
-            for page in pages:
+            for page_index in pages:
+                page = page_index + 1
                 print(f"INFO: Parsing page {page} with Unlimited-OCR", file=sys.stderr)
                 try:
-                    document[page - 1].get_pixmap(dpi=request.args.dpi, alpha=False).save(
+                    document[page_index].get_pixmap(dpi=request.args.dpi, alpha=False).save(
                         image_path
                     )
                     markdown.append(parse(image_path))

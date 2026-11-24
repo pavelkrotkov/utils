@@ -216,8 +216,9 @@ uv run ./pdf_convert_unlimited_ocr.py input.pdf --model /path/to/local/mlx-check
 The converter runs Unlimited-OCR v1 on the Mac GPU using [MLX-VLM](https://github.com/Neywa-Labs/mlx-vlm/blob/main/mlx_vlm/models/unlimited_ocr/README.md).
 The default [4-bit checkpoint](https://huggingface.co/mlx-community/Unlimited-OCR-4bit)
 is downloaded to the Hugging Face cache on first use and takes about 2.3 GiB on disk.
-For offline runs, use a local `--model` path or set `HF_HUB_OFFLINE=1` after caching
-both the model and the `uv` dependencies. PDF pages stay on the Mac.
+Once the dependencies and checkpoint are cached, use `HF_HUB_OFFLINE=1 uv run --offline`
+for offline runs. A local checkpoint directory can also be passed with `--model`.
+PDF pages stay on the Mac.
 
 The model loads once. The converter renders and parses selected pages one at a time,
 in document order, using a single global image view to limit GPU memory. Text and
